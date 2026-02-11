@@ -28,7 +28,14 @@ import {
 } from "@/components/ui/select";
 import { Plus, ArrowRight, Car, Search } from "lucide-react";
 import { formatCurrency } from "@/lib/utils/dates";
-import type { AssetStatus } from "@/lib/types/database";
+import {
+  getVehicleClassification,
+  getClassLabel,
+  getReportingGroup,
+  getMasterType,
+  REPORTING_GROUPS,
+} from "@/lib/utils/vehicle-classification";
+import type { VehicleClass } from "@/lib/types/database";
 
 interface FixedAsset {
   id: string;
@@ -37,6 +44,7 @@ interface FixedAsset {
   vehicle_year: number | null;
   vehicle_make: string | null;
   vehicle_model: string | null;
+  vehicle_class: string | null;
   vin: string | null;
   in_service_date: string;
   acquisition_cost: number;
@@ -67,13 +75,15 @@ export default function AssetsPage() {
   const [assets, setAssets] = useState<FixedAsset[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState<string>("active");
+  const [masterTypeFilter, setMasterTypeFilter] = useState<string>("all");
+  const [reportingGroupFilter, setReportingGroupFilter] = useState<string>("all");
   const [searchQuery, setSearchQuery] = useState("");
 
   const loadAssets = useCallback(async () => {
     let query = supabase
       .from("fixed_assets")
       .select(
-        "id, asset_name, asset_tag, vehicle_year, vehicle_make, vehicle_model, vin, in_service_date, acquisition_cost, book_net_value, tax_net_value, status"
+        "id, asset_name, asset_tag, vehicle_year, vehicle_make, vehicle_model, vehicle_class, vin, in_service_date, acquisition_cost, book_net_value, tax_net_value, status"
       )
       .eq("entity_id", entityId)
       .order("asset_name");
@@ -91,15 +101,41 @@ export default function AssetsPage() {
     loadAssets();
   }, [loadAssets]);
 
-  const filteredAssets = searchQuery
-    ? assets.filter((a) => {
-        const q = searchQuery.toLowerCase();
-        const name = a.asset_name.toLowerCase();
-        const vin = (a.vin ?? "").toLowerCase();
-        const desc = `${a.vehicle_year ?? ""} ${a.vehicle_make ?? ""} ${a.vehicle_model ?? ""}`.toLowerCase();
-        return name.includes(q) || vin.includes(q) || desc.includes(q);
-      })
-    : assets;
+  const filteredAssets = assets.filter((a) => {
+    // Master type filter
+    if (masterTypeFilter !== "all") {
+      const mt = getMasterType(a.vehicle_class);
+      if (mt !== masterTypeFilter) return false;
+    }
+
+    // Reporting group filter
+    if (reportingGroupFilter !== "all") {
+      const rg = getReportingGroup(a.vehicle_class);
+      if (rg !== reportingGroupFilter) return false;
+    }
+
+    // Search filter
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      const name = a.asset_name.toLowerCase();
+      const vin = (a.vin ?? "").toLowerCase();
+      const desc = `${a.vehicle_year ?? ""} ${a.vehicle_make ?? ""} ${a.vehicle_model ?? ""}`.toLowerCase();
+      const classification = getVehicleClassification(a.vehicle_class);
+      const classInfo = classification
+        ? `${classification.className} ${classification.reportingGroup}`.toLowerCase()
+        : "";
+      if (
+        !name.includes(q) &&
+        !vin.includes(q) &&
+        !desc.includes(q) &&
+        !classInfo.includes(q)
+      ) {
+        return false;
+      }
+    }
+
+    return true;
+  });
 
   const totalCost = filteredAssets.reduce((s, a) => s + a.acquisition_cost, 0);
   const totalBookNbv = filteredAssets.reduce((s, a) => s + a.book_net_value, 0);
@@ -150,7 +186,7 @@ export default function AssetsPage() {
         </Card>
         <Card>
           <CardContent className="pt-6">
-            <p className="text-sm text-muted-foreground">Active Assets</p>
+            <p className="text-sm text-muted-foreground">Assets</p>
             <p className="text-2xl font-semibold tabular-nums">
               {filteredAssets.length}
             </p>
@@ -159,16 +195,39 @@ export default function AssetsPage() {
       </div>
 
       {/* Filters */}
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-4 flex-wrap">
         <div className="relative flex-1 max-w-sm">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
-            placeholder="Search by name, VIN, or vehicle..."
+            placeholder="Search by name, VIN, class, or vehicle..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="pl-9"
           />
         </div>
+        <Select value={masterTypeFilter} onValueChange={setMasterTypeFilter}>
+          <SelectTrigger className="w-[150px]">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Types</SelectItem>
+            <SelectItem value="Vehicle">Vehicle</SelectItem>
+            <SelectItem value="Trailer">Trailer</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select value={reportingGroupFilter} onValueChange={setReportingGroupFilter}>
+          <SelectTrigger className="w-[200px]">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Groups</SelectItem>
+            {REPORTING_GROUPS.map((group) => (
+              <SelectItem key={group} value={group}>
+                {group}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         <Select value={statusFilter} onValueChange={setStatusFilter}>
           <SelectTrigger className="w-[180px]">
             <SelectValue />
@@ -193,24 +252,31 @@ export default function AssetsPage() {
               <Car className="h-12 w-12 text-muted-foreground mb-4" />
               <h3 className="text-lg font-medium mb-2">No Assets Found</h3>
               <p className="text-muted-foreground text-center mb-4">
-                {searchQuery || statusFilter !== "active"
+                {searchQuery ||
+                statusFilter !== "active" ||
+                masterTypeFilter !== "all" ||
+                reportingGroupFilter !== "all"
                   ? "No assets match your current filters."
                   : "Add your first vehicle to start tracking fixed assets."}
               </p>
-              {!searchQuery && statusFilter === "active" && (
-                <Link href={`/${entityId}/assets/new`}>
-                  <Button>
-                    <Plus className="mr-2 h-4 w-4" />
-                    Add Vehicle
-                  </Button>
-                </Link>
-              )}
+              {!searchQuery &&
+                statusFilter === "active" &&
+                masterTypeFilter === "all" &&
+                reportingGroupFilter === "all" && (
+                  <Link href={`/${entityId}/assets/new`}>
+                    <Button>
+                      <Plus className="mr-2 h-4 w-4" />
+                      Add Vehicle
+                    </Button>
+                  </Link>
+                )}
             </div>
           ) : (
             <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead>Asset Tag</TableHead>
+                  <TableHead>Class</TableHead>
                   <TableHead>Vehicle</TableHead>
                   <TableHead>VIN</TableHead>
                   <TableHead>In Service</TableHead>
@@ -222,45 +288,62 @@ export default function AssetsPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filteredAssets.map((asset) => (
-                  <TableRow key={asset.id}>
-                    <TableCell className="font-medium">
-                      {asset.asset_tag ?? "---"}
-                    </TableCell>
-                    <TableCell>
-                      {asset.vehicle_year || asset.vehicle_make || asset.vehicle_model
-                        ? `${asset.vehicle_year ?? ""} ${asset.vehicle_make ?? ""} ${asset.vehicle_model ?? ""}`.trim()
-                        : asset.asset_name}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground font-mono text-xs">
-                      {asset.vin ?? "---"}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {new Date(asset.in_service_date).toLocaleDateString()}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {formatCurrency(asset.acquisition_cost)}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {formatCurrency(asset.book_net_value)}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {formatCurrency(asset.tax_net_value)}
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={STATUS_VARIANTS[asset.status] ?? "outline"}>
-                        {STATUS_LABELS[asset.status] ?? asset.status}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <Link href={`/${entityId}/assets/${asset.id}`}>
-                        <Button variant="ghost" size="sm">
-                          <ArrowRight className="h-4 w-4" />
-                        </Button>
-                      </Link>
-                    </TableCell>
-                  </TableRow>
-                ))}
+                {filteredAssets.map((asset) => {
+                  const classification = getVehicleClassification(asset.vehicle_class);
+                  return (
+                    <TableRow key={asset.id}>
+                      <TableCell className="font-medium">
+                        {asset.asset_tag ?? "---"}
+                      </TableCell>
+                      <TableCell className="text-sm">
+                        {classification ? (
+                          <div>
+                            <span className="font-medium">
+                              {classification.class}
+                            </span>
+                            <span className="text-muted-foreground ml-1">
+                              {classification.className}
+                            </span>
+                          </div>
+                        ) : (
+                          "---"
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        {asset.vehicle_year || asset.vehicle_make || asset.vehicle_model
+                          ? `${asset.vehicle_year ?? ""} ${asset.vehicle_make ?? ""} ${asset.vehicle_model ?? ""}`.trim()
+                          : asset.asset_name}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground font-mono text-xs">
+                        {asset.vin ?? "---"}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {new Date(asset.in_service_date).toLocaleDateString()}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {formatCurrency(asset.acquisition_cost)}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {formatCurrency(asset.book_net_value)}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {formatCurrency(asset.tax_net_value)}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={STATUS_VARIANTS[asset.status] ?? "outline"}>
+                          {STATUS_LABELS[asset.status] ?? asset.status}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        <Link href={`/${entityId}/assets/${asset.id}`}>
+                          <Button variant="ghost" size="sm">
+                            <ArrowRight className="h-4 w-4" />
+                          </Button>
+                        </Link>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
               </TableBody>
             </Table>
           )}

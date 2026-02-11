@@ -16,7 +16,9 @@ import {
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -26,10 +28,15 @@ import { toast } from "sonner";
 import { ArrowLeft } from "lucide-react";
 import { generateDepreciationSchedule } from "@/lib/utils/depreciation";
 import { getCurrentPeriod } from "@/lib/utils/dates";
+import {
+  getVehicleClassification,
+  getClassesGroupedByMasterType,
+  getClassLabel,
+} from "@/lib/utils/vehicle-classification";
 import type {
   BookDepreciationMethod,
   TaxDepreciationMethod,
-  VehicleType,
+  VehicleClass,
 } from "@/lib/types/database";
 
 interface Account {
@@ -65,7 +72,10 @@ export default function NewAssetPage() {
   const [vin, setVin] = useState("");
   const [licensePlate, setLicensePlate] = useState("");
   const [licenseState, setLicenseState] = useState("");
-  const [vehicleType, setVehicleType] = useState<VehicleType>("sedan");
+  const [vehicleClass, setVehicleClass] = useState<VehicleClass | "">("");
+
+  // Derive reporting group and master type from class selection
+  const classification = vehicleClass ? getVehicleClassification(vehicleClass) : null;
   const [mileage, setMileage] = useState("");
   const [titleNumber, setTitleNumber] = useState("");
   const [registrationExpiry, setRegistrationExpiry] = useState("");
@@ -142,7 +152,7 @@ export default function NewAssetPage() {
         license_plate: licensePlate || null,
         license_state: licenseState || null,
         mileage_at_acquisition: mileage ? parseInt(mileage) : null,
-        vehicle_type: vehicleType,
+        vehicle_class: vehicleClass || null,
         title_number: titleNumber || null,
         registration_expiry: registrationExpiry || null,
         vehicle_notes: vehicleNotes || null,
@@ -305,24 +315,46 @@ export default function NewAssetPage() {
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="vehicleType">Vehicle Type</Label>
+                    <Label htmlFor="vehicleClass">Vehicle Class</Label>
                     <Select
-                      value={vehicleType}
-                      onValueChange={(v) => setVehicleType(v as VehicleType)}
+                      value={vehicleClass}
+                      onValueChange={(v) => setVehicleClass(v as VehicleClass)}
                     >
-                      <SelectTrigger id="vehicleType">
-                        <SelectValue />
+                      <SelectTrigger id="vehicleClass">
+                        <SelectValue placeholder="Select class..." />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="sedan">Sedan</SelectItem>
-                        <SelectItem value="suv">SUV</SelectItem>
-                        <SelectItem value="truck">Truck</SelectItem>
-                        <SelectItem value="van">Van</SelectItem>
-                        <SelectItem value="heavy_truck">Heavy Truck</SelectItem>
-                        <SelectItem value="trailer">Trailer</SelectItem>
-                        <SelectItem value="other">Other</SelectItem>
+                        {getClassesGroupedByMasterType().map((group) => (
+                          <SelectGroup key={group.masterType}>
+                            <SelectLabel>{group.masterType}s</SelectLabel>
+                            {group.classes.map((c) => (
+                              <SelectItem key={c.class} value={c.class}>
+                                {getClassLabel(c.class)}
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                        ))}
                       </SelectContent>
                     </Select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Reporting Group</Label>
+                    <Input
+                      value={classification?.reportingGroup ?? "---"}
+                      disabled
+                      className="bg-muted"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Master Type</Label>
+                    <Input
+                      value={classification?.masterType ?? "---"}
+                      disabled
+                      className="bg-muted"
+                    />
                   </div>
                 </div>
 

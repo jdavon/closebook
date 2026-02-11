@@ -17,7 +17,9 @@ import {
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -42,10 +44,15 @@ import {
 } from "lucide-react";
 import { formatCurrency } from "@/lib/utils/dates";
 import { calculateDispositionGainLoss } from "@/lib/utils/depreciation";
+import {
+  getVehicleClassification,
+  getClassesGroupedByMasterType,
+  getClassLabel,
+} from "@/lib/utils/vehicle-classification";
 import type {
   BookDepreciationMethod,
   TaxDepreciationMethod,
-  VehicleType,
+  VehicleClass,
   DispositionMethod,
 } from "@/lib/types/database";
 
@@ -61,7 +68,7 @@ interface FixedAssetData {
   license_plate: string | null;
   license_state: string | null;
   mileage_at_acquisition: number | null;
-  vehicle_type: string | null;
+  vehicle_class: string | null;
   title_number: string | null;
   registration_expiry: string | null;
   vehicle_notes: string | null;
@@ -141,7 +148,7 @@ export default function AssetDetailPage() {
   const [vin, setVin] = useState("");
   const [licensePlate, setLicensePlate] = useState("");
   const [licenseState, setLicenseState] = useState("");
-  const [vehicleType, setVehicleType] = useState<string>("sedan");
+  const [vehicleClass, setVehicleClass] = useState<string>("");
   const [mileage, setMileage] = useState("");
   const [titleNumber, setTitleNumber] = useState("");
   const [registrationExpiry, setRegistrationExpiry] = useState("");
@@ -185,7 +192,7 @@ export default function AssetDetailPage() {
       setVin(a.vin ?? "");
       setLicensePlate(a.license_plate ?? "");
       setLicenseState(a.license_state ?? "");
-      setVehicleType(a.vehicle_type ?? "sedan");
+      setVehicleClass(a.vehicle_class ?? "");
       setMileage(a.mileage_at_acquisition?.toString() ?? "");
       setTitleNumber(a.title_number ?? "");
       setRegistrationExpiry(a.registration_expiry ?? "");
@@ -220,7 +227,7 @@ export default function AssetDetailPage() {
         license_plate: licensePlate || null,
         license_state: licenseState || null,
         mileage_at_acquisition: mileage ? parseInt(mileage) : null,
-        vehicle_type: vehicleType,
+        vehicle_class: vehicleClass || null,
         title_number: titleNumber || null,
         registration_expiry: registrationExpiry || null,
         vehicle_notes: vehicleNotes || null,
@@ -653,27 +660,51 @@ export default function AssetDetailPage() {
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label>Vehicle Type</Label>
+                  <Label>Vehicle Class</Label>
                   <Select
-                    value={vehicleType}
-                    onValueChange={setVehicleType}
+                    value={vehicleClass}
+                    onValueChange={setVehicleClass}
                     disabled={isDisposed}
                   >
                     <SelectTrigger>
-                      <SelectValue />
+                      <SelectValue placeholder="Select class..." />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="sedan">Sedan</SelectItem>
-                      <SelectItem value="suv">SUV</SelectItem>
-                      <SelectItem value="truck">Truck</SelectItem>
-                      <SelectItem value="van">Van</SelectItem>
-                      <SelectItem value="heavy_truck">Heavy Truck</SelectItem>
-                      <SelectItem value="trailer">Trailer</SelectItem>
-                      <SelectItem value="other">Other</SelectItem>
+                      {getClassesGroupedByMasterType().map((group) => (
+                        <SelectGroup key={group.masterType}>
+                          <SelectLabel>{group.masterType}s</SelectLabel>
+                          {group.classes.map((c) => (
+                            <SelectItem key={c.class} value={c.class}>
+                              {getClassLabel(c.class)}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      ))}
                     </SelectContent>
                   </Select>
                 </div>
               </div>
+
+              {vehicleClass && (
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Reporting Group</Label>
+                    <Input
+                      value={getVehicleClassification(vehicleClass)?.reportingGroup ?? "---"}
+                      disabled
+                      className="bg-muted"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Master Type</Label>
+                    <Input
+                      value={getVehicleClassification(vehicleClass)?.masterType ?? "---"}
+                      disabled
+                      className="bg-muted"
+                    />
+                  </div>
+                </div>
+              )}
 
               <div className="grid grid-cols-3 gap-4">
                 <div className="space-y-2">

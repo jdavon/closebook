@@ -52,14 +52,23 @@ export type TaxDepreciationMethod =
   | "straight_line_tax"
   | "none";
 
-export type VehicleType =
-  | "sedan"
-  | "suv"
-  | "truck"
-  | "van"
-  | "heavy_truck"
-  | "trailer"
-  | "other";
+export type VehicleMasterType = "Vehicle" | "Trailer";
+
+export type VehicleReportingGroup =
+  | "Car"
+  | "Cargo Van"
+  | "Passenger Van"
+  | "Box Truck"
+  | "Studio Box Truck"
+  | "Stakebed"
+  | "Cast Trailer"
+  | "Makeup Trailer";
+
+export type VehicleClass =
+  | "1R" | "2" | "2R" | "3" | "3R" | "4" | "5" | "6" | "7" | "8" | "8MU" | "9"
+  | "11" | "12" | "13" | "13T" | "14" | "15" | "15I" | "15L" | "16" | "17" | "18"
+  | "20" | "20T" | "21" | "22" | "23" | "24" | "26" | "27" | "28" | "28P" | "28S"
+  | "29" | "30" | "31" | "32" | "33" | "34" | "40" | "51" | "52";
 
 export type DispositionMethod =
   | "sale"

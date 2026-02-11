@@ -971,7 +971,7 @@ export type Database = {
           license_plate: string | null
           license_state: string | null
           mileage_at_acquisition: number | null
-          vehicle_type: string | null
+          vehicle_class: string | null
           title_number: string | null
           registration_expiry: string | null
           vehicle_notes: string | null
@@ -1016,7 +1016,7 @@ export type Database = {
           license_plate?: string | null
           license_state?: string | null
           mileage_at_acquisition?: number | null
-          vehicle_type?: string | null
+          vehicle_class?: string | null
           title_number?: string | null
           registration_expiry?: string | null
           vehicle_notes?: string | null
@@ -1059,7 +1059,7 @@ export type Database = {
           license_plate?: string | null
           license_state?: string | null
           mileage_at_acquisition?: number | null
-          vehicle_type?: string | null
+          vehicle_class?: string | null
           title_number?: string | null
           registration_expiry?: string | null
           vehicle_notes?: string | null
