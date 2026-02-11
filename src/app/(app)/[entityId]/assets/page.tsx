@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
@@ -26,7 +26,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Plus, ArrowRight, Car, Search } from "lucide-react";
+import { Plus, ArrowRight, Car, Search, Upload } from "lucide-react";
+import { toast } from "sonner";
 import { formatCurrency } from "@/lib/utils/dates";
 import {
   getVehicleClassification,
@@ -78,6 +79,8 @@ export default function AssetsPage() {
   const [masterTypeFilter, setMasterTypeFilter] = useState<string>("all");
   const [reportingGroupFilter, setReportingGroupFilter] = useState<string>("all");
   const [searchQuery, setSearchQuery] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const loadAssets = useCallback(async () => {
     let query = supabase
@@ -100,6 +103,45 @@ export default function AssetsPage() {
   useEffect(() => {
     loadAssets();
   }, [loadAssets]);
+
+  async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setUploading(true);
+
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("entityId", entityId);
+
+    try {
+      const res = await fetch("/api/assets/upload", {
+        method: "POST",
+        body: formData,
+      });
+
+      const json = await res.json();
+
+      if (!res.ok) {
+        toast.error(json.error || "Upload failed");
+      } else {
+        toast.success(
+          `Imported ${json.imported} vehicle${json.imported !== 1 ? "s" : ""}${
+            json.skipped > 0 ? ` (${json.skipped} skipped)` : ""
+          }`
+        );
+        if (json.errors?.length > 0) {
+          json.errors.slice(0, 5).forEach((err: string) => toast.warning(err));
+        }
+        loadAssets();
+      }
+    } catch {
+      toast.error("Upload failed — network error");
+    }
+
+    setUploading(false);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }
 
   const filteredAssets = assets.filter((a) => {
     // Master type filter
@@ -150,12 +192,29 @@ export default function AssetsPage() {
             Vehicle asset register with book and tax basis tracking
           </p>
         </div>
-        <Link href={`/${entityId}/assets/new`}>
-          <Button>
-            <Plus className="mr-2 h-4 w-4" />
-            Add Vehicle
+        <div className="flex items-center gap-2">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".xlsx,.xls,.csv"
+            className="hidden"
+            onChange={handleUpload}
+          />
+          <Button
+            variant="outline"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploading}
+          >
+            <Upload className="mr-2 h-4 w-4" />
+            {uploading ? "Importing..." : "Import Spreadsheet"}
           </Button>
-        </Link>
+          <Link href={`/${entityId}/assets/new`}>
+            <Button>
+              <Plus className="mr-2 h-4 w-4" />
+              Add Vehicle
+            </Button>
+          </Link>
+        </div>
       </div>
 
       {/* Summary Cards */}
@@ -263,12 +322,22 @@ export default function AssetsPage() {
                 statusFilter === "active" &&
                 masterTypeFilter === "all" &&
                 reportingGroupFilter === "all" && (
-                  <Link href={`/${entityId}/assets/new`}>
-                    <Button>
-                      <Plus className="mr-2 h-4 w-4" />
-                      Add Vehicle
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={uploading}
+                    >
+                      <Upload className="mr-2 h-4 w-4" />
+                      Import Spreadsheet
                     </Button>
-                  </Link>
+                    <Link href={`/${entityId}/assets/new`}>
+                      <Button>
+                        <Plus className="mr-2 h-4 w-4" />
+                        Add Vehicle
+                      </Button>
+                    </Link>
+                  </div>
                 )}
             </div>
           ) : (
