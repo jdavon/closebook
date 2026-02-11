@@ -77,3 +77,11 @@ export type DispositionMethod =
   | "theft"
   | "casualty"
   | "donation";
+
+export type PayrollAccrualType = "wages" | "payroll_tax" | "pto" | "benefits";
+
+export type AccrualSource = "paylocity_sync" | "manual";
+
+export type AccrualStatus = "draft" | "posted" | "reversed";
+
+export type PaylocityEnvironment = "testing" | "production";

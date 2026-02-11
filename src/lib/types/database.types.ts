@@ -1174,6 +1174,282 @@ export type Database = {
           },
         ]
       }
+      paylocity_connections: {
+        Row: {
+          id: string
+          entity_id: string
+          client_id: string
+          client_secret_encrypted: string
+          access_token: string | null
+          token_expires_at: string | null
+          environment: string
+          company_id: string
+          connected_by: string | null
+          last_sync_at: string | null
+          sync_status: string
+          sync_error: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          entity_id: string
+          client_id: string
+          client_secret_encrypted: string
+          access_token?: string | null
+          token_expires_at?: string | null
+          environment?: string
+          company_id: string
+          connected_by?: string | null
+          last_sync_at?: string | null
+          sync_status?: string
+          sync_error?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          entity_id?: string
+          client_id?: string
+          client_secret_encrypted?: string
+          access_token?: string | null
+          token_expires_at?: string | null
+          environment?: string
+          company_id?: string
+          connected_by?: string | null
+          last_sync_at?: string | null
+          sync_status?: string
+          sync_error?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      payroll_accruals: {
+        Row: {
+          id: string
+          entity_id: string
+          period_year: number
+          period_month: number
+          accrual_type: string
+          description: string
+          amount: number
+          source: string
+          payroll_sync_id: string | null
+          account_id: string | null
+          offset_account_id: string | null
+          status: string
+          reversal_period_year: number | null
+          reversal_period_month: number | null
+          notes: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          entity_id: string
+          period_year: number
+          period_month: number
+          accrual_type: string
+          description: string
+          amount?: number
+          source?: string
+          payroll_sync_id?: string | null
+          account_id?: string | null
+          offset_account_id?: string | null
+          status?: string
+          reversal_period_year?: number | null
+          reversal_period_month?: number | null
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          entity_id?: string
+          period_year?: number
+          period_month?: number
+          accrual_type?: string
+          description?: string
+          amount?: number
+          source?: string
+          payroll_sync_id?: string | null
+          account_id?: string | null
+          offset_account_id?: string | null
+          status?: string
+          reversal_period_year?: number | null
+          reversal_period_month?: number | null
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      payroll_sync_logs: {
+        Row: {
+          id: string
+          entity_id: string
+          started_at: string
+          completed_at: string | null
+          status: string
+          employees_synced: number
+          accruals_generated: number
+          error_message: string | null
+          raw_data: Json | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          entity_id: string
+          started_at?: string
+          completed_at?: string | null
+          status?: string
+          employees_synced?: number
+          accruals_generated?: number
+          error_message?: string | null
+          raw_data?: Json | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          entity_id?: string
+          started_at?: string
+          completed_at?: string | null
+          status?: string
+          employees_synced?: number
+          accruals_generated?: number
+          error_message?: string | null
+          raw_data?: Json | null
+          created_at?: string
+        }
+        Relationships: []
+      }
+      revenue_schedules: {
+        Row: {
+          id: string
+          entity_id: string
+          period_year: number
+          period_month: number
+          source_file_name: string | null
+          source_file_path: string | null
+          uploaded_by: string | null
+          uploaded_at: string | null
+          total_accrued_revenue: number
+          total_deferred_revenue: number
+          total_earned_revenue: number
+          total_billed_revenue: number
+          accrued_account_id: string | null
+          deferred_account_id: string | null
+          revenue_account_id: string | null
+          status: string
+          notes: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          entity_id: string
+          period_year: number
+          period_month: number
+          source_file_name?: string | null
+          source_file_path?: string | null
+          uploaded_by?: string | null
+          uploaded_at?: string | null
+          total_accrued_revenue?: number
+          total_deferred_revenue?: number
+          total_earned_revenue?: number
+          total_billed_revenue?: number
+          accrued_account_id?: string | null
+          deferred_account_id?: string | null
+          revenue_account_id?: string | null
+          status?: string
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          entity_id?: string
+          period_year?: number
+          period_month?: number
+          source_file_name?: string | null
+          source_file_path?: string | null
+          uploaded_by?: string | null
+          uploaded_at?: string | null
+          total_accrued_revenue?: number
+          total_deferred_revenue?: number
+          total_earned_revenue?: number
+          total_billed_revenue?: number
+          accrued_account_id?: string | null
+          deferred_account_id?: string | null
+          revenue_account_id?: string | null
+          status?: string
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      revenue_line_items: {
+        Row: {
+          id: string
+          schedule_id: string
+          contract_id: string | null
+          customer_name: string | null
+          description: string | null
+          rental_start: string | null
+          rental_end: string | null
+          total_contract_value: number
+          daily_rate: number
+          days_in_period: number
+          earned_revenue: number
+          billed_amount: number
+          accrual_amount: number
+          deferral_amount: number
+          row_order: number
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          schedule_id: string
+          contract_id?: string | null
+          customer_name?: string | null
+          description?: string | null
+          rental_start?: string | null
+          rental_end?: string | null
+          total_contract_value?: number
+          daily_rate?: number
+          days_in_period?: number
+          earned_revenue?: number
+          billed_amount?: number
+          accrual_amount?: number
+          deferral_amount?: number
+          row_order?: number
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          schedule_id?: string
+          contract_id?: string | null
+          customer_name?: string | null
+          description?: string | null
+          rental_start?: string | null
+          rental_end?: string | null
+          total_contract_value?: number
+          daily_rate?: number
+          days_in_period?: number
+          earned_revenue?: number
+          billed_amount?: number
+          accrual_amount?: number
+          deferral_amount?: number
+          row_order?: number
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never

@@ -9,6 +9,8 @@ import {
   BookOpenCheck,
   TableProperties,
   Car,
+  Receipt,
+  Users,
   BarChart3,
   Settings,
   LogOut,
@@ -94,6 +96,16 @@ export function AppSidebar({ user, entityId: entityIdProp }: AppSidebarProps) {
           title: "Fixed Assets",
           url: `${entityPrefix}/assets`,
           icon: Car,
+        },
+        {
+          title: "Revenue Accruals",
+          url: `${entityPrefix}/revenue`,
+          icon: Receipt,
+        },
+        {
+          title: "Payroll Accruals",
+          url: `${entityPrefix}/payroll`,
+          icon: Users,
         },
         {
           title: "Reports & KPIs",
