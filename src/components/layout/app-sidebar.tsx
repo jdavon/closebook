@@ -8,6 +8,7 @@ import {
   CheckSquare,
   BookOpenCheck,
   TableProperties,
+  Car,
   BarChart3,
   Settings,
   LogOut,
@@ -88,6 +89,11 @@ export function AppSidebar({ user, entityId: entityIdProp }: AppSidebarProps) {
           title: "Schedules",
           url: `${entityPrefix}/schedules`,
           icon: TableProperties,
+        },
+        {
+          title: "Fixed Assets",
+          url: `${entityPrefix}/assets`,
+          icon: Car,
         },
         {
           title: "Reports & KPIs",

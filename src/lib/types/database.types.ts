@@ -957,6 +957,223 @@ export type Database = {
         }
         Relationships: []
       }
+      fixed_assets: {
+        Row: {
+          id: string
+          entity_id: string
+          asset_name: string
+          asset_tag: string | null
+          vehicle_year: number | null
+          vehicle_make: string | null
+          vehicle_model: string | null
+          vehicle_trim: string | null
+          vin: string | null
+          license_plate: string | null
+          license_state: string | null
+          mileage_at_acquisition: number | null
+          vehicle_type: string | null
+          title_number: string | null
+          registration_expiry: string | null
+          vehicle_notes: string | null
+          acquisition_date: string
+          acquisition_cost: number
+          in_service_date: string
+          book_useful_life_months: number
+          book_salvage_value: number
+          book_depreciation_method: string
+          book_accumulated_depreciation: number
+          book_net_value: number
+          tax_cost_basis: number | null
+          tax_depreciation_method: string
+          tax_useful_life_months: number | null
+          tax_accumulated_depreciation: number
+          tax_net_value: number
+          section_179_amount: number
+          bonus_depreciation_amount: number
+          cost_account_id: string | null
+          accum_depr_account_id: string | null
+          depr_expense_account_id: string | null
+          status: string
+          disposed_date: string | null
+          disposed_sale_price: number | null
+          disposed_book_gain_loss: number | null
+          disposed_tax_gain_loss: number | null
+          disposition_method: string | null
+          created_by: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          entity_id: string
+          asset_name: string
+          asset_tag?: string | null
+          vehicle_year?: number | null
+          vehicle_make?: string | null
+          vehicle_model?: string | null
+          vehicle_trim?: string | null
+          vin?: string | null
+          license_plate?: string | null
+          license_state?: string | null
+          mileage_at_acquisition?: number | null
+          vehicle_type?: string | null
+          title_number?: string | null
+          registration_expiry?: string | null
+          vehicle_notes?: string | null
+          acquisition_date: string
+          acquisition_cost: number
+          in_service_date: string
+          book_useful_life_months?: number
+          book_salvage_value?: number
+          book_depreciation_method?: string
+          book_accumulated_depreciation?: number
+          tax_cost_basis?: number | null
+          tax_depreciation_method?: string
+          tax_useful_life_months?: number | null
+          tax_accumulated_depreciation?: number
+          section_179_amount?: number
+          bonus_depreciation_amount?: number
+          cost_account_id?: string | null
+          accum_depr_account_id?: string | null
+          depr_expense_account_id?: string | null
+          status?: string
+          disposed_date?: string | null
+          disposed_sale_price?: number | null
+          disposed_book_gain_loss?: number | null
+          disposed_tax_gain_loss?: number | null
+          disposition_method?: string | null
+          created_by?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          entity_id?: string
+          asset_name?: string
+          asset_tag?: string | null
+          vehicle_year?: number | null
+          vehicle_make?: string | null
+          vehicle_model?: string | null
+          vehicle_trim?: string | null
+          vin?: string | null
+          license_plate?: string | null
+          license_state?: string | null
+          mileage_at_acquisition?: number | null
+          vehicle_type?: string | null
+          title_number?: string | null
+          registration_expiry?: string | null
+          vehicle_notes?: string | null
+          acquisition_date?: string
+          acquisition_cost?: number
+          in_service_date?: string
+          book_useful_life_months?: number
+          book_salvage_value?: number
+          book_depreciation_method?: string
+          book_accumulated_depreciation?: number
+          tax_cost_basis?: number | null
+          tax_depreciation_method?: string
+          tax_useful_life_months?: number | null
+          tax_accumulated_depreciation?: number
+          section_179_amount?: number
+          bonus_depreciation_amount?: number
+          cost_account_id?: string | null
+          accum_depr_account_id?: string | null
+          depr_expense_account_id?: string | null
+          status?: string
+          disposed_date?: string | null
+          disposed_sale_price?: number | null
+          disposed_book_gain_loss?: number | null
+          disposed_tax_gain_loss?: number | null
+          disposition_method?: string | null
+          created_by?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fixed_assets_entity_id_fkey"
+            columns: ["entity_id"]
+            referencedRelation: "entities"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fixed_assets_cost_account_id_fkey"
+            columns: ["cost_account_id"]
+            referencedRelation: "accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fixed_assets_accum_depr_account_id_fkey"
+            columns: ["accum_depr_account_id"]
+            referencedRelation: "accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fixed_assets_depr_expense_account_id_fkey"
+            columns: ["depr_expense_account_id"]
+            referencedRelation: "accounts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      fixed_asset_depreciation: {
+        Row: {
+          id: string
+          fixed_asset_id: string
+          period_year: number
+          period_month: number
+          book_depreciation: number
+          book_accumulated: number
+          book_net_value: number
+          tax_depreciation: number
+          tax_accumulated: number
+          tax_net_value: number
+          is_manual_override: boolean
+          notes: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          fixed_asset_id: string
+          period_year: number
+          period_month: number
+          book_depreciation?: number
+          book_accumulated?: number
+          book_net_value?: number
+          tax_depreciation?: number
+          tax_accumulated?: number
+          tax_net_value?: number
+          is_manual_override?: boolean
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          fixed_asset_id?: string
+          period_year?: number
+          period_month?: number
+          book_depreciation?: number
+          book_accumulated?: number
+          book_net_value?: number
+          tax_depreciation?: number
+          tax_accumulated?: number
+          tax_net_value?: number
+          is_manual_override?: boolean
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fixed_asset_depreciation_fixed_asset_id_fkey"
+            columns: ["fixed_asset_id"]
+            referencedRelation: "fixed_assets"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never
