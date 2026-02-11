@@ -1,0 +1,11 @@
+import { createClient } from "@supabase/supabase-js";
+import type { Database } from "@/lib/types/database.types";
+
+// Service-role client for server-only operations (bypasses RLS)
+// NEVER expose this client to the browser
+export function createAdminClient() {
+  return createClient<Database>(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!
+  );
+}
