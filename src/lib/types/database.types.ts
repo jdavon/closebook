@@ -1450,6 +1450,119 @@ export type Database = {
         }
         Relationships: []
       }
+      master_accounts: {
+        Row: {
+          id: string
+          organization_id: string
+          account_number: string
+          name: string
+          description: string | null
+          classification: string
+          account_type: string
+          account_sub_type: string | null
+          parent_account_id: string | null
+          is_active: boolean
+          display_order: number
+          normal_balance: string
+          created_by: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          organization_id: string
+          account_number: string
+          name: string
+          description?: string | null
+          classification: string
+          account_type: string
+          account_sub_type?: string | null
+          parent_account_id?: string | null
+          is_active?: boolean
+          display_order?: number
+          normal_balance?: string
+          created_by?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          organization_id?: string
+          account_number?: string
+          name?: string
+          description?: string | null
+          classification?: string
+          account_type?: string
+          account_sub_type?: string | null
+          parent_account_id?: string | null
+          is_active?: boolean
+          display_order?: number
+          normal_balance?: string
+          created_by?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "master_accounts_organization_id_fkey"
+            columns: ["organization_id"]
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "master_accounts_parent_account_id_fkey"
+            columns: ["parent_account_id"]
+            referencedRelation: "master_accounts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      master_account_mappings: {
+        Row: {
+          id: string
+          master_account_id: string
+          entity_id: string
+          account_id: string
+          created_by: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          master_account_id: string
+          entity_id: string
+          account_id: string
+          created_by?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          master_account_id?: string
+          entity_id?: string
+          account_id?: string
+          created_by?: string | null
+          created_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "master_account_mappings_master_account_id_fkey"
+            columns: ["master_account_id"]
+            referencedRelation: "master_accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "master_account_mappings_entity_id_fkey"
+            columns: ["entity_id"]
+            referencedRelation: "entities"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "master_account_mappings_account_id_fkey"
+            columns: ["account_id"]
+            referencedRelation: "accounts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never

@@ -1,0 +1,970 @@
+"use client";
+
+import { useState, useEffect, useCallback } from "react";
+import { useRouter } from "next/navigation";
+import { createClient } from "@/lib/supabase/client";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
+import { toast } from "sonner";
+import { formatCurrency } from "@/lib/utils/dates";
+import {
+  Plus,
+  Trash2,
+  ChevronDown,
+  ChevronRight,
+  Link2,
+  Unlink,
+  BarChart3,
+  Pencil,
+} from "lucide-react";
+import type { AccountClassification } from "@/lib/types/database";
+
+interface MasterAccount {
+  id: string;
+  organization_id: string;
+  account_number: string;
+  name: string;
+  description: string | null;
+  classification: string;
+  account_type: string;
+  account_sub_type: string | null;
+  parent_account_id: string | null;
+  is_active: boolean;
+  display_order: number;
+  normal_balance: string;
+  created_at: string;
+}
+
+interface EntityAccount {
+  id: string;
+  entity_id: string;
+  name: string;
+  account_number: string | null;
+  classification: string;
+  account_type: string;
+  current_balance: number;
+}
+
+interface Entity {
+  id: string;
+  name: string;
+  code: string;
+}
+
+interface Mapping {
+  id: string;
+  master_account_id: string;
+  entity_id: string;
+  account_id: string;
+  entities: Entity;
+  accounts: EntityAccount;
+}
+
+const CLASSIFICATION_COLORS: Record<AccountClassification, string> = {
+  Asset: "bg-blue-100 text-blue-800",
+  Liability: "bg-red-100 text-red-800",
+  Equity: "bg-purple-100 text-purple-800",
+  Revenue: "bg-green-100 text-green-800",
+  Expense: "bg-orange-100 text-orange-800",
+};
+
+const CLASSIFICATIONS: AccountClassification[] = [
+  "Asset",
+  "Liability",
+  "Equity",
+  "Revenue",
+  "Expense",
+];
+
+const ACCOUNT_TYPES: Record<AccountClassification, string[]> = {
+  Asset: [
+    "Bank",
+    "Accounts Receivable",
+    "Other Current Asset",
+    "Fixed Asset",
+    "Other Asset",
+  ],
+  Liability: [
+    "Accounts Payable",
+    "Credit Card",
+    "Other Current Liability",
+    "Long Term Liability",
+  ],
+  Equity: ["Equity"],
+  Revenue: ["Income", "Other Income"],
+  Expense: ["Expense", "Other Expense", "Cost of Goods Sold"],
+};
+
+export default function MasterGLPage() {
+  const router = useRouter();
+  const supabase = createClient();
+
+  const [organizationId, setOrganizationId] = useState<string | null>(null);
+  const [masterAccounts, setMasterAccounts] = useState<MasterAccount[]>([]);
+  const [mappings, setMappings] = useState<Mapping[]>([]);
+  const [entities, setEntities] = useState<Entity[]>([]);
+  const [entityAccounts, setEntityAccounts] = useState<
+    Record<string, EntityAccount[]>
+  >({});
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
+  const [classFilter, setClassFilter] = useState("all");
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+
+  // Dialog state for adding/editing master accounts
+  const [showAddDialog, setShowAddDialog] = useState(false);
+  const [editingAccount, setEditingAccount] = useState<MasterAccount | null>(
+    null
+  );
+  const [formData, setFormData] = useState({
+    accountNumber: "",
+    name: "",
+    description: "",
+    classification: "Asset" as AccountClassification,
+    accountType: "",
+    accountSubType: "",
+  });
+  const [saving, setSaving] = useState(false);
+
+  // Sheet state for mapping
+  const [mappingAccount, setMappingAccount] = useState<MasterAccount | null>(
+    null
+  );
+  const [mappingSheetOpen, setMappingSheetOpen] = useState(false);
+  const [selectedEntityId, setSelectedEntityId] = useState<string>("");
+  const [selectedAccountId, setSelectedAccountId] = useState<string>("");
+
+  const loadOrganization = useCallback(async () => {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) return;
+
+    const { data: membership } = await supabase
+      .from("organization_members")
+      .select("organization_id")
+      .eq("user_id", user.id)
+      .single();
+
+    if (membership) {
+      setOrganizationId(membership.organization_id);
+    }
+  }, [supabase]);
+
+  const loadMasterAccounts = useCallback(async () => {
+    if (!organizationId) return;
+
+    const response = await fetch("/api/master-accounts");
+    const data = await response.json();
+    if (data.accounts) {
+      setMasterAccounts(data.accounts);
+    }
+  }, [organizationId]);
+
+  const loadMappings = useCallback(async () => {
+    if (!organizationId) return;
+
+    const response = await fetch(
+      `/api/master-accounts/mappings?organizationId=${organizationId}`
+    );
+    const data = await response.json();
+    if (data.mappings) {
+      setMappings(data.mappings);
+    }
+  }, [organizationId]);
+
+  const loadEntities = useCallback(async () => {
+    if (!organizationId) return;
+
+    const { data } = await supabase
+      .from("entities")
+      .select("id, name, code")
+      .eq("organization_id", organizationId)
+      .eq("is_active", true)
+      .order("name");
+
+    if (data) {
+      setEntities(data);
+      // Load accounts for each entity
+      const accountsByEntity: Record<string, EntityAccount[]> = {};
+      for (const entity of data) {
+        const { data: accounts } = await supabase
+          .from("accounts")
+          .select(
+            "id, entity_id, name, account_number, classification, account_type, current_balance"
+          )
+          .eq("entity_id", entity.id)
+          .eq("is_active", true)
+          .order("classification")
+          .order("account_number")
+          .order("name");
+        accountsByEntity[entity.id] = (accounts as EntityAccount[]) ?? [];
+      }
+      setEntityAccounts(accountsByEntity);
+    }
+  }, [supabase, organizationId]);
+
+  useEffect(() => {
+    loadOrganization();
+  }, [loadOrganization]);
+
+  useEffect(() => {
+    if (organizationId) {
+      Promise.all([loadMasterAccounts(), loadMappings(), loadEntities()]).then(
+        () => setLoading(false)
+      );
+    }
+  }, [organizationId, loadMasterAccounts, loadMappings, loadEntities]);
+
+  function resetForm() {
+    setFormData({
+      accountNumber: "",
+      name: "",
+      description: "",
+      classification: "Asset",
+      accountType: "",
+      accountSubType: "",
+    });
+  }
+
+  function openAddDialog() {
+    resetForm();
+    setEditingAccount(null);
+    setShowAddDialog(true);
+  }
+
+  function openEditDialog(account: MasterAccount) {
+    setEditingAccount(account);
+    setFormData({
+      accountNumber: account.account_number,
+      name: account.name,
+      description: account.description ?? "",
+      classification: account.classification as AccountClassification,
+      accountType: account.account_type,
+      accountSubType: account.account_sub_type ?? "",
+    });
+    setShowAddDialog(true);
+  }
+
+  async function handleSaveAccount() {
+    setSaving(true);
+
+    if (!formData.accountNumber || !formData.name || !formData.accountType) {
+      toast.error("Account number, name, and type are required");
+      setSaving(false);
+      return;
+    }
+
+    try {
+      if (editingAccount) {
+        const response = await fetch("/api/master-accounts", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            id: editingAccount.id,
+            accountNumber: formData.accountNumber,
+            name: formData.name,
+            description: formData.description || null,
+            classification: formData.classification,
+            accountType: formData.accountType,
+            accountSubType: formData.accountSubType || null,
+          }),
+        });
+
+        const data = await response.json();
+        if (!response.ok) {
+          toast.error(data.error || "Failed to update account");
+          setSaving(false);
+          return;
+        }
+        toast.success("Master account updated");
+      } else {
+        const response = await fetch("/api/master-accounts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            organizationId,
+            accountNumber: formData.accountNumber,
+            name: formData.name,
+            description: formData.description || null,
+            classification: formData.classification,
+            accountType: formData.accountType,
+            accountSubType: formData.accountSubType || null,
+          }),
+        });
+
+        const data = await response.json();
+        if (!response.ok) {
+          toast.error(data.error || "Failed to create account");
+          setSaving(false);
+          return;
+        }
+        toast.success("Master account created");
+      }
+
+      setShowAddDialog(false);
+      resetForm();
+      setEditingAccount(null);
+      await loadMasterAccounts();
+    } catch {
+      toast.error("An error occurred");
+    }
+    setSaving(false);
+  }
+
+  async function handleDeleteAccount(account: MasterAccount) {
+    if (
+      !confirm(
+        `Delete master account "${account.account_number} - ${account.name}"? This will also remove all entity mappings for this account.`
+      )
+    ) {
+      return;
+    }
+
+    const response = await fetch("/api/master-accounts", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: account.id }),
+    });
+
+    if (!response.ok) {
+      const data = await response.json();
+      toast.error(data.error || "Failed to delete account");
+      return;
+    }
+
+    toast.success("Master account deleted");
+    await loadMasterAccounts();
+    await loadMappings();
+  }
+
+  function openMappingSheet(account: MasterAccount) {
+    setMappingAccount(account);
+    setSelectedEntityId("");
+    setSelectedAccountId("");
+    setMappingSheetOpen(true);
+  }
+
+  async function handleAddMapping() {
+    if (!mappingAccount || !selectedEntityId || !selectedAccountId) {
+      toast.error("Please select an entity and account");
+      return;
+    }
+
+    const response = await fetch("/api/master-accounts/mappings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        masterAccountId: mappingAccount.id,
+        entityId: selectedEntityId,
+        accountId: selectedAccountId,
+      }),
+    });
+
+    const data = await response.json();
+    if (!response.ok) {
+      toast.error(data.error || "Failed to create mapping");
+      return;
+    }
+
+    toast.success("Account mapped successfully");
+    setSelectedEntityId("");
+    setSelectedAccountId("");
+    await loadMappings();
+  }
+
+  async function handleRemoveMapping(mappingId: string) {
+    const response = await fetch("/api/master-accounts/mappings", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: mappingId }),
+    });
+
+    if (!response.ok) {
+      const data = await response.json();
+      toast.error(data.error || "Failed to remove mapping");
+      return;
+    }
+
+    toast.success("Mapping removed");
+    await loadMappings();
+  }
+
+  // Filter accounts
+  const filtered = masterAccounts.filter((a) => {
+    const matchesSearch =
+      !search ||
+      a.name.toLowerCase().includes(search.toLowerCase()) ||
+      a.account_number.includes(search);
+    const matchesClass =
+      classFilter === "all" || a.classification === classFilter;
+    return matchesSearch && matchesClass;
+  });
+
+  const grouped = filtered.reduce<Record<string, MasterAccount[]>>(
+    (acc, account) => {
+      const key = account.classification;
+      if (!acc[key]) acc[key] = [];
+      acc[key].push(account);
+      return acc;
+    },
+    {}
+  );
+
+  function getMappingsForAccount(masterAccountId: string) {
+    return mappings.filter((m) => m.master_account_id === masterAccountId);
+  }
+
+  function toggleCollapse(classification: string) {
+    setCollapsed((prev) => ({
+      ...prev,
+      [classification]: !prev[classification],
+    }));
+  }
+
+  // Get entity accounts available for mapping (not already mapped)
+  const mappedAccountIds = new Set(mappings.map((m) => m.account_id));
+  function getAvailableAccounts(entityId: string) {
+    const accounts = entityAccounts[entityId] ?? [];
+    return accounts.filter((a) => !mappedAccountIds.has(a.id));
+  }
+
+  if (loading) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            Master General Ledger
+          </h1>
+          <p className="text-muted-foreground">Loading...</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            Master General Ledger
+          </h1>
+          <p className="text-muted-foreground">
+            Define a consolidated chart of accounts and map entity accounts from
+            QuickBooks
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            onClick={() => router.push("/settings/master-gl/consolidated")}
+          >
+            <BarChart3 className="mr-2 h-4 w-4" />
+            Consolidated View
+          </Button>
+          <Button onClick={openAddDialog}>
+            <Plus className="mr-2 h-4 w-4" />
+            Add Account
+          </Button>
+        </div>
+      </div>
+
+      <Card>
+        <CardHeader>
+          <div className="flex flex-wrap items-center gap-4">
+            <Input
+              placeholder="Search master accounts..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="max-w-xs"
+            />
+            <Select value={classFilter} onValueChange={setClassFilter}>
+              <SelectTrigger className="w-44">
+                <SelectValue placeholder="Classification" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Classifications</SelectItem>
+                {CLASSIFICATIONS.map((c) => (
+                  <SelectItem key={c} value={c}>
+                    {c}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <div className="ml-auto text-sm text-muted-foreground">
+              {masterAccounts.length} master account
+              {masterAccounts.length !== 1 ? "s" : ""} &middot;{" "}
+              {mappings.length} mapping{mappings.length !== 1 ? "s" : ""} across{" "}
+              {entities.length} entit{entities.length !== 1 ? "ies" : "y"}
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {masterAccounts.length === 0 ? (
+            <div className="text-center py-12">
+              <p className="text-muted-foreground mb-4">
+                No master accounts defined yet. Create your consolidated chart
+                of accounts to begin mapping entity accounts.
+              </p>
+              <Button onClick={openAddDialog}>
+                <Plus className="mr-2 h-4 w-4" />
+                Add First Account
+              </Button>
+            </div>
+          ) : filtered.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No accounts match your search.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {CLASSIFICATIONS.map((classification) => {
+                const classAccounts = grouped[classification];
+                if (!classAccounts || classAccounts.length === 0) return null;
+                const isCollapsed = collapsed[classification];
+
+                return (
+                  <div key={classification}>
+                    <button
+                      onClick={() => toggleCollapse(classification)}
+                      className="flex items-center gap-2 w-full py-2 px-1 hover:bg-muted/50 rounded-md transition-colors"
+                    >
+                      {isCollapsed ? (
+                        <ChevronRight className="h-4 w-4" />
+                      ) : (
+                        <ChevronDown className="h-4 w-4" />
+                      )}
+                      <Badge
+                        variant="outline"
+                        className={CLASSIFICATION_COLORS[classification]}
+                      >
+                        {classification}
+                      </Badge>
+                      <span className="text-sm text-muted-foreground">
+                        {classAccounts.length} account
+                        {classAccounts.length !== 1 ? "s" : ""}
+                      </span>
+                    </button>
+
+                    {!isCollapsed && (
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead className="w-24">Number</TableHead>
+                            <TableHead>Account Name</TableHead>
+                            <TableHead>Type</TableHead>
+                            <TableHead>Mapped Entities</TableHead>
+                            <TableHead className="w-32 text-right">
+                              Actions
+                            </TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {classAccounts.map((account) => {
+                            const accountMappings = getMappingsForAccount(
+                              account.id
+                            );
+                            return (
+                              <TableRow key={account.id}>
+                                <TableCell className="font-mono text-sm">
+                                  {account.account_number}
+                                </TableCell>
+                                <TableCell>
+                                  <div>
+                                    <span className="font-medium">
+                                      {account.name}
+                                    </span>
+                                    {account.description && (
+                                      <span className="text-xs block text-muted-foreground">
+                                        {account.description}
+                                      </span>
+                                    )}
+                                  </div>
+                                </TableCell>
+                                <TableCell className="text-muted-foreground text-sm">
+                                  {account.account_type}
+                                  {account.account_sub_type && (
+                                    <span className="text-xs block text-muted-foreground/60">
+                                      {account.account_sub_type}
+                                    </span>
+                                  )}
+                                </TableCell>
+                                <TableCell>
+                                  <div className="flex flex-wrap gap-1">
+                                    {accountMappings.length === 0 ? (
+                                      <span className="text-xs text-muted-foreground">
+                                        No mappings
+                                      </span>
+                                    ) : (
+                                      accountMappings.map((m) => (
+                                        <Badge
+                                          key={m.id}
+                                          variant="secondary"
+                                          className="text-xs"
+                                        >
+                                          {m.entities?.code ?? "???"}
+                                        </Badge>
+                                      ))
+                                    )}
+                                  </div>
+                                </TableCell>
+                                <TableCell>
+                                  <div className="flex items-center justify-end gap-1">
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={() =>
+                                        openMappingSheet(account)
+                                      }
+                                      title="Map entity accounts"
+                                    >
+                                      <Link2 className="h-4 w-4" />
+                                    </Button>
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={() =>
+                                        openEditDialog(account)
+                                      }
+                                      title="Edit account"
+                                    >
+                                      <Pencil className="h-4 w-4" />
+                                    </Button>
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={() =>
+                                        handleDeleteAccount(account)
+                                      }
+                                      title="Delete account"
+                                    >
+                                      <Trash2 className="h-4 w-4 text-destructive" />
+                                    </Button>
+                                  </div>
+                                </TableCell>
+                              </TableRow>
+                            );
+                          })}
+                        </TableBody>
+                      </Table>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Add/Edit Master Account Dialog */}
+      <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {editingAccount ? "Edit Master Account" : "Add Master Account"}
+            </DialogTitle>
+            <DialogDescription>
+              {editingAccount
+                ? "Update the master account details."
+                : "Define a new account in your consolidated chart of accounts."}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-4">
+            <div className="grid gap-4 grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="accountNumber">Account Number</Label>
+                <Input
+                  id="accountNumber"
+                  placeholder="e.g., 1000"
+                  value={formData.accountNumber}
+                  onChange={(e) =>
+                    setFormData({ ...formData, accountNumber: e.target.value })
+                  }
+                  required
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="name">Account Name</Label>
+                <Input
+                  id="name"
+                  placeholder="e.g., Cash and Equivalents"
+                  value={formData.name}
+                  onChange={(e) =>
+                    setFormData({ ...formData, name: e.target.value })
+                  }
+                  required
+                />
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="description">Description (optional)</Label>
+              <Input
+                id="description"
+                placeholder="e.g., All operating cash accounts"
+                value={formData.description}
+                onChange={(e) =>
+                  setFormData({ ...formData, description: e.target.value })
+                }
+              />
+            </div>
+
+            <div className="grid gap-4 grid-cols-2">
+              <div className="space-y-2">
+                <Label>Classification</Label>
+                <Select
+                  value={formData.classification}
+                  onValueChange={(v) =>
+                    setFormData({
+                      ...formData,
+                      classification: v as AccountClassification,
+                      accountType: "",
+                    })
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {CLASSIFICATIONS.map((c) => (
+                      <SelectItem key={c} value={c}>
+                        {c}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Account Type</Label>
+                <Select
+                  value={formData.accountType}
+                  onValueChange={(v) =>
+                    setFormData({ ...formData, accountType: v })
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select type..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(ACCOUNT_TYPES[formData.classification] ?? []).map(
+                      (type) => (
+                        <SelectItem key={type} value={type}>
+                          {type}
+                        </SelectItem>
+                      )
+                    )}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setShowAddDialog(false)}
+            >
+              Cancel
+            </Button>
+            <Button onClick={handleSaveAccount} disabled={saving}>
+              {saving
+                ? "Saving..."
+                : editingAccount
+                ? "Update Account"
+                : "Create Account"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Mapping Side Sheet */}
+      <Sheet open={mappingSheetOpen} onOpenChange={setMappingSheetOpen}>
+        <SheetContent className="overflow-y-auto sm:max-w-lg">
+          {mappingAccount && (
+            <>
+              <SheetHeader>
+                <SheetTitle>
+                  Map Entity Accounts
+                </SheetTitle>
+                <SheetDescription>
+                  <span className="flex items-center gap-2 mt-1">
+                    <Badge
+                      variant="outline"
+                      className={
+                        CLASSIFICATION_COLORS[
+                          mappingAccount.classification as AccountClassification
+                        ]
+                      }
+                    >
+                      {mappingAccount.classification}
+                    </Badge>
+                    <span className="font-mono">
+                      {mappingAccount.account_number}
+                    </span>
+                    <span>{mappingAccount.name}</span>
+                  </span>
+                </SheetDescription>
+              </SheetHeader>
+
+              <div className="mt-6 space-y-6">
+                {/* Current mappings */}
+                <div className="space-y-3">
+                  <h3 className="font-medium text-sm">Current Mappings</h3>
+                  {getMappingsForAccount(mappingAccount.id).length === 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                      No entity accounts mapped yet.
+                    </p>
+                  ) : (
+                    <div className="space-y-2">
+                      {getMappingsForAccount(mappingAccount.id).map((m) => (
+                        <div
+                          key={m.id}
+                          className="flex items-center justify-between rounded-md border p-3"
+                        >
+                          <div>
+                            <div className="font-medium text-sm">
+                              {m.entities?.name ?? "Unknown Entity"}
+                              <Badge
+                                variant="secondary"
+                                className="ml-2 text-xs"
+                              >
+                                {m.entities?.code ?? "???"}
+                              </Badge>
+                            </div>
+                            <div className="text-xs text-muted-foreground mt-0.5">
+                              {m.accounts?.account_number
+                                ? `#${m.accounts.account_number} - `
+                                : ""}
+                              {m.accounts?.name ?? "Unknown Account"}
+                              <span className="ml-2">
+                                ({formatCurrency(m.accounts?.current_balance ?? 0)})
+                              </span>
+                            </div>
+                          </div>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleRemoveMapping(m.id)}
+                          >
+                            <Unlink className="h-4 w-4 text-destructive" />
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <Separator />
+
+                {/* Add new mapping */}
+                <div className="space-y-3">
+                  <h3 className="font-medium text-sm">Add Mapping</h3>
+
+                  <div className="space-y-2">
+                    <Label>Entity</Label>
+                    <Select
+                      value={selectedEntityId}
+                      onValueChange={(v) => {
+                        setSelectedEntityId(v);
+                        setSelectedAccountId("");
+                      }}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select entity..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {entities.map((e) => (
+                          <SelectItem key={e.id} value={e.id}>
+                            {e.name} ({e.code})
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {selectedEntityId && (
+                    <div className="space-y-2">
+                      <Label>Entity Account</Label>
+                      <Select
+                        value={selectedAccountId}
+                        onValueChange={setSelectedAccountId}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select account..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {getAvailableAccounts(selectedEntityId).map((a) => (
+                            <SelectItem key={a.id} value={a.id}>
+                              {a.account_number
+                                ? `${a.account_number} - `
+                                : ""}
+                              {a.name} ({a.classification})
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      {getAvailableAccounts(selectedEntityId).length === 0 && (
+                        <p className="text-xs text-muted-foreground">
+                          All accounts for this entity are already mapped.
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  <Button
+                    onClick={handleAddMapping}
+                    disabled={!selectedEntityId || !selectedAccountId}
+                    className="w-full"
+                  >
+                    <Link2 className="mr-2 h-4 w-4" />
+                    Map Account
+                  </Button>
+                </div>
+              </div>
+            </>
+          )}
+        </SheetContent>
+      </Sheet>
+    </div>
+  );
+}

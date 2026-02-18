@@ -15,6 +15,7 @@ import {
   Settings,
   LogOut,
   Building2,
+  LibraryBig,
 } from "lucide-react";
 import {
   Sidebar,
@@ -119,6 +120,11 @@ export function AppSidebar({ user, entityId: entityIdProp }: AppSidebarProps) {
           url: "/dashboard",
           icon: LayoutDashboard,
         },
+        {
+          title: "Master GL",
+          url: "/settings/master-gl",
+          icon: LibraryBig,
+        },
       ];
 
   const settingsItems = [
@@ -131,6 +137,11 @@ export function AppSidebar({ user, entityId: entityIdProp }: AppSidebarProps) {
           },
         ]
       : []),
+    {
+      title: "Master GL",
+      url: "/settings/master-gl",
+      icon: LibraryBig,
+    },
     {
       title: "Organization",
       url: "/settings",
@@ -210,7 +221,7 @@ export function AppSidebar({ user, entityId: entityIdProp }: AppSidebarProps) {
                 <SidebarMenuItem key={item.title}>
                   <SidebarMenuButton
                     asChild
-                    isActive={pathname === item.url}
+                    isActive={pathname === item.url || pathname.startsWith(item.url + "/")}
                   >
                     <Link href={item.url}>
                       <item.icon />
