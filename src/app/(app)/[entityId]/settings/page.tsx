@@ -1,9 +1,10 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { useParams, useSearchParams } from "next/navigation";
+import { useParams, useSearchParams, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Card,
   CardContent,
@@ -21,7 +22,7 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
-import { RefreshCw, Link2, Unlink, CheckCircle2, AlertCircle } from "lucide-react";
+import { RefreshCw, Link2, Unlink, CheckCircle2, AlertCircle, Trash2 } from "lucide-react";
 
 interface QboConnection {
   id: string;
@@ -45,6 +46,7 @@ interface SyncLog {
 export default function EntitySettingsPage() {
   const params = useParams();
   const searchParams = useSearchParams();
+  const router = useRouter();
   const entityId = params.entityId as string;
   const supabase = createClient();
 
@@ -52,6 +54,9 @@ export default function EntitySettingsPage() {
   const [syncLogs, setSyncLogs] = useState<SyncLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  const [entityName, setEntityName] = useState("");
+  const [deleting, setDeleting] = useState(false);
+  const [deleteConfirmation, setDeleteConfirmation] = useState("");
 
   // Show toast based on callback result
   useEffect(() => {
@@ -66,6 +71,17 @@ export default function EntitySettingsPage() {
   }, [searchParams]);
 
   const loadData = useCallback(async () => {
+    // Load entity name
+    const { data: entity } = await supabase
+      .from("entities")
+      .select("name")
+      .eq("id", entityId)
+      .single();
+
+    if (entity) {
+      setEntityName(entity.name);
+    }
+
     const { data: conn } = await supabase
       .from("qbo_connections")
       .select("id, company_name, realm_id, last_sync_at, sync_status, sync_error")
@@ -153,6 +169,33 @@ export default function EntitySettingsPage() {
       }
     } catch {
       toast.error("Failed to disconnect");
+    }
+  }
+
+  async function handleDeleteEntity() {
+    if (deleteConfirmation !== entityName) return;
+
+    setDeleting(true);
+    try {
+      const response = await fetch("/api/entities", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ entityId }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        toast.error(data.error || "Failed to delete entity");
+        setDeleting(false);
+        return;
+      }
+
+      toast.success("Entity deleted successfully");
+      router.push("/settings");
+    } catch {
+      toast.error("Failed to delete entity");
+      setDeleting(false);
     }
   }
 
@@ -286,6 +329,54 @@ export default function EntitySettingsPage() {
               </Button>
             </div>
           )}
+        </CardContent>
+      </Card>
+
+      {/* Danger Zone */}
+      <Card className="border-red-200 dark:border-red-900">
+        <CardHeader>
+          <CardTitle className="text-red-600 dark:text-red-400">
+            Danger Zone
+          </CardTitle>
+          <CardDescription>
+            Permanently delete this entity and all of its data. This action
+            cannot be undone.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="rounded-lg border border-red-200 dark:border-red-900 p-4 space-y-4">
+            <div className="space-y-2">
+              <p className="text-sm font-medium">
+                Delete &ldquo;{entityName || "this entity"}&rdquo;
+              </p>
+              <p className="text-sm text-muted-foreground">
+                This will permanently delete the entity and all associated data
+                including accounts, GL balances, trial balances, close periods,
+                fixed assets, depreciation schedules, revenue accruals,
+                payroll accruals, reports, and any QuickBooks connection.
+              </p>
+            </div>
+            <div className="space-y-2">
+              <p className="text-sm text-muted-foreground">
+                Type <span className="font-semibold text-foreground">{entityName}</span> to
+                confirm:
+              </p>
+              <Input
+                placeholder="Entity name"
+                value={deleteConfirmation}
+                onChange={(e) => setDeleteConfirmation(e.target.value)}
+                className="max-w-sm"
+              />
+            </div>
+            <Button
+              variant="destructive"
+              onClick={handleDeleteEntity}
+              disabled={deleting || deleteConfirmation !== entityName || !entityName}
+            >
+              <Trash2 className="mr-2 h-4 w-4" />
+              {deleting ? "Deleting..." : "Delete Entity"}
+            </Button>
+          </div>
         </CardContent>
       </Card>
     </div>
