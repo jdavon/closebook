@@ -72,7 +72,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const { entityId, syncType = "full" } = await request.json();
+  const { entityId, syncType = "full", periodYear, periodMonth } = await request.json();
 
   if (!entityId) {
     return NextResponse.json(
@@ -80,6 +80,11 @@ export async function POST(request: Request) {
       { status: 400 }
     );
   }
+
+  // Use specified period or default to current month
+  const now = new Date();
+  const targetYear = periodYear ?? now.getFullYear();
+  const targetMonth = periodMonth ?? now.getMonth() + 1; // 1-indexed
 
   const adminClient = createAdminClient();
 
@@ -163,10 +168,9 @@ export async function POST(request: Request) {
       }
     }
 
-    // Sync trial balance for current period
-    const now = new Date();
-    const periodEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-    const periodStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    // Sync trial balance for specified period (or current month)
+    const periodStart = new Date(targetYear, targetMonth - 1, 1);
+    const periodEnd = new Date(targetYear, targetMonth, 0); // last day of month
 
     const startDate = periodStart.toISOString().split("T")[0];
     const endDate = periodEnd.toISOString().split("T")[0];
@@ -188,8 +192,8 @@ export async function POST(request: Request) {
       await adminClient.from("trial_balances").upsert(
         {
           entity_id: entityId,
-          period_year: now.getFullYear(),
-          period_month: now.getMonth() + 1,
+          period_year: targetYear,
+          period_month: targetMonth,
           report_data: tbData,
           synced_at: new Date().toISOString(),
         },
@@ -219,8 +223,8 @@ export async function POST(request: Request) {
               {
                 entity_id: entityId,
                 account_id: account.id,
-                period_year: now.getFullYear(),
-                period_month: now.getMonth() + 1,
+                period_year: targetYear,
+                period_month: targetMonth,
                 debit_total: debit,
                 credit_total: credit,
                 ending_balance: debit - credit,
@@ -259,7 +263,12 @@ export async function POST(request: Request) {
         .eq("id", syncLog.id);
     }
 
-    return NextResponse.json({ success: true, recordsSynced });
+    return NextResponse.json({
+      success: true,
+      recordsSynced,
+      periodYear: targetYear,
+      periodMonth: targetMonth,
+    });
   } catch (err) {
     const errorMessage =
       err instanceof Error ? err.message : "Unknown error";

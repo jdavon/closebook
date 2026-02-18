@@ -22,7 +22,15 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { RefreshCw, Link2, Unlink, CheckCircle2, AlertCircle, Trash2 } from "lucide-react";
+import { getCurrentPeriod, getPeriodLabel } from "@/lib/utils/dates";
 
 interface QboConnection {
   id: string;
@@ -50,10 +58,13 @@ export default function EntitySettingsPage() {
   const entityId = params.entityId as string;
   const supabase = createClient();
 
+  const currentPeriod = getCurrentPeriod();
   const [connection, setConnection] = useState<QboConnection | null>(null);
   const [syncLogs, setSyncLogs] = useState<SyncLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  const [syncYear, setSyncYear] = useState(String(currentPeriod.year));
+  const [syncMonth, setSyncMonth] = useState(String(currentPeriod.month));
   const [entityName, setEntityName] = useState("");
   const [deleting, setDeleting] = useState(false);
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
@@ -130,17 +141,26 @@ export default function EntitySettingsPage() {
 
   async function handleSync() {
     setSyncing(true);
+    const year = parseInt(syncYear);
+    const month = parseInt(syncMonth);
     try {
       const response = await fetch("/api/qbo/sync", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ entityId, syncType: "full" }),
+        body: JSON.stringify({
+          entityId,
+          syncType: "full",
+          periodYear: year,
+          periodMonth: month,
+        }),
       });
 
       const data = await response.json();
 
       if (response.ok) {
-        toast.success("Sync completed successfully");
+        toast.success(
+          `Sync completed for ${getPeriodLabel(year, month)} — ${data.recordsSynced} records`
+        );
         loadData();
       } else {
         toast.error(data.error || "Sync failed");
@@ -245,7 +265,36 @@ export default function EntitySettingsPage() {
                     </div>
                   )}
                 </div>
-                <div className="flex gap-2">
+                <div className="flex items-center gap-2">
+                  <Select value={syncMonth} onValueChange={setSyncMonth}>
+                    <SelectTrigger className="w-[120px]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {[
+                        "January", "February", "March", "April", "May", "June",
+                        "July", "August", "September", "October", "November", "December",
+                      ].map((m, i) => (
+                        <SelectItem key={i + 1} value={String(i + 1)}>
+                          {m}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Select value={syncYear} onValueChange={setSyncYear}>
+                    <SelectTrigger className="w-[90px]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {[currentPeriod.year - 2, currentPeriod.year - 1, currentPeriod.year, currentPeriod.year + 1].map(
+                        (y) => (
+                          <SelectItem key={y} value={String(y)}>
+                            {y}
+                          </SelectItem>
+                        )
+                      )}
+                    </SelectContent>
+                  </Select>
                   <Button
                     variant="outline"
                     onClick={handleSync}
@@ -256,7 +305,7 @@ export default function EntitySettingsPage() {
                         syncing ? "animate-spin" : ""
                       }`}
                     />
-                    {syncing ? "Syncing..." : "Sync Now"}
+                    {syncing ? "Syncing..." : "Sync Period"}
                   </Button>
                   <Button variant="destructive" onClick={handleDisconnect}>
                     <Unlink className="mr-2 h-4 w-4" />

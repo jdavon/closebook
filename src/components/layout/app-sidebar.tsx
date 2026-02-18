@@ -17,6 +17,7 @@ import {
   LogOut,
   Building2,
   LibraryBig,
+  RefreshCw,
 } from "lucide-react";
 import {
   Sidebar,
@@ -125,6 +126,11 @@ export function AppSidebar({ user, entityId: entityIdProp }: AppSidebarProps) {
           title: "Dashboard",
           url: "/dashboard",
           icon: LayoutDashboard,
+        },
+        {
+          title: "QBO Sync",
+          url: "/sync",
+          icon: RefreshCw,
         },
         {
           title: "Master GL",
