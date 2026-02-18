@@ -336,6 +336,132 @@ export type Database = {
         }
         Relationships: []
       }
+      debt_amortization: {
+        Row: {
+          id: string
+          debt_instrument_id: string
+          period_year: number
+          period_month: number
+          beginning_balance: number
+          payment: number
+          principal: number
+          interest: number
+          ending_balance: number
+          is_manual_override: boolean
+          notes: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          debt_instrument_id: string
+          period_year: number
+          period_month: number
+          beginning_balance?: number
+          payment?: number
+          principal?: number
+          interest?: number
+          ending_balance?: number
+          is_manual_override?: boolean
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          debt_instrument_id?: string
+          period_year?: number
+          period_month?: number
+          beginning_balance?: number
+          payment?: number
+          principal?: number
+          interest?: number
+          ending_balance?: number
+          is_manual_override?: boolean
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      debt_instruments: {
+        Row: {
+          id: string
+          entity_id: string
+          instrument_name: string
+          lender_name: string | null
+          debt_type: string
+          original_amount: number
+          interest_rate: number
+          term_months: number | null
+          start_date: string
+          maturity_date: string | null
+          payment_amount: number | null
+          payment_frequency: string
+          credit_limit: number | null
+          current_draw: number | null
+          liability_account_id: string | null
+          interest_expense_account_id: string | null
+          fixed_asset_id: string | null
+          status: string
+          source_file_name: string | null
+          uploaded_at: string | null
+          created_by: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          entity_id: string
+          instrument_name: string
+          lender_name?: string | null
+          debt_type: string
+          original_amount?: number
+          interest_rate?: number
+          term_months?: number | null
+          start_date: string
+          maturity_date?: string | null
+          payment_amount?: number | null
+          payment_frequency?: string
+          credit_limit?: number | null
+          current_draw?: number | null
+          liability_account_id?: string | null
+          interest_expense_account_id?: string | null
+          fixed_asset_id?: string | null
+          status?: string
+          source_file_name?: string | null
+          uploaded_at?: string | null
+          created_by?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          entity_id?: string
+          instrument_name?: string
+          lender_name?: string | null
+          debt_type?: string
+          original_amount?: number
+          interest_rate?: number
+          term_months?: number | null
+          start_date?: string
+          maturity_date?: string | null
+          payment_amount?: number | null
+          payment_frequency?: string
+          credit_limit?: number | null
+          current_draw?: number | null
+          liability_account_id?: string | null
+          interest_expense_account_id?: string | null
+          fixed_asset_id?: string | null
+          status?: string
+          source_file_name?: string | null
+          uploaded_at?: string | null
+          created_by?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       entities: {
         Row: {
           id: string
