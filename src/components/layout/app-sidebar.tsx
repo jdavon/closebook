@@ -18,6 +18,7 @@ import {
   Building2,
   LibraryBig,
   RefreshCw,
+  Scale,
 } from "lucide-react";
 import {
   Sidebar,
@@ -89,6 +90,11 @@ export function AppSidebar({ user, entityId: entityIdProp }: AppSidebarProps) {
           title: "Chart of Accounts",
           url: `${entityPrefix}/accounts`,
           icon: BookOpenCheck,
+        },
+        {
+          title: "Trial Balance",
+          url: `${entityPrefix}/trial-balance`,
+          icon: Scale,
         },
         {
           title: "Schedules",
