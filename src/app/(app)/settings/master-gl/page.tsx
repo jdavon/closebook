@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import {
@@ -45,6 +45,8 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Progress } from "@/components/ui/progress";
 import { toast } from "sonner";
 import { formatCurrency } from "@/lib/utils/dates";
 import {
@@ -56,6 +58,9 @@ import {
   Unlink,
   BarChart3,
   Pencil,
+  Wand2,
+  CheckCircle2,
+  AlertTriangle,
 } from "lucide-react";
 import type { AccountClassification } from "@/lib/types/database";
 
@@ -100,6 +105,23 @@ interface Mapping {
   accounts: EntityAccount;
 }
 
+interface AutoMapSuggestion {
+  entityId: string;
+  entityName: string;
+  entityCode: string;
+  accountId: string;
+  accountNumber: string | null;
+  accountName: string;
+  accountClassification: string;
+  accountBalance: number;
+  masterAccountId: string;
+  masterAccountNumber: string;
+  masterAccountName: string;
+  masterClassification: string;
+  confidence: "high" | "medium" | "low";
+  matchReason: string;
+}
+
 const CLASSIFICATION_COLORS: Record<AccountClassification, string> = {
   Asset: "bg-blue-100 text-blue-800",
   Liability: "bg-red-100 text-red-800",
@@ -133,6 +155,12 @@ const ACCOUNT_TYPES: Record<AccountClassification, string[]> = {
   Equity: ["Equity"],
   Revenue: ["Income", "Other Income"],
   Expense: ["Expense", "Other Expense", "Cost of Goods Sold"],
+};
+
+const CONFIDENCE_COLORS = {
+  high: "bg-green-100 text-green-800",
+  medium: "bg-yellow-100 text-yellow-800",
+  low: "bg-gray-100 text-gray-600",
 };
 
 export default function MasterGLPage() {
@@ -173,6 +201,17 @@ export default function MasterGLPage() {
   const [mappingSheetOpen, setMappingSheetOpen] = useState(false);
   const [selectedEntityId, setSelectedEntityId] = useState<string>("");
   const [selectedAccountId, setSelectedAccountId] = useState<string>("");
+
+  // Auto-map state
+  const [showAutoMapDialog, setShowAutoMapDialog] = useState(false);
+  const [autoMapSuggestions, setAutoMapSuggestions] = useState<
+    AutoMapSuggestion[]
+  >([]);
+  const [selectedSuggestions, setSelectedSuggestions] = useState<Set<string>>(
+    new Set()
+  );
+  const [autoMapLoading, setAutoMapLoading] = useState(false);
+  const [applyingAutoMap, setApplyingAutoMap] = useState(false);
 
   const loadOrganization = useCallback(async () => {
     const {
@@ -225,22 +264,29 @@ export default function MasterGLPage() {
 
     if (data) {
       setEntities(data);
-      // Load accounts for each entity
-      const accountsByEntity: Record<string, EntityAccount[]> = {};
-      for (const entity of data) {
-        const { data: accounts } = await supabase
+      // Load all accounts in one query instead of sequential
+      const entityIds = data.map((e) => e.id);
+      if (entityIds.length > 0) {
+        const { data: allAccounts } = await supabase
           .from("accounts")
           .select(
             "id, entity_id, name, account_number, classification, account_type, current_balance"
           )
-          .eq("entity_id", entity.id)
+          .in("entity_id", entityIds)
           .eq("is_active", true)
           .order("classification")
           .order("account_number")
           .order("name");
-        accountsByEntity[entity.id] = (accounts as EntityAccount[]) ?? [];
+
+        const accountsByEntity: Record<string, EntityAccount[]> = {};
+        for (const account of (allAccounts as EntityAccount[]) ?? []) {
+          if (!accountsByEntity[account.entity_id]) {
+            accountsByEntity[account.entity_id] = [];
+          }
+          accountsByEntity[account.entity_id].push(account);
+        }
+        setEntityAccounts(accountsByEntity);
       }
-      setEntityAccounts(accountsByEntity);
     }
   }, [supabase, organizationId]);
 
@@ -255,6 +301,57 @@ export default function MasterGLPage() {
       );
     }
   }, [organizationId, loadMasterAccounts, loadMappings, loadEntities]);
+
+  // Mapping coverage metrics
+  const coverageMetrics = useMemo(() => {
+    const allEntityAccounts = Object.values(entityAccounts).flat();
+    const totalEntityAccounts = allEntityAccounts.length;
+    const mappedAccountIds = new Set(mappings.map((m) => m.account_id));
+    const mappedCount = allEntityAccounts.filter((a) =>
+      mappedAccountIds.has(a.id)
+    ).length;
+    const unmappedCount = totalEntityAccounts - mappedCount;
+
+    const totalMappedBalance = allEntityAccounts
+      .filter((a) => mappedAccountIds.has(a.id))
+      .reduce((s, a) => s + Math.abs(a.current_balance), 0);
+    const totalBalance = allEntityAccounts.reduce(
+      (s, a) => s + Math.abs(a.current_balance),
+      0
+    );
+
+    const perEntity = entities.map((e) => {
+      const eAccounts = entityAccounts[e.id] ?? [];
+      const eMapped = eAccounts.filter((a) => mappedAccountIds.has(a.id));
+      return {
+        ...e,
+        total: eAccounts.length,
+        mapped: eMapped.length,
+        unmapped: eAccounts.length - eMapped.length,
+        pct:
+          eAccounts.length > 0
+            ? Math.round((eMapped.length / eAccounts.length) * 100)
+            : 0,
+      };
+    });
+
+    return {
+      totalEntityAccounts,
+      mappedCount,
+      unmappedCount,
+      pctMapped:
+        totalEntityAccounts > 0
+          ? Math.round((mappedCount / totalEntityAccounts) * 100)
+          : 0,
+      totalMappedBalance,
+      totalBalance,
+      pctBalanceMapped:
+        totalBalance > 0
+          ? Math.round((totalMappedBalance / totalBalance) * 100)
+          : 0,
+      perEntity,
+    };
+  }, [entities, entityAccounts, mappings]);
 
   function resetForm() {
     setFormData({
@@ -430,6 +527,90 @@ export default function MasterGLPage() {
     await loadMappings();
   }
 
+  // Auto-map functions
+  async function handleAutoMap() {
+    setAutoMapLoading(true);
+    setShowAutoMapDialog(true);
+    setSelectedSuggestions(new Set());
+
+    const response = await fetch("/api/master-accounts/auto-map", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ organizationId }),
+    });
+
+    const data = await response.json();
+    if (data.suggestions) {
+      setAutoMapSuggestions(data.suggestions);
+      // Auto-select high confidence
+      const highConf = new Set<string>(
+        data.suggestions
+          .filter((s: AutoMapSuggestion) => s.confidence === "high")
+          .map((s: AutoMapSuggestion) => s.accountId)
+      );
+      setSelectedSuggestions(highConf);
+    }
+    setAutoMapLoading(false);
+  }
+
+  function toggleSuggestion(accountId: string) {
+    setSelectedSuggestions((prev) => {
+      const next = new Set(prev);
+      if (next.has(accountId)) {
+        next.delete(accountId);
+      } else {
+        next.add(accountId);
+      }
+      return next;
+    });
+  }
+
+  function selectAllSuggestions() {
+    setSelectedSuggestions(
+      new Set(autoMapSuggestions.map((s) => s.accountId))
+    );
+  }
+
+  function deselectAllSuggestions() {
+    setSelectedSuggestions(new Set());
+  }
+
+  async function applyAutoMapSuggestions() {
+    const selected = autoMapSuggestions.filter((s) =>
+      selectedSuggestions.has(s.accountId)
+    );
+    if (selected.length === 0) {
+      toast.error("No suggestions selected");
+      return;
+    }
+
+    setApplyingAutoMap(true);
+
+    const response = await fetch("/api/master-accounts/mappings/bulk", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        mappings: selected.map((s) => ({
+          masterAccountId: s.masterAccountId,
+          entityId: s.entityId,
+          accountId: s.accountId,
+        })),
+      }),
+    });
+
+    const data = await response.json();
+    if (!response.ok) {
+      toast.error(data.error || "Failed to apply mappings");
+      setApplyingAutoMap(false);
+      return;
+    }
+
+    toast.success(`${data.count} mappings created`);
+    setShowAutoMapDialog(false);
+    setApplyingAutoMap(false);
+    await loadMappings();
+  }
+
   // Filter accounts
   const filtered = masterAccounts.filter((a) => {
     const matchesSearch =
@@ -462,9 +643,21 @@ export default function MasterGLPage() {
     }));
   }
 
-  // Get entity accounts available for mapping (not already mapped)
+  // Get entity accounts available for mapping (not already mapped), filtered by classification
   const mappedAccountIds = new Set(mappings.map((m) => m.account_id));
   function getAvailableAccounts(entityId: string) {
+    const accounts = entityAccounts[entityId] ?? [];
+    return accounts.filter((a) => {
+      if (mappedAccountIds.has(a.id)) return false;
+      // Filter by master account's classification if mapping sheet is open
+      if (mappingAccount) {
+        return a.classification === mappingAccount.classification;
+      }
+      return true;
+    });
+  }
+
+  function getAvailableAccountsAllClassifications(entityId: string) {
     const accounts = entityAccounts[entityId] ?? [];
     return accounts.filter((a) => !mappedAccountIds.has(a.id));
   }
@@ -502,6 +695,14 @@ export default function MasterGLPage() {
             <BarChart3 className="mr-2 h-4 w-4" />
             Consolidated View
           </Button>
+          <Button
+            variant="outline"
+            onClick={handleAutoMap}
+            disabled={masterAccounts.length === 0}
+          >
+            <Wand2 className="mr-2 h-4 w-4" />
+            Auto-Map
+          </Button>
           <Button onClick={openAddDialog}>
             <Plus className="mr-2 h-4 w-4" />
             Add Account
@@ -509,6 +710,80 @@ export default function MasterGLPage() {
         </div>
       </div>
 
+      {/* Mapping Coverage Dashboard */}
+      {entities.length > 0 && (
+        <div className="grid gap-4 md:grid-cols-3">
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground">
+                Account Coverage
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-semibold">
+                {coverageMetrics.pctMapped}%
+              </div>
+              <Progress
+                value={coverageMetrics.pctMapped}
+                className="mt-2 h-2"
+              />
+              <p className="text-xs text-muted-foreground mt-1">
+                {coverageMetrics.mappedCount} of{" "}
+                {coverageMetrics.totalEntityAccounts} accounts mapped
+              </p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground">
+                Balance Coverage
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-semibold">
+                {coverageMetrics.pctBalanceMapped}%
+              </div>
+              <Progress
+                value={coverageMetrics.pctBalanceMapped}
+                className="mt-2 h-2"
+              />
+              <p className="text-xs text-muted-foreground mt-1">
+                {formatCurrency(coverageMetrics.totalMappedBalance)} of{" "}
+                {formatCurrency(coverageMetrics.totalBalance)} (absolute)
+              </p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground">
+                Entity Coverage
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-1.5 mt-1">
+                {coverageMetrics.perEntity.map((e) => (
+                  <div key={e.id} className="flex items-center gap-2 text-sm">
+                    <Badge variant="outline" className="text-xs w-12 justify-center">
+                      {e.code}
+                    </Badge>
+                    <Progress value={e.pct} className="flex-1 h-1.5" />
+                    <span className="text-xs text-muted-foreground w-20 text-right">
+                      {e.mapped}/{e.total}
+                      {e.unmapped > 0 && (
+                        <span className="text-amber-600 ml-1">
+                          ({e.unmapped})
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* Main accounts table */}
       <Card>
         <CardHeader>
           <div className="flex flex-wrap items-center gap-4">
@@ -823,9 +1098,7 @@ export default function MasterGLPage() {
           {mappingAccount && (
             <>
               <SheetHeader>
-                <SheetTitle>
-                  Map Entity Accounts
-                </SheetTitle>
+                <SheetTitle>Map Entity Accounts</SheetTitle>
                 <SheetDescription>
                   <span className="flex items-center gap-2 mt-1">
                     <Badge
@@ -847,7 +1120,6 @@ export default function MasterGLPage() {
               </SheetHeader>
 
               <div className="mt-6 space-y-6">
-                {/* Current mappings */}
                 <div className="space-y-3">
                   <h3 className="font-medium text-sm">Current Mappings</h3>
                   {getMappingsForAccount(mappingAccount.id).length === 0 ? (
@@ -877,7 +1149,11 @@ export default function MasterGLPage() {
                                 : ""}
                               {m.accounts?.name ?? "Unknown Account"}
                               <span className="ml-2">
-                                ({formatCurrency(m.accounts?.current_balance ?? 0)})
+                                (
+                                {formatCurrency(
+                                  m.accounts?.current_balance ?? 0
+                                )}
+                                )
                               </span>
                             </div>
                           </div>
@@ -896,7 +1172,6 @@ export default function MasterGLPage() {
 
                 <Separator />
 
-                {/* Add new mapping */}
                 <div className="space-y-3">
                   <h3 className="font-medium text-sm">Add Mapping</h3>
 
@@ -924,7 +1199,12 @@ export default function MasterGLPage() {
 
                   {selectedEntityId && (
                     <div className="space-y-2">
-                      <Label>Entity Account</Label>
+                      <Label>
+                        Entity Account{" "}
+                        <span className="text-xs text-muted-foreground">
+                          (filtered to {mappingAccount.classification})
+                        </span>
+                      </Label>
                       <Select
                         value={selectedAccountId}
                         onValueChange={setSelectedAccountId}
@@ -938,12 +1218,40 @@ export default function MasterGLPage() {
                               {a.account_number
                                 ? `${a.account_number} - `
                                 : ""}
-                              {a.name} ({a.classification})
+                              {a.name}
                             </SelectItem>
                           ))}
+                          {getAvailableAccounts(selectedEntityId).length ===
+                            0 &&
+                            getAvailableAccountsAllClassifications(
+                              selectedEntityId
+                            ).length > 0 && (
+                              <>
+                                <SelectItem value="_divider" disabled>
+                                  --- Other classifications ---
+                                </SelectItem>
+                                {getAvailableAccountsAllClassifications(
+                                  selectedEntityId
+                                )
+                                  .filter(
+                                    (a) =>
+                                      a.classification !==
+                                      mappingAccount.classification
+                                  )
+                                  .map((a) => (
+                                    <SelectItem key={a.id} value={a.id}>
+                                      {a.account_number
+                                        ? `${a.account_number} - `
+                                        : ""}
+                                      {a.name} ({a.classification})
+                                    </SelectItem>
+                                  ))}
+                              </>
+                            )}
                         </SelectContent>
                       </Select>
-                      {getAvailableAccounts(selectedEntityId).length === 0 && (
+                      {getAvailableAccountsAllClassifications(selectedEntityId)
+                        .length === 0 && (
                         <p className="text-xs text-muted-foreground">
                           All accounts for this entity are already mapped.
                         </p>
@@ -965,6 +1273,137 @@ export default function MasterGLPage() {
           )}
         </SheetContent>
       </Sheet>
+
+      {/* Auto-Map Suggestions Dialog */}
+      <Dialog open={showAutoMapDialog} onOpenChange={setShowAutoMapDialog}>
+        <DialogContent className="max-w-4xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Auto-Map Suggestions</DialogTitle>
+            <DialogDescription>
+              Review and select suggested mappings based on account
+              number/name matching. High confidence suggestions are
+              pre-selected.
+            </DialogDescription>
+          </DialogHeader>
+
+          {autoMapLoading ? (
+            <p className="py-8 text-center text-muted-foreground">
+              Analyzing account matches...
+            </p>
+          ) : autoMapSuggestions.length === 0 ? (
+            <div className="py-8 text-center">
+              <CheckCircle2 className="mx-auto h-8 w-8 text-green-500 mb-2" />
+              <p className="text-muted-foreground">
+                All entity accounts are already mapped, or no matching master
+                accounts were found.
+              </p>
+            </div>
+          ) : (
+            <>
+              <div className="flex items-center gap-4 mb-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={selectAllSuggestions}
+                >
+                  Select All ({autoMapSuggestions.length})
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={deselectAllSuggestions}
+                >
+                  Deselect All
+                </Button>
+                <span className="ml-auto text-sm text-muted-foreground">
+                  {selectedSuggestions.size} of {autoMapSuggestions.length}{" "}
+                  selected
+                </span>
+              </div>
+
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-10"></TableHead>
+                    <TableHead>Entity Account</TableHead>
+                    <TableHead>Master Account</TableHead>
+                    <TableHead>Confidence</TableHead>
+                    <TableHead>Match Reason</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {autoMapSuggestions.map((s) => (
+                    <TableRow key={s.accountId}>
+                      <TableCell>
+                        <Checkbox
+                          checked={selectedSuggestions.has(s.accountId)}
+                          onCheckedChange={() =>
+                            toggleSuggestion(s.accountId)
+                          }
+                        />
+                      </TableCell>
+                      <TableCell>
+                        <div className="text-sm">
+                          <Badge
+                            variant="outline"
+                            className="text-xs mr-1"
+                          >
+                            {s.entityCode}
+                          </Badge>
+                          {s.accountNumber && (
+                            <span className="font-mono text-xs mr-1">
+                              {s.accountNumber}
+                            </span>
+                          )}
+                          <span>{s.accountName}</span>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <div className="text-sm">
+                          <span className="font-mono text-xs mr-1">
+                            {s.masterAccountNumber}
+                          </span>
+                          <span>{s.masterAccountName}</span>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <Badge
+                          variant="outline"
+                          className={CONFIDENCE_COLORS[s.confidence]}
+                        >
+                          {s.confidence}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground max-w-[200px]">
+                        {s.matchReason}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </>
+          )}
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setShowAutoMapDialog(false)}
+            >
+              Cancel
+            </Button>
+            {autoMapSuggestions.length > 0 && (
+              <Button
+                onClick={applyAutoMapSuggestions}
+                disabled={selectedSuggestions.size === 0 || applyingAutoMap}
+              >
+                {applyingAutoMap
+                  ? "Applying..."
+                  : `Apply ${selectedSuggestions.size} Mapping${selectedSuggestions.size !== 1 ? "s" : ""}`}
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

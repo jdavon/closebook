@@ -24,14 +24,36 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { formatCurrency, getPeriodLabel, getCurrentPeriod } from "@/lib/utils/dates";
+import { toast } from "sonner";
+import {
+  formatCurrency,
+  getPeriodLabel,
+  getPeriodShortLabel,
+  getCurrentPeriod,
+  getPriorPeriod,
+} from "@/lib/utils/dates";
 import {
   ArrowLeft,
   ChevronDown,
   ChevronRight,
   AlertTriangle,
+  Download,
+  Plus,
+  Trash2,
+  CheckCircle2,
+  XCircle,
 } from "lucide-react";
 import type { AccountClassification } from "@/lib/types/database";
 
@@ -41,10 +63,13 @@ interface EntityBreakdown {
   entityCode: string;
   accountId: string;
   endingBalance: number;
+  adjustments: number;
+  adjustedBalance: number;
   debitTotal: number;
   creditTotal: number;
   netChange: number;
   beginningBalance: number;
+  compareEndingBalance: number;
 }
 
 interface ConsolidatedAccount {
@@ -58,10 +83,16 @@ interface ConsolidatedAccount {
   mappedEntities: number;
   entityBreakdown: EntityBreakdown[];
   endingBalance: number;
+  adjustments: number;
+  eliminationAdjustments: number;
+  adjustedBalance: number;
   debitTotal: number;
   creditTotal: number;
   netChange: number;
   beginningBalance: number;
+  compareEndingBalance: number | null;
+  compareAdjustedBalance: number | null;
+  changeFromCompare: number | null;
 }
 
 interface ConsolidatedTotals {
@@ -83,6 +114,28 @@ interface UnmappedAccount {
   currentBalance: number;
 }
 
+interface Elimination {
+  id: string;
+  organization_id: string;
+  period_year: number;
+  period_month: number;
+  description: string;
+  memo: string | null;
+  debit_master_account_id: string;
+  credit_master_account_id: string;
+  amount: number;
+  elimination_type: string;
+  is_recurring: boolean;
+  status: string;
+}
+
+interface MasterAccount {
+  id: string;
+  account_number: string;
+  name: string;
+  classification: string;
+}
+
 const CLASSIFICATION_COLORS: Record<AccountClassification, string> = {
   Asset: "bg-blue-100 text-blue-800",
   Liability: "bg-red-100 text-red-800",
@@ -99,6 +152,12 @@ const CLASSIFICATIONS: AccountClassification[] = [
   "Expense",
 ];
 
+const ELIM_TYPES = [
+  { value: "intercompany", label: "Intercompany" },
+  { value: "reclassification", label: "Reclassification" },
+  { value: "adjustment", label: "Adjustment" },
+];
+
 export default function ConsolidatedPage() {
   const router = useRouter();
   const supabase = createClient();
@@ -107,6 +166,9 @@ export default function ConsolidatedPage() {
   const [organizationId, setOrganizationId] = useState<string | null>(null);
   const [periodYear, setPeriodYear] = useState(currentPeriod.year);
   const [periodMonth, setPeriodMonth] = useState(currentPeriod.month);
+  const [compareMode, setCompareMode] = useState<"none" | "prior" | "year_ago">(
+    "none"
+  );
   const [consolidated, setConsolidated] = useState<ConsolidatedAccount[]>([]);
   const [totals, setTotals] = useState<ConsolidatedTotals>({
     totalAssets: 0,
@@ -115,12 +177,29 @@ export default function ConsolidatedPage() {
     totalRevenue: 0,
     totalExpenses: 0,
   });
+  const [compareTotals, setCompareTotals] = useState<ConsolidatedTotals | null>(
+    null
+  );
   const [unmappedAccounts, setUnmappedAccounts] = useState<UnmappedAccount[]>(
     []
   );
+  const [allEliminations, setAllEliminations] = useState<Elimination[]>([]);
+  const [masterAccounts, setMasterAccounts] = useState<MasterAccount[]>([]);
   const [loading, setLoading] = useState(true);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
+
+  // Elimination dialog
+  const [showElimDialog, setShowElimDialog] = useState(false);
+  const [elimForm, setElimForm] = useState({
+    description: "",
+    memo: "",
+    debitMasterAccountId: "",
+    creditMasterAccountId: "",
+    amount: "",
+    eliminationType: "intercompany",
+  });
+  const [savingElim, setSavingElim] = useState(false);
 
   const loadOrganization = useCallback(async () => {
     const {
@@ -139,27 +218,57 @@ export default function ConsolidatedPage() {
     }
   }, [supabase]);
 
+  function getComparePeriod(): {
+    year: number;
+    month: number;
+  } | null {
+    if (compareMode === "prior") {
+      return getPriorPeriod(periodYear, periodMonth);
+    } else if (compareMode === "year_ago") {
+      return { year: periodYear - 1, month: periodMonth };
+    }
+    return null;
+  }
+
   const loadConsolidated = useCallback(async () => {
     if (!organizationId) return;
     setLoading(true);
 
-    const response = await fetch(
-      `/api/master-accounts/consolidated?organizationId=${organizationId}&periodYear=${periodYear}&periodMonth=${periodMonth}`
-    );
+    let url = `/api/master-accounts/consolidated?organizationId=${organizationId}&periodYear=${periodYear}&periodMonth=${periodMonth}`;
+
+    const comp = compareMode !== "none" ? getComparePeriod() : null;
+    if (comp) {
+      url += `&comparePeriodYear=${comp.year}&comparePeriodMonth=${comp.month}`;
+    }
+
+    const response = await fetch(url);
     const data = await response.json();
 
-    if (data.consolidated) {
-      setConsolidated(data.consolidated);
-    }
-    if (data.totals) {
-      setTotals(data.totals);
-    }
-    if (data.unmappedAccounts) {
-      setUnmappedAccounts(data.unmappedAccounts);
-    }
+    if (data.consolidated) setConsolidated(data.consolidated);
+    if (data.totals) setTotals(data.totals);
+    if (data.compareTotals) setCompareTotals(data.compareTotals);
+    else setCompareTotals(null);
+    if (data.unmappedAccounts) setUnmappedAccounts(data.unmappedAccounts);
 
     setLoading(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [organizationId, periodYear, periodMonth, compareMode]);
+
+  const loadEliminations = useCallback(async () => {
+    if (!organizationId) return;
+
+    const response = await fetch(
+      `/api/master-accounts/eliminations?organizationId=${organizationId}&periodYear=${periodYear}&periodMonth=${periodMonth}`
+    );
+    const data = await response.json();
+    if (data.eliminations) setAllEliminations(data.eliminations);
   }, [organizationId, periodYear, periodMonth]);
+
+  const loadMasterAccounts = useCallback(async () => {
+    const response = await fetch("/api/master-accounts");
+    const data = await response.json();
+    if (data.accounts) setMasterAccounts(data.accounts);
+  }, []);
 
   useEffect(() => {
     loadOrganization();
@@ -167,9 +276,16 @@ export default function ConsolidatedPage() {
 
   useEffect(() => {
     if (organizationId) {
-      loadConsolidated();
+      loadMasterAccounts();
     }
-  }, [organizationId, loadConsolidated]);
+  }, [organizationId, loadMasterAccounts]);
+
+  useEffect(() => {
+    if (organizationId) {
+      loadConsolidated();
+      loadEliminations();
+    }
+  }, [organizationId, loadConsolidated, loadEliminations]);
 
   function toggleCollapse(classification: string) {
     setCollapsed((prev) => ({
@@ -217,6 +333,137 @@ export default function ConsolidatedPage() {
   ];
 
   const netIncome = totals.totalRevenue - totals.totalExpenses;
+  const compareNetIncome = compareTotals
+    ? compareTotals.totalRevenue - compareTotals.totalExpenses
+    : null;
+  const hasComparison = compareMode !== "none" && compareTotals !== null;
+  const comp = getComparePeriod();
+
+  async function handleExport() {
+    if (!organizationId) return;
+    window.open(
+      `/api/master-accounts/consolidated/export?organizationId=${organizationId}&periodYear=${periodYear}&periodMonth=${periodMonth}`,
+      "_blank"
+    );
+  }
+
+  // Elimination CRUD
+  async function handleCreateElimination() {
+    if (
+      !elimForm.description ||
+      !elimForm.debitMasterAccountId ||
+      !elimForm.creditMasterAccountId ||
+      !elimForm.amount
+    ) {
+      toast.error("All fields except memo are required");
+      return;
+    }
+
+    setSavingElim(true);
+    const response = await fetch("/api/master-accounts/eliminations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        organizationId,
+        periodYear,
+        periodMonth,
+        description: elimForm.description,
+        memo: elimForm.memo || null,
+        debitMasterAccountId: elimForm.debitMasterAccountId,
+        creditMasterAccountId: elimForm.creditMasterAccountId,
+        amount: parseFloat(elimForm.amount),
+        eliminationType: elimForm.eliminationType,
+      }),
+    });
+
+    const data = await response.json();
+    if (!response.ok) {
+      toast.error(data.error || "Failed to create elimination");
+      setSavingElim(false);
+      return;
+    }
+
+    toast.success("Elimination entry created");
+    setShowElimDialog(false);
+    setElimForm({
+      description: "",
+      memo: "",
+      debitMasterAccountId: "",
+      creditMasterAccountId: "",
+      amount: "",
+      eliminationType: "intercompany",
+    });
+    setSavingElim(false);
+    await loadEliminations();
+    await loadConsolidated();
+  }
+
+  async function handlePostElimination(id: string) {
+    const response = await fetch("/api/master-accounts/eliminations", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, status: "posted" }),
+    });
+    if (!response.ok) {
+      toast.error("Failed to post elimination");
+      return;
+    }
+    toast.success("Elimination posted");
+    await loadEliminations();
+    await loadConsolidated();
+  }
+
+  async function handleReverseElimination(id: string) {
+    const response = await fetch("/api/master-accounts/eliminations", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, status: "reversed" }),
+    });
+    if (!response.ok) {
+      toast.error("Failed to reverse elimination");
+      return;
+    }
+    toast.success("Elimination reversed");
+    await loadEliminations();
+    await loadConsolidated();
+  }
+
+  async function handleDeleteElimination(id: string) {
+    if (!confirm("Delete this elimination entry?")) return;
+    const response = await fetch("/api/master-accounts/eliminations", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    });
+    if (!response.ok) {
+      toast.error("Failed to delete elimination");
+      return;
+    }
+    toast.success("Elimination deleted");
+    await loadEliminations();
+    await loadConsolidated();
+  }
+
+  function getMasterAccountLabel(id: string): string {
+    const ma = masterAccounts.find((m) => m.id === id);
+    return ma ? `${ma.account_number} - ${ma.name}` : id;
+  }
+
+  function renderChangeCell(change: number | null) {
+    if (change === null) return null;
+    const color =
+      change > 0
+        ? "text-green-600"
+        : change < 0
+        ? "text-red-600"
+        : "text-muted-foreground";
+    return (
+      <span className={color}>
+        {change > 0 ? "+" : ""}
+        {formatCurrency(change)}
+      </span>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -235,8 +482,11 @@ export default function ConsolidatedPage() {
             Consolidated Trial Balance
           </h1>
           <p className="text-muted-foreground">
-            {getPeriodLabel(periodYear, periodMonth)} &mdash; Balances across all
-            entities mapped to the master chart of accounts
+            {getPeriodLabel(periodYear, periodMonth)}
+            {hasComparison && comp
+              ? ` vs. ${getPeriodShortLabel(comp.year, comp.month)}`
+              : ""}
+            {" "}— Adjusted balances across all entities
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -263,99 +513,101 @@ export default function ConsolidatedPage() {
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {[currentPeriod.year - 2, currentPeriod.year - 1, currentPeriod.year, currentPeriod.year + 1].map(
-                (year) => (
-                  <SelectItem key={year} value={String(year)}>
-                    {year}
-                  </SelectItem>
-                )
-              )}
+              {[
+                currentPeriod.year - 2,
+                currentPeriod.year - 1,
+                currentPeriod.year,
+                currentPeriod.year + 1,
+              ].map((year) => (
+                <SelectItem key={year} value={String(year)}>
+                  {year}
+                </SelectItem>
+              ))}
             </SelectContent>
           </Select>
+          <Select value={compareMode} onValueChange={(v) => setCompareMode(v as typeof compareMode)}>
+            <SelectTrigger className="w-40">
+              <SelectValue placeholder="Compare..." />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">No Comparison</SelectItem>
+              <SelectItem value="prior">Prior Month</SelectItem>
+              <SelectItem value="year_ago">Same Month Last Year</SelectItem>
+            </SelectContent>
+          </Select>
+          <Button variant="outline" onClick={handleExport}>
+            <Download className="mr-2 h-4 w-4" />
+            Export
+          </Button>
         </div>
       </div>
 
       {/* Summary Cards */}
       <div className="grid gap-4 md:grid-cols-5">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              Total Assets
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-xl font-semibold tabular-nums">
-              {formatCurrency(totals.totalAssets)}
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              Total Liabilities
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-xl font-semibold tabular-nums">
-              {formatCurrency(totals.totalLiabilities)}
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              Total Equity
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-xl font-semibold tabular-nums">
-              {formatCurrency(totals.totalEquity)}
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              Total Revenue
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-xl font-semibold tabular-nums">
-              {formatCurrency(totals.totalRevenue)}
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              Net Income
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div
-              className={`text-xl font-semibold tabular-nums ${
-                netIncome >= 0 ? "text-green-600" : "text-red-600"
-              }`}
-            >
-              {formatCurrency(netIncome)}
-            </div>
-          </CardContent>
-        </Card>
+        {[
+          { label: "Total Assets", value: totals.totalAssets, compare: compareTotals?.totalAssets },
+          {
+            label: "Total Liabilities",
+            value: totals.totalLiabilities,
+            compare: compareTotals?.totalLiabilities,
+          },
+          { label: "Total Equity", value: totals.totalEquity, compare: compareTotals?.totalEquity },
+          { label: "Total Revenue", value: totals.totalRevenue, compare: compareTotals?.totalRevenue },
+          {
+            label: "Net Income",
+            value: netIncome,
+            compare: compareNetIncome,
+            isNetIncome: true,
+          },
+        ].map(({ label, value, compare, isNetIncome }) => (
+          <Card key={label}>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground">
+                {label}
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div
+                className={`text-xl font-semibold tabular-nums ${
+                  isNetIncome
+                    ? value >= 0
+                      ? "text-green-600"
+                      : "text-red-600"
+                    : ""
+                }`}
+              >
+                {formatCurrency(value)}
+              </div>
+              {hasComparison && compare !== undefined && compare !== null && (
+                <div className="text-xs text-muted-foreground mt-1">
+                  vs. {formatCurrency(compare)}{" "}
+                  {renderChangeCell(value - compare)}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        ))}
       </div>
 
       {/* Consolidated Trial Balance */}
       <Card>
         <CardHeader>
-          <CardTitle>Account Balances</CardTitle>
+          <div className="flex items-center justify-between">
+            <CardTitle>Account Balances</CardTitle>
+            <div className="text-xs text-muted-foreground">
+              Showing adjusted balances (GL + posted accruals, depreciation, revenue adjustments, and eliminations)
+            </div>
+          </div>
         </CardHeader>
         <CardContent>
           {loading ? (
-            <p className="text-sm text-muted-foreground">Loading consolidated balances...</p>
+            <p className="text-sm text-muted-foreground">
+              Loading consolidated balances...
+            </p>
           ) : consolidated.length === 0 ? (
             <div className="text-center py-12">
               <p className="text-muted-foreground">
-                No master accounts with data for this period. Define master
-                accounts and map entity accounts to see consolidated balances.
+                No master accounts with data for this period.
               </p>
             </div>
           ) : (
@@ -366,9 +618,15 @@ export default function ConsolidatedPage() {
                 const isCollapsed = collapsed[classification];
 
                 const classTotal = classAccounts.reduce(
-                  (sum, a) => sum + a.endingBalance,
+                  (sum, a) => sum + a.adjustedBalance,
                   0
                 );
+                const classCompare = hasComparison
+                  ? classAccounts.reduce(
+                      (sum, a) => sum + (a.compareAdjustedBalance ?? 0),
+                      0
+                    )
+                  : null;
 
                 return (
                   <div key={classification}>
@@ -394,6 +652,11 @@ export default function ConsolidatedPage() {
                       <span className="ml-auto text-sm font-semibold tabular-nums">
                         {formatCurrency(classTotal)}
                       </span>
+                      {hasComparison && classCompare !== null && (
+                        <span className="text-xs tabular-nums ml-2">
+                          {renderChangeCell(classTotal - classCompare)}
+                        </span>
+                      )}
                     </button>
 
                     {!isCollapsed && (
@@ -404,17 +667,24 @@ export default function ConsolidatedPage() {
                             <TableHead className="w-24">Number</TableHead>
                             <TableHead>Account Name</TableHead>
                             <TableHead className="text-right">
-                              Beginning
+                              GL Balance
                             </TableHead>
                             <TableHead className="text-right">
-                              Debits
+                              Adjustments
                             </TableHead>
                             <TableHead className="text-right">
-                              Credits
+                              Adjusted Balance
                             </TableHead>
-                            <TableHead className="text-right">
-                              Ending Balance
-                            </TableHead>
+                            {hasComparison && (
+                              <>
+                                <TableHead className="text-right">
+                                  Prior
+                                </TableHead>
+                                <TableHead className="text-right">
+                                  Change
+                                </TableHead>
+                              </>
+                            )}
                           </TableRow>
                         </TableHeader>
                         <TableBody>
@@ -424,6 +694,9 @@ export default function ConsolidatedPage() {
                             );
                             const hasBreakdown =
                               account.entityBreakdown.length > 0;
+                            const totalAdjustments =
+                              account.adjustments +
+                              account.eliminationAdjustments;
                             return (
                               <>
                                 <TableRow
@@ -466,17 +739,46 @@ export default function ConsolidatedPage() {
                                     )}
                                   </TableCell>
                                   <TableCell className="text-right tabular-nums">
-                                    {formatCurrency(account.beginningBalance)}
-                                  </TableCell>
-                                  <TableCell className="text-right tabular-nums">
-                                    {formatCurrency(account.debitTotal)}
-                                  </TableCell>
-                                  <TableCell className="text-right tabular-nums">
-                                    {formatCurrency(account.creditTotal)}
-                                  </TableCell>
-                                  <TableCell className="text-right tabular-nums font-medium">
                                     {formatCurrency(account.endingBalance)}
                                   </TableCell>
+                                  <TableCell className="text-right tabular-nums">
+                                    {totalAdjustments !== 0 ? (
+                                      <span
+                                        className={
+                                          totalAdjustments > 0
+                                            ? "text-green-600"
+                                            : "text-red-600"
+                                        }
+                                      >
+                                        {totalAdjustments > 0 ? "+" : ""}
+                                        {formatCurrency(totalAdjustments)}
+                                      </span>
+                                    ) : (
+                                      <span className="text-muted-foreground">
+                                        —
+                                      </span>
+                                    )}
+                                  </TableCell>
+                                  <TableCell className="text-right tabular-nums font-medium">
+                                    {formatCurrency(account.adjustedBalance)}
+                                  </TableCell>
+                                  {hasComparison && (
+                                    <>
+                                      <TableCell className="text-right tabular-nums text-muted-foreground">
+                                        {account.compareAdjustedBalance !==
+                                        null
+                                          ? formatCurrency(
+                                              account.compareAdjustedBalance
+                                            )
+                                          : "—"}
+                                      </TableCell>
+                                      <TableCell className="text-right tabular-nums">
+                                        {renderChangeCell(
+                                          account.changeFromCompare
+                                        )}
+                                      </TableCell>
+                                    </>
+                                  )}
                                 </TableRow>
                                 {isExpanded &&
                                   account.entityBreakdown.map((eb) => (
@@ -496,17 +798,26 @@ export default function ConsolidatedPage() {
                                         {eb.entityName}
                                       </TableCell>
                                       <TableCell className="text-right tabular-nums text-sm text-muted-foreground">
-                                        {formatCurrency(eb.beginningBalance)}
-                                      </TableCell>
-                                      <TableCell className="text-right tabular-nums text-sm text-muted-foreground">
-                                        {formatCurrency(eb.debitTotal)}
-                                      </TableCell>
-                                      <TableCell className="text-right tabular-nums text-sm text-muted-foreground">
-                                        {formatCurrency(eb.creditTotal)}
-                                      </TableCell>
-                                      <TableCell className="text-right tabular-nums text-sm text-muted-foreground">
                                         {formatCurrency(eb.endingBalance)}
                                       </TableCell>
+                                      <TableCell className="text-right tabular-nums text-sm text-muted-foreground">
+                                        {eb.adjustments !== 0
+                                          ? formatCurrency(eb.adjustments)
+                                          : "—"}
+                                      </TableCell>
+                                      <TableCell className="text-right tabular-nums text-sm text-muted-foreground">
+                                        {formatCurrency(eb.adjustedBalance)}
+                                      </TableCell>
+                                      {hasComparison && (
+                                        <>
+                                          <TableCell className="text-right tabular-nums text-sm text-muted-foreground">
+                                            {formatCurrency(
+                                              eb.compareEndingBalance
+                                            )}
+                                          </TableCell>
+                                          <TableCell></TableCell>
+                                        </>
+                                      )}
                                     </TableRow>
                                   ))}
                               </>
@@ -523,6 +834,127 @@ export default function ConsolidatedPage() {
         </CardContent>
       </Card>
 
+      {/* Consolidation Eliminations */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <CardTitle>
+              Consolidation Entries ({allEliminations.length})
+            </CardTitle>
+            <Button
+              size="sm"
+              onClick={() => setShowElimDialog(true)}
+              disabled={masterAccounts.length === 0}
+            >
+              <Plus className="mr-2 h-4 w-4" />
+              Add Entry
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {allEliminations.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No consolidation entries for this period. Add intercompany
+              eliminations, reclassifications, or adjustments.
+            </p>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Description</TableHead>
+                  <TableHead>Type</TableHead>
+                  <TableHead>Debit Account</TableHead>
+                  <TableHead>Credit Account</TableHead>
+                  <TableHead className="text-right">Amount</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {allEliminations.map((elim) => (
+                  <TableRow key={elim.id}>
+                    <TableCell>
+                      <div>
+                        <span className="font-medium text-sm">
+                          {elim.description}
+                        </span>
+                        {elim.memo && (
+                          <span className="block text-xs text-muted-foreground">
+                            {elim.memo}
+                          </span>
+                        )}
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant="outline" className="text-xs">
+                        {elim.elimination_type}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-sm">
+                      {getMasterAccountLabel(elim.debit_master_account_id)}
+                    </TableCell>
+                    <TableCell className="text-sm">
+                      {getMasterAccountLabel(elim.credit_master_account_id)}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums font-medium">
+                      {formatCurrency(Number(elim.amount))}
+                    </TableCell>
+                    <TableCell>
+                      <Badge
+                        variant={
+                          elim.status === "posted"
+                            ? "default"
+                            : elim.status === "reversed"
+                            ? "secondary"
+                            : "outline"
+                        }
+                        className="text-xs"
+                      >
+                        {elim.status}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex items-center justify-end gap-1">
+                        {elim.status === "draft" && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handlePostElimination(elim.id)}
+                            title="Post"
+                          >
+                            <CheckCircle2 className="h-4 w-4 text-green-600" />
+                          </Button>
+                        )}
+                        {elim.status === "posted" && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleReverseElimination(elim.id)}
+                            title="Reverse"
+                          >
+                            <XCircle className="h-4 w-4 text-amber-600" />
+                          </Button>
+                        )}
+                        {elim.status !== "posted" && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleDeleteElimination(elim.id)}
+                            title="Delete"
+                          >
+                            <Trash2 className="h-4 w-4 text-destructive" />
+                          </Button>
+                        )}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
       {/* Unmapped Accounts Warning */}
       {unmappedAccounts.length > 0 && (
         <Card className="border-amber-200">
@@ -534,9 +966,8 @@ export default function ConsolidatedPage() {
           </CardHeader>
           <CardContent>
             <p className="text-sm text-muted-foreground mb-4">
-              The following entity accounts are not mapped to any master account
-              and are excluded from the consolidated view. Map them in the Master
-              GL settings to include their balances.
+              These entity accounts are not mapped to any master account and are
+              excluded from the consolidated view.
             </p>
             <Table>
               <TableHeader>
@@ -587,6 +1018,133 @@ export default function ConsolidatedPage() {
           </CardContent>
         </Card>
       )}
+
+      {/* Add Elimination Dialog */}
+      <Dialog open={showElimDialog} onOpenChange={setShowElimDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Add Consolidation Entry</DialogTitle>
+            <DialogDescription>
+              Create an elimination, reclassification, or adjustment entry for{" "}
+              {getPeriodLabel(periodYear, periodMonth)}.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label>Description</Label>
+              <Input
+                placeholder="e.g., Eliminate intercompany receivable/payable"
+                value={elimForm.description}
+                onChange={(e) =>
+                  setElimForm({ ...elimForm, description: e.target.value })
+                }
+              />
+            </div>
+
+            <div className="grid gap-4 grid-cols-2">
+              <div className="space-y-2">
+                <Label>Type</Label>
+                <Select
+                  value={elimForm.eliminationType}
+                  onValueChange={(v) =>
+                    setElimForm({ ...elimForm, eliminationType: v })
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {ELIM_TYPES.map((t) => (
+                      <SelectItem key={t.value} value={t.value}>
+                        {t.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Amount</Label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  min="0.01"
+                  placeholder="0.00"
+                  value={elimForm.amount}
+                  onChange={(e) =>
+                    setElimForm({ ...elimForm, amount: e.target.value })
+                  }
+                />
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label>Debit Account</Label>
+              <Select
+                value={elimForm.debitMasterAccountId}
+                onValueChange={(v) =>
+                  setElimForm({ ...elimForm, debitMasterAccountId: v })
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select debit account..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {masterAccounts.map((ma) => (
+                    <SelectItem key={ma.id} value={ma.id}>
+                      {ma.account_number} - {ma.name} ({ma.classification})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label>Credit Account</Label>
+              <Select
+                value={elimForm.creditMasterAccountId}
+                onValueChange={(v) =>
+                  setElimForm({ ...elimForm, creditMasterAccountId: v })
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select credit account..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {masterAccounts.map((ma) => (
+                    <SelectItem key={ma.id} value={ma.id}>
+                      {ma.account_number} - {ma.name} ({ma.classification})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label>Memo (optional)</Label>
+              <Input
+                placeholder="Additional notes..."
+                value={elimForm.memo}
+                onChange={(e) =>
+                  setElimForm({ ...elimForm, memo: e.target.value })
+                }
+              />
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setShowElimDialog(false)}
+            >
+              Cancel
+            </Button>
+            <Button onClick={handleCreateElimination} disabled={savingElim}>
+              {savingElim ? "Creating..." : "Create Entry"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

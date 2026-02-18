@@ -1563,6 +1563,79 @@ export type Database = {
           },
         ]
       }
+      consolidation_eliminations: {
+        Row: {
+          id: string
+          organization_id: string
+          period_year: number
+          period_month: number
+          description: string
+          memo: string | null
+          debit_master_account_id: string
+          credit_master_account_id: string
+          amount: number
+          elimination_type: string
+          is_recurring: boolean
+          status: string
+          created_by: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          organization_id: string
+          period_year: number
+          period_month: number
+          description: string
+          memo?: string | null
+          debit_master_account_id: string
+          credit_master_account_id: string
+          amount: number
+          elimination_type?: string
+          is_recurring?: boolean
+          status?: string
+          created_by?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          organization_id?: string
+          period_year?: number
+          period_month?: number
+          description?: string
+          memo?: string | null
+          debit_master_account_id?: string
+          credit_master_account_id?: string
+          amount?: number
+          elimination_type?: string
+          is_recurring?: boolean
+          status?: string
+          created_by?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "consolidation_eliminations_organization_id_fkey"
+            columns: ["organization_id"]
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "consolidation_eliminations_debit_master_account_id_fkey"
+            columns: ["debit_master_account_id"]
+            referencedRelation: "master_accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "consolidation_eliminations_credit_master_account_id_fkey"
+            columns: ["credit_master_account_id"]
+            referencedRelation: "master_accounts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never
