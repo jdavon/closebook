@@ -85,3 +85,5 @@ export type AccrualSource = "paylocity_sync" | "manual";
 export type AccrualStatus = "draft" | "posted" | "reversed";
 
 export type PaylocityEnvironment = "testing" | "production";
+
+export type NormalBalance = "debit" | "credit";
