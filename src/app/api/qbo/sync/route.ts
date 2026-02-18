@@ -202,42 +202,92 @@ export async function POST(request: Request) {
         }
       );
 
-      // Parse trial balance rows into gl_balances
-      const rows = tbData?.Rows?.Row ?? [];
-      for (const row of rows) {
-        if (row.ColData && row.ColData.length >= 3) {
-          const accountName = row.ColData[0]?.value;
-          const debit = parseFloat(row.ColData[1]?.value) || 0;
-          const credit = parseFloat(row.ColData[2]?.value) || 0;
+      // Parse trial balance rows into gl_balances.
+      // QBO nests account rows inside classification sections:
+      //   Rows.Row[] → Section { Header, Rows.Row[] (accounts), Summary }
+      // We need to recurse into each section to find the actual account data.
+      function extractAccountRows(
+        rows: Array<Record<string, unknown>>
+      ): Array<{ name: string; debit: number; credit: number }> {
+        const result: Array<{ name: string; debit: number; credit: number }> = [];
 
-          // Find matching account
-          const { data: account } = await adminClient
+        for (const row of rows) {
+          // If this row has nested Rows (it's a section), recurse into it
+          const nested = row.Rows as { Row?: Array<Record<string, unknown>> } | undefined;
+          if (nested?.Row) {
+            result.push(...extractAccountRows(nested.Row));
+            continue;
+          }
+
+          // If this row has ColData with at least 3 columns and is not a
+          // summary/total row, treat it as an account row.
+          const colData = row.ColData as Array<{ value?: string; id?: string }> | undefined;
+          const rowType = row.type as string | undefined;
+          if (
+            colData &&
+            colData.length >= 3 &&
+            rowType !== "Section" &&
+            row.Summary === undefined
+          ) {
+            const name = colData[0]?.value ?? "";
+            const debit = parseFloat(colData[1]?.value ?? "") || 0;
+            const credit = parseFloat(colData[2]?.value ?? "") || 0;
+            if (name) {
+              result.push({ name, debit, credit });
+            }
+          }
+        }
+
+        return result;
+      }
+
+      const topRows = tbData?.Rows?.Row ?? [];
+      const accountRows = extractAccountRows(topRows);
+
+      for (const { name: accountName, debit, credit } of accountRows) {
+        // Try matching by fully_qualified_name first (QBO TB often uses
+        // the hierarchical name like "Travel:Meals"), then fall back to name.
+        let account: { id: string } | null = null;
+
+        const { data: fqnMatch } = await adminClient
+          .from("accounts")
+          .select("id")
+          .eq("entity_id", entityId)
+          .eq("fully_qualified_name", accountName)
+          .maybeSingle();
+
+        if (fqnMatch) {
+          account = fqnMatch;
+        } else {
+          const { data: nameMatch } = await adminClient
             .from("accounts")
             .select("id")
             .eq("entity_id", entityId)
             .eq("name", accountName)
-            .single();
+            .maybeSingle();
 
-          if (account) {
-            await adminClient.from("gl_balances").upsert(
-              {
-                entity_id: entityId,
-                account_id: account.id,
-                period_year: targetYear,
-                period_month: targetMonth,
-                debit_total: debit,
-                credit_total: credit,
-                ending_balance: debit - credit,
-                net_change: debit - credit,
-                synced_at: new Date().toISOString(),
-              },
-              {
-                onConflict:
-                  "entity_id,account_id,period_year,period_month",
-              }
-            );
-            recordsSynced++;
-          }
+          account = nameMatch;
+        }
+
+        if (account) {
+          await adminClient.from("gl_balances").upsert(
+            {
+              entity_id: entityId,
+              account_id: account.id,
+              period_year: targetYear,
+              period_month: targetMonth,
+              debit_total: debit,
+              credit_total: credit,
+              ending_balance: debit - credit,
+              net_change: debit - credit,
+              synced_at: new Date().toISOString(),
+            },
+            {
+              onConflict:
+                "entity_id,account_id,period_year,period_month",
+            }
+          );
+          recordsSynced++;
         }
       }
     }
