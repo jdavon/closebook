@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -20,10 +19,11 @@ async function refreshTokenIfNeeded(
     return connection.access_token;
   }
 
-  // Token expired or expiring soon - refresh
   const clientId = process.env.QBO_CLIENT_ID!;
   const clientSecret = process.env.QBO_CLIENT_SECRET!;
-  const basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
+  const basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString(
+    "base64"
+  );
 
   const response = await fetch(
     "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer",
@@ -69,13 +69,14 @@ export async function POST(request: Request) {
   } = await supabase.auth.getUser();
 
   if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const { entityId, syncType = "full", periodYear, periodMonth } = await request.json();
+  const { entityId, syncType = "full", periodYear, periodMonth } =
+    await request.json();
 
   if (!entityId) {
-    return NextResponse.json(
+    return Response.json(
       { error: "entityId is required" },
       { status: 400 }
     );
@@ -84,7 +85,7 @@ export async function POST(request: Request) {
   // Use specified period or default to current month
   const now = new Date();
   const targetYear = periodYear ?? now.getFullYear();
-  const targetMonth = periodMonth ?? now.getMonth() + 1; // 1-indexed
+  const targetMonth = periodMonth ?? now.getMonth() + 1;
 
   const adminClient = createAdminClient();
 
@@ -96,7 +97,7 @@ export async function POST(request: Request) {
     .single();
 
   if (connError || !connection) {
-    return NextResponse.json(
+    return Response.json(
       { error: "No QuickBooks connection found" },
       { status: 404 }
     );
@@ -119,232 +120,365 @@ export async function POST(request: Request) {
     .update({ sync_status: "syncing" })
     .eq("id", connection.id);
 
-  try {
-    const accessToken = await refreshTokenIfNeeded(connection, adminClient);
-
-    // Always use production API URL — sandbox URL only works with Intuit's
-    // test companies. Development keys can access real companies via the
-    // production API URL.
-    const apiBaseUrl = "https://quickbooks.api.intuit.com";
-
-    let recordsSynced = 0;
-
-    // Sync accounts
-    const accountsResponse = await fetch(
-      `${apiBaseUrl}/v3/company/${connection.realm_id}/query?query=${encodeURIComponent(
-        "SELECT * FROM Account MAXRESULTS 1000"
-      )}`,
-      {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          Accept: "application/json",
-        },
+  // ---- Stream progress events to the client ----
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    async start(controller) {
+      function send(event: Record<string, unknown>) {
+        try {
+          controller.enqueue(
+            encoder.encode(`data: ${JSON.stringify(event)}\n\n`)
+          );
+        } catch {
+          // stream already closed
+        }
       }
-    );
 
-    if (accountsResponse.ok) {
-      const accountsData = await accountsResponse.json();
-      const qboAccounts =
-        accountsData.QueryResponse?.Account ?? [];
+      try {
+        // Step 1: Refresh token
+        send({
+          step: "auth",
+          detail: "Authenticating with QuickBooks...",
+          progress: 5,
+        });
 
-      for (const qboAccount of qboAccounts) {
-        await adminClient.from("accounts").upsert(
-          {
-            entity_id: entityId,
-            qbo_id: String(qboAccount.Id),
-            account_number: qboAccount.AcctNum ?? null,
-            name: qboAccount.Name,
-            fully_qualified_name: qboAccount.FullyQualifiedName ?? null,
-            classification: qboAccount.Classification,
-            account_type: qboAccount.AccountType,
-            account_sub_type: qboAccount.AccountSubType ?? null,
-            is_active: qboAccount.Active,
-            currency: qboAccount.CurrencyRef?.value ?? "USD",
-            current_balance: qboAccount.CurrentBalance ?? 0,
-          },
-          { onConflict: "entity_id,qbo_id" }
+        const accessToken = await refreshTokenIfNeeded(
+          connection,
+          adminClient
         );
-        recordsSynced++;
-      }
-    }
 
-    // Sync trial balance for specified period (or current month)
-    const periodStart = new Date(targetYear, targetMonth - 1, 1);
-    const periodEnd = new Date(targetYear, targetMonth, 0); // last day of month
+        send({
+          step: "auth",
+          detail: "Authenticated",
+          progress: 10,
+        });
 
-    const startDate = periodStart.toISOString().split("T")[0];
-    const endDate = periodEnd.toISOString().split("T")[0];
+        const apiBaseUrl = "https://quickbooks.api.intuit.com";
+        let recordsSynced = 0;
+        let accountsSynced = 0;
 
-    const tbResponse = await fetch(
-      `${apiBaseUrl}/v3/company/${connection.realm_id}/reports/TrialBalance?start_date=${startDate}&end_date=${endDate}`,
-      {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          Accept: "application/json",
-        },
-      }
-    );
+        // Step 2: Fetch chart of accounts
+        send({
+          step: "accounts",
+          detail: "Fetching chart of accounts from QuickBooks...",
+          progress: 15,
+        });
 
-    if (tbResponse.ok) {
-      const tbData = await tbResponse.json();
+        const accountsResponse = await fetch(
+          `${apiBaseUrl}/v3/company/${connection.realm_id}/query?query=${encodeURIComponent(
+            "SELECT * FROM Account MAXRESULTS 1000"
+          )}`,
+          {
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              Accept: "application/json",
+            },
+          }
+        );
 
-      // Store the raw trial balance
-      await adminClient.from("trial_balances").upsert(
-        {
-          entity_id: entityId,
-          period_year: targetYear,
-          period_month: targetMonth,
-          report_data: tbData,
-          synced_at: new Date().toISOString(),
-        },
-        {
-          onConflict: "entity_id,period_year,period_month,status",
-        }
-      );
+        if (accountsResponse.ok) {
+          const accountsData = await accountsResponse.json();
+          const qboAccounts =
+            accountsData.QueryResponse?.Account ?? [];
 
-      // Parse trial balance rows into gl_balances.
-      // QBO nests account rows inside classification sections:
-      //   Rows.Row[] → Section { Header, Rows.Row[] (accounts), Summary }
-      // We need to recurse into each section to find the actual account data.
-      function extractAccountRows(
-        rows: Array<Record<string, unknown>>
-      ): Array<{ name: string; debit: number; credit: number }> {
-        const result: Array<{ name: string; debit: number; credit: number }> = [];
+          send({
+            step: "accounts",
+            detail: `Saving ${qboAccounts.length} accounts to database...`,
+            progress: 25,
+          });
 
-        for (const row of rows) {
-          // If this row has nested Rows (it's a section), recurse into it
-          const nested = row.Rows as { Row?: Array<Record<string, unknown>> } | undefined;
-          if (nested?.Row) {
-            result.push(...extractAccountRows(nested.Row));
-            continue;
+          for (const qboAccount of qboAccounts) {
+            await adminClient.from("accounts").upsert(
+              {
+                entity_id: entityId,
+                qbo_id: String(qboAccount.Id),
+                account_number: qboAccount.AcctNum ?? null,
+                name: qboAccount.Name,
+                fully_qualified_name:
+                  qboAccount.FullyQualifiedName ?? null,
+                classification: qboAccount.Classification,
+                account_type: qboAccount.AccountType,
+                account_sub_type: qboAccount.AccountSubType ?? null,
+                is_active: qboAccount.Active,
+                currency: qboAccount.CurrencyRef?.value ?? "USD",
+                current_balance: qboAccount.CurrentBalance ?? 0,
+              },
+              { onConflict: "entity_id,qbo_id" }
+            );
+            accountsSynced++;
+            recordsSynced++;
           }
 
-          // If this row has ColData with at least 3 columns and is not a
-          // summary/total row, treat it as an account row.
-          const colData = row.ColData as Array<{ value?: string; id?: string }> | undefined;
-          const rowType = row.type as string | undefined;
-          if (
-            colData &&
-            colData.length >= 3 &&
-            rowType !== "Section" &&
-            row.Summary === undefined
-          ) {
-            const name = colData[0]?.value ?? "";
-            const debit = parseFloat(colData[1]?.value ?? "") || 0;
-            const credit = parseFloat(colData[2]?.value ?? "") || 0;
-            if (name) {
-              result.push({ name, debit, credit });
-            }
-          }
-        }
-
-        return result;
-      }
-
-      const topRows = tbData?.Rows?.Row ?? [];
-      const accountRows = extractAccountRows(topRows);
-
-      for (const { name: accountName, debit, credit } of accountRows) {
-        // Try matching by fully_qualified_name first (QBO TB often uses
-        // the hierarchical name like "Travel:Meals"), then fall back to name.
-        let account: { id: string } | null = null;
-
-        const { data: fqnMatch } = await adminClient
-          .from("accounts")
-          .select("id")
-          .eq("entity_id", entityId)
-          .eq("fully_qualified_name", accountName)
-          .maybeSingle();
-
-        if (fqnMatch) {
-          account = fqnMatch;
+          send({
+            step: "accounts",
+            detail: `${accountsSynced} accounts saved`,
+            progress: 40,
+          });
         } else {
-          const { data: nameMatch } = await adminClient
-            .from("accounts")
-            .select("id")
-            .eq("entity_id", entityId)
-            .eq("name", accountName)
-            .maybeSingle();
-
-          account = nameMatch;
+          send({
+            step: "accounts",
+            detail: `Failed to fetch accounts (HTTP ${accountsResponse.status})`,
+            progress: 40,
+          });
         }
 
-        if (account) {
-          await adminClient.from("gl_balances").upsert(
+        // Step 3: Fetch trial balance
+        const periodStart = new Date(targetYear, targetMonth - 1, 1);
+        const periodEnd = new Date(targetYear, targetMonth, 0);
+        const startDate = periodStart.toISOString().split("T")[0];
+        const endDate = periodEnd.toISOString().split("T")[0];
+
+        send({
+          step: "trial_balance",
+          detail: `Fetching trial balance for ${startDate} to ${endDate}...`,
+          progress: 45,
+        });
+
+        const tbResponse = await fetch(
+          `${apiBaseUrl}/v3/company/${connection.realm_id}/reports/TrialBalance?start_date=${startDate}&end_date=${endDate}`,
+          {
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              Accept: "application/json",
+            },
+          }
+        );
+
+        let tbAccountsFound = 0;
+        let tbAccountsMatched = 0;
+        let tbAccountsUnmatched = 0;
+        const unmatchedNames: string[] = [];
+
+        if (tbResponse.ok) {
+          const tbData = await tbResponse.json();
+
+          // Store raw trial balance
+          send({
+            step: "trial_balance",
+            detail: "Saving raw trial balance report...",
+            progress: 55,
+          });
+
+          await adminClient.from("trial_balances").upsert(
             {
               entity_id: entityId,
-              account_id: account.id,
               period_year: targetYear,
               period_month: targetMonth,
-              debit_total: debit,
-              credit_total: credit,
-              ending_balance: debit - credit,
-              net_change: debit - credit,
+              report_data: tbData,
               synced_at: new Date().toISOString(),
             },
             {
-              onConflict:
-                "entity_id,account_id,period_year,period_month",
+              onConflict: "entity_id,period_year,period_month,status",
             }
           );
-          recordsSynced++;
+
+          // Parse trial balance rows — QBO nests inside sections
+          function extractAccountRows(
+            rows: Array<Record<string, unknown>>
+          ): Array<{ name: string; debit: number; credit: number }> {
+            const result: Array<{
+              name: string;
+              debit: number;
+              credit: number;
+            }> = [];
+
+            for (const row of rows) {
+              const nested = row.Rows as
+                | { Row?: Array<Record<string, unknown>> }
+                | undefined;
+              if (nested?.Row) {
+                result.push(...extractAccountRows(nested.Row));
+                continue;
+              }
+
+              const colData = row.ColData as
+                | Array<{ value?: string; id?: string }>
+                | undefined;
+              const rowType = row.type as string | undefined;
+              if (
+                colData &&
+                colData.length >= 3 &&
+                rowType !== "Section" &&
+                row.Summary === undefined
+              ) {
+                const name = colData[0]?.value ?? "";
+                const debit =
+                  parseFloat(colData[1]?.value ?? "") || 0;
+                const credit =
+                  parseFloat(colData[2]?.value ?? "") || 0;
+                if (name) {
+                  result.push({ name, debit, credit });
+                }
+              }
+            }
+
+            return result;
+          }
+
+          const topRows = tbData?.Rows?.Row ?? [];
+          const accountRows = extractAccountRows(topRows);
+          tbAccountsFound = accountRows.length;
+
+          send({
+            step: "matching",
+            detail: `Matching ${tbAccountsFound} trial balance rows to accounts...`,
+            progress: 60,
+          });
+
+          // Step 4: Match and upsert GL balances
+          for (let i = 0; i < accountRows.length; i++) {
+            const { name: accountName, debit, credit } = accountRows[i];
+
+            let account: { id: string } | null = null;
+
+            const { data: fqnMatch } = await adminClient
+              .from("accounts")
+              .select("id")
+              .eq("entity_id", entityId)
+              .eq("fully_qualified_name", accountName)
+              .maybeSingle();
+
+            if (fqnMatch) {
+              account = fqnMatch;
+            } else {
+              const { data: nameMatch } = await adminClient
+                .from("accounts")
+                .select("id")
+                .eq("entity_id", entityId)
+                .eq("name", accountName)
+                .maybeSingle();
+
+              account = nameMatch;
+            }
+
+            if (account) {
+              await adminClient.from("gl_balances").upsert(
+                {
+                  entity_id: entityId,
+                  account_id: account.id,
+                  period_year: targetYear,
+                  period_month: targetMonth,
+                  debit_total: debit,
+                  credit_total: credit,
+                  ending_balance: debit - credit,
+                  net_change: debit - credit,
+                  synced_at: new Date().toISOString(),
+                },
+                {
+                  onConflict:
+                    "entity_id,account_id,period_year,period_month",
+                }
+              );
+              tbAccountsMatched++;
+              recordsSynced++;
+            } else {
+              tbAccountsUnmatched++;
+              unmatchedNames.push(accountName);
+            }
+
+            // Send progress every 5 accounts
+            if (i % 5 === 0 || i === accountRows.length - 1) {
+              const matchProgress =
+                60 + Math.round(((i + 1) / accountRows.length) * 30);
+              send({
+                step: "matching",
+                detail: `Processed ${i + 1}/${tbAccountsFound} — ${tbAccountsMatched} matched, ${tbAccountsUnmatched} unmatched`,
+                progress: matchProgress,
+              });
+            }
+          }
+        } else {
+          send({
+            step: "trial_balance",
+            detail: `Failed to fetch trial balance (HTTP ${tbResponse.status})`,
+            progress: 90,
+          });
         }
+
+        // Step 5: Finalize
+        send({
+          step: "finalizing",
+          detail: "Updating sync status...",
+          progress: 95,
+        });
+
+        await adminClient
+          .from("qbo_connections")
+          .update({
+            sync_status: "idle",
+            last_sync_at: new Date().toISOString(),
+            sync_error: null,
+          })
+          .eq("id", connection.id);
+
+        if (syncLog) {
+          await adminClient
+            .from("qbo_sync_logs")
+            .update({
+              status: "completed",
+              records_synced: recordsSynced,
+              completed_at: new Date().toISOString(),
+            })
+            .eq("id", syncLog.id);
+        }
+
+        // Final event
+        send({
+          step: "complete",
+          detail: "Sync complete",
+          progress: 100,
+          done: true,
+          recordsSynced,
+          accountsSynced,
+          tbAccountsFound,
+          tbAccountsMatched,
+          tbAccountsUnmatched,
+          unmatchedNames:
+            unmatchedNames.length > 0 ? unmatchedNames : undefined,
+          periodYear: targetYear,
+          periodMonth: targetMonth,
+        });
+      } catch (err) {
+        const errorMessage =
+          err instanceof Error ? err.message : "Unknown error";
+
+        await adminClient
+          .from("qbo_connections")
+          .update({
+            sync_status: "error",
+            sync_error: errorMessage,
+          })
+          .eq("id", connection.id);
+
+        if (syncLog) {
+          await adminClient
+            .from("qbo_sync_logs")
+            .update({
+              status: "failed",
+              error_message: errorMessage,
+              completed_at: new Date().toISOString(),
+            })
+            .eq("id", syncLog.id);
+        }
+
+        send({
+          step: "error",
+          detail: errorMessage,
+          progress: 100,
+          done: true,
+          error: errorMessage,
+        });
       }
-    }
 
-    // Update sync status
-    await adminClient
-      .from("qbo_connections")
-      .update({
-        sync_status: "idle",
-        last_sync_at: new Date().toISOString(),
-        sync_error: null,
-      })
-      .eq("id", connection.id);
+      controller.close();
+    },
+  });
 
-    if (syncLog) {
-      await adminClient
-        .from("qbo_sync_logs")
-        .update({
-          status: "completed",
-          records_synced: recordsSynced,
-          completed_at: new Date().toISOString(),
-        })
-        .eq("id", syncLog.id);
-    }
-
-    return NextResponse.json({
-      success: true,
-      recordsSynced,
-      periodYear: targetYear,
-      periodMonth: targetMonth,
-    });
-  } catch (err) {
-    const errorMessage =
-      err instanceof Error ? err.message : "Unknown error";
-
-    await adminClient
-      .from("qbo_connections")
-      .update({
-        sync_status: "error",
-        sync_error: errorMessage,
-      })
-      .eq("id", connection.id);
-
-    if (syncLog) {
-      await adminClient
-        .from("qbo_sync_logs")
-        .update({
-          status: "failed",
-          error_message: errorMessage,
-          completed_at: new Date().toISOString(),
-        })
-        .eq("id", syncLog.id);
-    }
-
-    return NextResponse.json(
-      { error: errorMessage },
-      { status: 500 }
-    );
-  }
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+    },
+  });
 }

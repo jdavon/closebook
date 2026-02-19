@@ -155,15 +155,39 @@ export default function EntitySettingsPage() {
         }),
       });
 
-      const data = await response.json();
+      if (!response.ok || !response.body) {
+        const errData = await response.json().catch(() => ({}));
+        toast.error(errData.error || "Sync failed");
+        setSyncing(false);
+        return;
+      }
 
-      if (response.ok) {
+      // Read SSE stream until done
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let lastEvent: Record<string, unknown> = {};
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            try { lastEvent = JSON.parse(line.slice(6)); } catch { /* skip */ }
+          }
+        }
+      }
+
+      if (lastEvent.error) {
+        toast.error(String(lastEvent.error));
+      } else {
         toast.success(
-          `Sync completed for ${getPeriodLabel(year, month)} — ${data.recordsSynced} records`
+          `Sync completed for ${getPeriodLabel(year, month)} — ${lastEvent.recordsSynced ?? 0} records`
         );
         loadData();
-      } else {
-        toast.error(data.error || "Sync failed");
       }
     } catch {
       toast.error("Sync failed");

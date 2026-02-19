@@ -122,24 +122,42 @@ export async function POST(request: Request) {
         }),
       });
 
-      const syncData = await syncResponse.json();
+      // The sync endpoint now returns an SSE stream — read it to get the final event
+      let lastEvent: Record<string, unknown> = {};
+      if (syncResponse.body) {
+        const reader = syncResponse.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+          for (const line of lines) {
+            if (line.startsWith("data: ")) {
+              try { lastEvent = JSON.parse(line.slice(6)); } catch { /* skip */ }
+            }
+          }
+        }
+      }
 
-      if (syncResponse.ok) {
-        results.push({
-          entityId: entity.id,
-          entityName: entity.name,
-          entityCode: entity.code,
-          success: true,
-          recordsSynced: syncData.recordsSynced ?? 0,
-        });
-      } else {
+      if (lastEvent.error) {
         results.push({
           entityId: entity.id,
           entityName: entity.name,
           entityCode: entity.code,
           success: false,
           recordsSynced: 0,
-          error: syncData.error ?? "Unknown error",
+          error: String(lastEvent.error),
+        });
+      } else {
+        results.push({
+          entityId: entity.id,
+          entityName: entity.name,
+          entityCode: entity.code,
+          success: true,
+          recordsSynced: (lastEvent.recordsSynced as number) ?? 0,
         });
       }
     } catch (err) {

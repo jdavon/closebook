@@ -28,6 +28,7 @@ import {
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
+import { Progress } from "@/components/ui/progress";
 import { toast } from "sonner";
 import {
   RefreshCw,
@@ -36,6 +37,10 @@ import {
   ChevronLeft,
   ChevronsRight,
   AlertCircle,
+  CheckCircle2,
+  XCircle,
+  Loader2,
+  AlertTriangle,
 } from "lucide-react";
 import {
   formatCurrency,
@@ -60,6 +65,28 @@ interface GLBalance {
     account_type: string;
   };
 }
+
+interface SyncProgress {
+  step: string;
+  detail: string;
+  progress: number;
+  done?: boolean;
+  error?: string;
+  recordsSynced?: number;
+  accountsSynced?: number;
+  tbAccountsFound?: number;
+  tbAccountsMatched?: number;
+  tbAccountsUnmatched?: number;
+  unmatchedNames?: string[];
+}
+
+const SYNC_STEPS = [
+  { key: "auth", label: "Authenticate" },
+  { key: "accounts", label: "Chart of Accounts" },
+  { key: "trial_balance", label: "Trial Balance" },
+  { key: "matching", label: "Match & Save" },
+  { key: "finalizing", label: "Finalize" },
+];
 
 const CLASSIFICATION_ORDER: AccountClassification[] = [
   "Asset",
@@ -93,6 +120,7 @@ export default function TrialBalancePage() {
   const [balances, setBalances] = useState<GLBalance[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
 
@@ -112,7 +140,6 @@ export default function TrialBalancePage() {
     const rows = (data as unknown as GLBalance[]) ?? [];
     setBalances(rows);
 
-    // Find most recent synced_at across all rows
     const synced = rows
       .map((r) => r.synced_at)
       .filter(Boolean)
@@ -129,8 +156,11 @@ export default function TrialBalancePage() {
 
   async function handleSync() {
     setSyncing(true);
+    setSyncProgress({ step: "starting", detail: "Starting sync...", progress: 0 });
+
     const y = parseInt(year);
     const m = parseInt(month);
+
     try {
       const response = await fetch("/api/qbo/sync", {
         method: "POST",
@@ -143,20 +173,64 @@ export default function TrialBalancePage() {
         }),
       });
 
-      const data = await response.json();
+      if (!response.ok || !response.body) {
+        const errData = await response.json().catch(() => ({}));
+        toast.error(errData.error || `Sync failed (HTTP ${response.status})`);
+        setSyncing(false);
+        setSyncProgress(null);
+        return;
+      }
 
-      if (response.ok) {
-        toast.success(
-          `Synced ${getPeriodLabel(y, m)} — ${data.recordsSynced} records`
-        );
-        loadBalances();
-      } else {
-        toast.error(data.error || "Sync failed");
+      // Read SSE stream
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+
+        // Parse SSE events from buffer
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? ""; // keep incomplete line
+
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            try {
+              const event = JSON.parse(line.slice(6)) as SyncProgress;
+              setSyncProgress(event);
+
+              if (event.done) {
+                if (event.error) {
+                  toast.error(event.error);
+                } else {
+                  const parts = [];
+                  if (event.accountsSynced) parts.push(`${event.accountsSynced} accounts`);
+                  if (event.tbAccountsMatched) parts.push(`${event.tbAccountsMatched} balances`);
+                  if (event.tbAccountsUnmatched) parts.push(`${event.tbAccountsUnmatched} unmatched`);
+                  toast.success(
+                    `Synced ${getPeriodLabel(y, m)} — ${parts.join(", ")}`
+                  );
+                  loadBalances();
+                }
+              }
+            } catch {
+              // ignore malformed events
+            }
+          }
+        }
       }
     } catch {
-      toast.error("Sync failed");
+      toast.error("Sync failed — network error");
     }
+
     setSyncing(false);
+    // Keep syncProgress visible for a moment so user can see final state
+    setTimeout(() => {
+      setSyncProgress((prev) => (prev?.done ? null : prev));
+    }, 8000);
   }
 
   function navigatePeriod(direction: "prev" | "next") {
@@ -173,6 +247,28 @@ export default function TrialBalancePage() {
       ...prev,
       [classification]: !prev[classification],
     }));
+  }
+
+  function getStepIcon(stepKey: string) {
+    if (!syncProgress) return <div className="h-4 w-4 rounded-full border border-muted-foreground/30" />;
+
+    const stepIndex = SYNC_STEPS.findIndex((s) => s.key === stepKey);
+    const currentIndex = SYNC_STEPS.findIndex((s) => s.key === syncProgress.step);
+
+    if (syncProgress.step === "complete" || syncProgress.step === "error") {
+      if (syncProgress.step === "error" && stepIndex === currentIndex) {
+        return <XCircle className="h-4 w-4 text-red-500" />;
+      }
+      return <CheckCircle2 className="h-4 w-4 text-green-500" />;
+    }
+
+    if (stepIndex < currentIndex) {
+      return <CheckCircle2 className="h-4 w-4 text-green-500" />;
+    }
+    if (stepIndex === currentIndex) {
+      return <Loader2 className="h-4 w-4 text-primary animate-spin" />;
+    }
+    return <div className="h-4 w-4 rounded-full border border-muted-foreground/30" />;
   }
 
   // Group balances by classification
@@ -268,6 +364,109 @@ export default function TrialBalancePage() {
         </div>
       </div>
 
+      {/* Sync Progress Panel */}
+      {syncProgress && (
+        <Card className={syncProgress.error ? "border-red-300" : "border-primary/30"}>
+          <CardContent className="pt-6">
+            <div className="space-y-4">
+              {/* Progress bar */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="font-medium">
+                    {syncProgress.done
+                      ? syncProgress.error
+                        ? "Sync Failed"
+                        : "Sync Complete"
+                      : "Syncing..."}
+                  </span>
+                  <span className="text-muted-foreground tabular-nums">
+                    {syncProgress.progress}%
+                  </span>
+                </div>
+                <Progress value={syncProgress.progress} />
+              </div>
+
+              {/* Step indicators */}
+              <div className="flex items-center gap-6">
+                {SYNC_STEPS.map((step) => (
+                  <div
+                    key={step.key}
+                    className="flex items-center gap-1.5 text-sm"
+                  >
+                    {getStepIcon(step.key)}
+                    <span
+                      className={
+                        syncProgress.step === step.key
+                          ? "font-medium text-foreground"
+                          : syncProgress.step === "complete" ||
+                            SYNC_STEPS.findIndex((s) => s.key === syncProgress.step) >
+                              SYNC_STEPS.findIndex((s) => s.key === step.key)
+                          ? "text-muted-foreground"
+                          : "text-muted-foreground/50"
+                      }
+                    >
+                      {step.label}
+                    </span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Current status detail */}
+              <p className="text-sm text-muted-foreground">
+                {syncProgress.detail}
+              </p>
+
+              {/* Summary when done */}
+              {syncProgress.done && !syncProgress.error && (
+                <div className="flex gap-6 text-sm pt-1">
+                  {syncProgress.accountsSynced !== undefined && (
+                    <div>
+                      <span className="text-muted-foreground">Accounts: </span>
+                      <span className="font-medium">{syncProgress.accountsSynced}</span>
+                    </div>
+                  )}
+                  {syncProgress.tbAccountsFound !== undefined && (
+                    <div>
+                      <span className="text-muted-foreground">TB Rows: </span>
+                      <span className="font-medium">{syncProgress.tbAccountsFound}</span>
+                    </div>
+                  )}
+                  {syncProgress.tbAccountsMatched !== undefined && (
+                    <div>
+                      <span className="text-muted-foreground">Matched: </span>
+                      <span className="font-medium text-green-600">{syncProgress.tbAccountsMatched}</span>
+                    </div>
+                  )}
+                  {(syncProgress.tbAccountsUnmatched ?? 0) > 0 && (
+                    <div>
+                      <span className="text-muted-foreground">Unmatched: </span>
+                      <span className="font-medium text-amber-600">{syncProgress.tbAccountsUnmatched}</span>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Unmatched account names warning */}
+              {syncProgress.done &&
+                syncProgress.unmatchedNames &&
+                syncProgress.unmatchedNames.length > 0 && (
+                  <div className="rounded-md border border-amber-200 bg-amber-50 p-3 dark:bg-amber-950/20 dark:border-amber-800">
+                    <div className="flex items-center gap-2 mb-1">
+                      <AlertTriangle className="h-4 w-4 text-amber-600" />
+                      <span className="text-sm font-medium text-amber-800 dark:text-amber-300">
+                        Unmatched accounts from QB trial balance
+                      </span>
+                    </div>
+                    <p className="text-xs text-amber-700 dark:text-amber-400">
+                      {syncProgress.unmatchedNames.join(", ")}
+                    </p>
+                  </div>
+                )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Summary Cards */}
       <div className="grid gap-4 md:grid-cols-4">
         <Card>
@@ -310,7 +509,7 @@ export default function TrialBalancePage() {
             >
               {formatCurrency(difference)}
             </div>
-            {Math.abs(difference) < 0.01 && (
+            {Math.abs(difference) < 0.01 && balances.length > 0 && (
               <p className="text-xs text-green-600 mt-1">Balanced</p>
             )}
           </CardContent>
