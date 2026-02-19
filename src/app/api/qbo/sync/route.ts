@@ -157,67 +157,75 @@ export async function POST(request: Request) {
         let recordsSynced = 0;
         let accountsSynced = 0;
 
-        // Step 2: Fetch chart of accounts
-        send({
-          step: "accounts",
-          detail: "Fetching chart of accounts from QuickBooks...",
-          progress: 15,
-        });
-
-        const accountsResponse = await fetch(
-          `${apiBaseUrl}/v3/company/${connection.realm_id}/query?query=${encodeURIComponent(
-            "SELECT * FROM Account MAXRESULTS 1000"
-          )}`,
-          {
-            headers: {
-              Authorization: `Bearer ${accessToken}`,
-              Accept: "application/json",
-            },
-          }
-        );
-
-        if (accountsResponse.ok) {
-          const accountsData = await accountsResponse.json();
-          const qboAccounts =
-            accountsData.QueryResponse?.Account ?? [];
-
+        // Step 2: Fetch chart of accounts (skip for trial_balance-only syncs)
+        if (syncType === "full") {
           send({
             step: "accounts",
-            detail: `Saving ${qboAccounts.length} accounts to database...`,
-            progress: 25,
+            detail: "Fetching chart of accounts from QuickBooks...",
+            progress: 15,
           });
 
-          for (const qboAccount of qboAccounts) {
-            await adminClient.from("accounts").upsert(
-              {
-                entity_id: entityId,
-                qbo_id: String(qboAccount.Id),
-                account_number: qboAccount.AcctNum ?? null,
-                name: qboAccount.Name,
-                fully_qualified_name:
-                  qboAccount.FullyQualifiedName ?? null,
-                classification: qboAccount.Classification,
-                account_type: qboAccount.AccountType,
-                account_sub_type: qboAccount.AccountSubType ?? null,
-                is_active: qboAccount.Active,
-                currency: qboAccount.CurrencyRef?.value ?? "USD",
-                current_balance: qboAccount.CurrentBalance ?? 0,
+          const accountsResponse = await fetch(
+            `${apiBaseUrl}/v3/company/${connection.realm_id}/query?query=${encodeURIComponent(
+              "SELECT * FROM Account MAXRESULTS 1000"
+            )}`,
+            {
+              headers: {
+                Authorization: `Bearer ${accessToken}`,
+                Accept: "application/json",
               },
-              { onConflict: "entity_id,qbo_id" }
-            );
-            accountsSynced++;
-            recordsSynced++;
-          }
+            }
+          );
 
-          send({
-            step: "accounts",
-            detail: `${accountsSynced} accounts saved`,
-            progress: 40,
-          });
+          if (accountsResponse.ok) {
+            const accountsData = await accountsResponse.json();
+            const qboAccounts =
+              accountsData.QueryResponse?.Account ?? [];
+
+            send({
+              step: "accounts",
+              detail: `Saving ${qboAccounts.length} accounts to database...`,
+              progress: 25,
+            });
+
+            for (const qboAccount of qboAccounts) {
+              await adminClient.from("accounts").upsert(
+                {
+                  entity_id: entityId,
+                  qbo_id: String(qboAccount.Id),
+                  account_number: qboAccount.AcctNum ?? null,
+                  name: qboAccount.Name,
+                  fully_qualified_name:
+                    qboAccount.FullyQualifiedName ?? null,
+                  classification: qboAccount.Classification,
+                  account_type: qboAccount.AccountType,
+                  account_sub_type: qboAccount.AccountSubType ?? null,
+                  is_active: qboAccount.Active,
+                  currency: qboAccount.CurrencyRef?.value ?? "USD",
+                  current_balance: qboAccount.CurrentBalance ?? 0,
+                },
+                { onConflict: "entity_id,qbo_id" }
+              );
+              accountsSynced++;
+              recordsSynced++;
+            }
+
+            send({
+              step: "accounts",
+              detail: `${accountsSynced} accounts saved`,
+              progress: 40,
+            });
+          } else {
+            send({
+              step: "accounts",
+              detail: `Failed to fetch accounts (HTTP ${accountsResponse.status})`,
+              progress: 40,
+            });
+          }
         } else {
           send({
             step: "accounts",
-            detail: `Failed to fetch accounts (HTTP ${accountsResponse.status})`,
+            detail: "Skipped — using existing chart of accounts",
             progress: 40,
           });
         }
@@ -275,9 +283,10 @@ export async function POST(request: Request) {
           // Parse trial balance rows — QBO nests inside sections
           function extractAccountRows(
             rows: Array<Record<string, unknown>>
-          ): Array<{ name: string; debit: number; credit: number }> {
+          ): Array<{ name: string; qboId: string | null; debit: number; credit: number }> {
             const result: Array<{
               name: string;
+              qboId: string | null;
               debit: number;
               credit: number;
             }> = [];
@@ -302,12 +311,13 @@ export async function POST(request: Request) {
                 row.Summary === undefined
               ) {
                 const name = colData[0]?.value ?? "";
+                const qboId = colData[0]?.id ?? null;
                 const debit =
                   parseFloat(colData[1]?.value ?? "") || 0;
                 const credit =
                   parseFloat(colData[2]?.value ?? "") || 0;
                 if (name) {
-                  result.push({ name, debit, credit });
+                  result.push({ name, qboId, debit, credit });
                 }
               }
             }
@@ -327,20 +337,36 @@ export async function POST(request: Request) {
 
           // Step 4: Match and upsert GL balances
           for (let i = 0; i < accountRows.length; i++) {
-            const { name: accountName, debit, credit } = accountRows[i];
+            const { name: accountName, qboId, debit, credit } = accountRows[i];
 
             let account: { id: string } | null = null;
 
-            const { data: fqnMatch } = await adminClient
-              .from("accounts")
-              .select("id")
-              .eq("entity_id", entityId)
-              .eq("fully_qualified_name", accountName)
-              .maybeSingle();
+            // Primary match: QBO account ID (most reliable)
+            if (qboId) {
+              const { data: qboMatch } = await adminClient
+                .from("accounts")
+                .select("id")
+                .eq("entity_id", entityId)
+                .eq("qbo_id", qboId)
+                .maybeSingle();
 
-            if (fqnMatch) {
+              account = qboMatch;
+            }
+
+            // Fallback 1: fully_qualified_name
+            if (!account) {
+              const { data: fqnMatch } = await adminClient
+                .from("accounts")
+                .select("id")
+                .eq("entity_id", entityId)
+                .eq("fully_qualified_name", accountName)
+                .maybeSingle();
+
               account = fqnMatch;
-            } else {
+            }
+
+            // Fallback 2: name
+            if (!account) {
               const { data: nameMatch } = await adminClient
                 .from("accounts")
                 .select("id")

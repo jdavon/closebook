@@ -167,7 +167,7 @@ export default function TrialBalancePage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           entityId,
-          syncType: "full",
+          syncType: "trial_balance",
           periodYear: y,
           periodMonth: m,
         }),
