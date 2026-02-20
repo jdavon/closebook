@@ -1689,6 +1689,64 @@ export type Database = {
           },
         ]
       }
+      tb_unmatched_rows: {
+        Row: {
+          id: string
+          entity_id: string
+          period_year: number
+          period_month: number
+          qbo_account_name: string
+          qbo_account_id: string | null
+          debit: number
+          credit: number
+          resolved_account_id: string | null
+          resolved_at: string | null
+          resolved_by: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          entity_id: string
+          period_year: number
+          period_month: number
+          qbo_account_name: string
+          qbo_account_id?: string | null
+          debit?: number
+          credit?: number
+          resolved_account_id?: string | null
+          resolved_at?: string | null
+          resolved_by?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          entity_id?: string
+          period_year?: number
+          period_month?: number
+          qbo_account_name?: string
+          qbo_account_id?: string | null
+          debit?: number
+          credit?: number
+          resolved_account_id?: string | null
+          resolved_at?: string | null
+          resolved_by?: string | null
+          created_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tb_unmatched_rows_entity_id_fkey"
+            columns: ["entity_id"]
+            referencedRelation: "entities"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tb_unmatched_rows_resolved_account_id_fkey"
+            columns: ["resolved_account_id"]
+            referencedRelation: "accounts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never

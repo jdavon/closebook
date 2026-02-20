@@ -57,6 +57,7 @@ interface VarianceRecord {
   variance: number;
   accountCount: number;
   isBalanced: boolean;
+  unmatchedCount: number;
 }
 
 interface VarianceResponse {
@@ -333,6 +334,11 @@ export default function TBVariancePage() {
                                         <p className="text-muted-foreground">
                                           {record.accountCount} accounts
                                         </p>
+                                        {record.unmatchedCount > 0 && (
+                                          <p className="text-amber-600 font-medium">
+                                            {record.unmatchedCount} unmatched
+                                          </p>
+                                        )}
                                       </div>
                                     </TooltipContent>
                                   </Tooltip>
@@ -395,6 +401,7 @@ export default function TBVariancePage() {
                   <TableHead className="text-right">Total Credits</TableHead>
                   <TableHead className="text-right">Variance</TableHead>
                   <TableHead className="text-right">Accounts</TableHead>
+                  <TableHead className="text-right">Unmatched</TableHead>
                   <TableHead></TableHead>
                 </TableRow>
               </TableHeader>
@@ -425,6 +432,15 @@ export default function TBVariancePage() {
                       </TableCell>
                       <TableCell className="text-right tabular-nums">
                         {v.accountCount}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {v.unmatchedCount > 0 ? (
+                          <Badge variant="outline" className="text-amber-600 border-amber-200">
+                            {v.unmatchedCount}
+                          </Badge>
+                        ) : (
+                          <span className="text-muted-foreground">0</span>
+                        )}
                       </TableCell>
                       <TableCell>
                         <Link

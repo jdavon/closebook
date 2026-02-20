@@ -70,6 +70,22 @@ export async function GET(request: Request) {
     aggregated[key][row.period_month].accountCount += 1;
   }
 
+  // Query unmatched rows (unresolved only)
+  const { data: unmatchedData } = await supabase
+    .from("tb_unmatched_rows")
+    .select("entity_id, period_month")
+    .in("entity_id", entityIds)
+    .eq("period_year", year)
+    .is("resolved_account_id", null);
+
+  // Aggregate unmatched counts per entity per month
+  const unmatchedCounts: Record<string, Record<number, number>> = {};
+  for (const row of unmatchedData ?? []) {
+    if (!unmatchedCounts[row.entity_id]) unmatchedCounts[row.entity_id] = {};
+    unmatchedCounts[row.entity_id][row.period_month] =
+      (unmatchedCounts[row.entity_id][row.period_month] ?? 0) + 1;
+  }
+
   // Build variance records
   interface VarianceRecord {
     entityId: string;
@@ -82,6 +98,7 @@ export async function GET(request: Request) {
     variance: number;
     accountCount: number;
     isBalanced: boolean;
+    unmatchedCount: number;
   }
 
   const variances: VarianceRecord[] = [];
@@ -96,6 +113,7 @@ export async function GET(request: Request) {
 
       const variance = Math.round((monthData.totalDebits - monthData.totalCredits) * 100) / 100;
       const isBalanced = Math.abs(variance) < 0.01;
+      const unmatchedCount = unmatchedCounts[entity.id]?.[month] ?? 0;
 
       variances.push({
         entityId: entity.id,
@@ -108,6 +126,7 @@ export async function GET(request: Request) {
         variance,
         accountCount: monthData.accountCount,
         isBalanced,
+        unmatchedCount,
       });
     }
   }

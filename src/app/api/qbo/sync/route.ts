@@ -255,7 +255,8 @@ export async function POST(request: Request) {
         let tbAccountsFound = 0;
         let tbAccountsMatched = 0;
         let tbAccountsUnmatched = 0;
-        const unmatchedNames: string[] = [];
+        const unmatchedRows: Array<{ name: string; qboId: string | null; debit: number; credit: number }> = [];
+        const matchedNames: string[] = [];
 
         if (tbResponse.ok) {
           const tbData = await tbResponse.json();
@@ -397,9 +398,10 @@ export async function POST(request: Request) {
               );
               tbAccountsMatched++;
               recordsSynced++;
+              matchedNames.push(accountName);
             } else {
               tbAccountsUnmatched++;
-              unmatchedNames.push(accountName);
+              unmatchedRows.push({ name: accountName, qboId, debit, credit });
             }
 
             // Send progress every 5 accounts
@@ -412,6 +414,44 @@ export async function POST(request: Request) {
                 progress: matchProgress,
               });
             }
+          }
+
+          // Step 4b: Persist unmatched rows to database
+          if (unmatchedRows.length > 0) {
+            send({
+              step: "matching",
+              detail: `Saving ${unmatchedRows.length} unmatched account rows...`,
+              progress: 92,
+            });
+
+            for (const row of unmatchedRows) {
+              await adminClient.from("tb_unmatched_rows").upsert(
+                {
+                  entity_id: entityId,
+                  period_year: targetYear,
+                  period_month: targetMonth,
+                  qbo_account_name: row.name,
+                  qbo_account_id: row.qboId,
+                  debit: row.debit,
+                  credit: row.credit,
+                },
+                {
+                  onConflict: "entity_id,period_year,period_month,qbo_account_name",
+                }
+              );
+            }
+          }
+
+          // Clean up: remove previously-unmatched rows that are now matched
+          if (matchedNames.length > 0) {
+            await adminClient
+              .from("tb_unmatched_rows")
+              .delete()
+              .eq("entity_id", entityId)
+              .eq("period_year", targetYear)
+              .eq("period_month", targetMonth)
+              .in("qbo_account_name", matchedNames)
+              .is("resolved_account_id", null);
           }
         } else {
           send({
@@ -460,7 +500,7 @@ export async function POST(request: Request) {
           tbAccountsMatched,
           tbAccountsUnmatched,
           unmatchedNames:
-            unmatchedNames.length > 0 ? unmatchedNames : undefined,
+            unmatchedRows.length > 0 ? unmatchedRows.map((r) => r.name) : undefined,
           periodYear: targetYear,
           periodMonth: targetMonth,
         });

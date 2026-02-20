@@ -29,6 +29,19 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
 import { toast } from "sonner";
 import {
   RefreshCw,
@@ -41,6 +54,9 @@ import {
   XCircle,
   Loader2,
   AlertTriangle,
+  Check,
+  ChevronsUpDown,
+  Link2,
 } from "lucide-react";
 import {
   formatCurrency,
@@ -49,6 +65,7 @@ import {
   getPriorPeriod,
   getNextPeriod,
 } from "@/lib/utils/dates";
+import { cn } from "@/lib/utils";
 import type { AccountClassification } from "@/lib/types/database";
 
 interface GLBalance {
@@ -78,6 +95,24 @@ interface SyncProgress {
   tbAccountsMatched?: number;
   tbAccountsUnmatched?: number;
   unmatchedNames?: string[];
+}
+
+interface UnmatchedRow {
+  id: string;
+  entityId: string;
+  qboAccountName: string;
+  qboAccountId: string | null;
+  debit: number;
+  credit: number;
+  resolvedAccountId: string | null;
+}
+
+interface EntityAccount {
+  id: string;
+  name: string;
+  account_number: string | null;
+  classification: string;
+  account_type: string;
 }
 
 const SYNC_STEPS = [
@@ -128,6 +163,11 @@ export default function TrialBalancePage() {
   const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
+  const [unmatchedRows, setUnmatchedRows] = useState<UnmatchedRow[]>([]);
+  const [entityAccounts, setEntityAccounts] = useState<EntityAccount[]>([]);
+  const [selectedAccounts, setSelectedAccounts] = useState<Record<string, string>>({});
+  const [resolving, setResolving] = useState<string | null>(null);
+  const [openPopovers, setOpenPopovers] = useState<Record<string, boolean>>({});
 
   const loadBalances = useCallback(async () => {
     setLoading(true);
@@ -155,9 +195,40 @@ export default function TrialBalancePage() {
     setLoading(false);
   }, [supabase, entityId, year, month]);
 
+  const loadUnmatched = useCallback(async () => {
+    try {
+      const response = await fetch(
+        `/api/tb-unmatched?entityId=${entityId}&year=${year}&month=${month}`
+      );
+      if (response.ok) {
+        const data = await response.json();
+        setUnmatchedRows(
+          (data.unmatchedRows ?? []).filter(
+            (r: UnmatchedRow) => !r.resolvedAccountId
+          )
+        );
+      }
+    } catch {
+      // silently fail
+    }
+  }, [entityId, year, month]);
+
+  const loadEntityAccounts = useCallback(async () => {
+    const { data } = await supabase
+      .from("accounts")
+      .select("id, name, account_number, classification, account_type")
+      .eq("entity_id", entityId)
+      .eq("is_active", true)
+      .order("classification")
+      .order("name");
+    setEntityAccounts((data as EntityAccount[]) ?? []);
+  }, [supabase, entityId]);
+
   useEffect(() => {
     loadBalances();
-  }, [loadBalances]);
+    loadUnmatched();
+    loadEntityAccounts();
+  }, [loadBalances, loadUnmatched, loadEntityAccounts]);
 
   async function handleSync() {
     setSyncing(true);
@@ -219,6 +290,7 @@ export default function TrialBalancePage() {
                     `Synced ${getPeriodLabel(y, m)} — ${parts.join(", ")}`
                   );
                   loadBalances();
+                  loadUnmatched();
                 }
               }
             } catch {
@@ -245,6 +317,40 @@ export default function TrialBalancePage() {
       direction === "prev" ? getPriorPeriod(y, m) : getNextPeriod(y, m);
     setYear(String(target.year));
     setMonth(String(target.month));
+  }
+
+  async function handleResolve(unmatchedRowId: string) {
+    const accountId = selectedAccounts[unmatchedRowId];
+    if (!accountId) {
+      toast.error("Please select an account to map to");
+      return;
+    }
+
+    setResolving(unmatchedRowId);
+    try {
+      const response = await fetch("/api/tb-unmatched/resolve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ unmatchedRowId, accountId }),
+      });
+
+      if (response.ok) {
+        toast.success("Account mapped and GL balance created");
+        loadBalances();
+        loadUnmatched();
+        setSelectedAccounts((prev) => {
+          const next = { ...prev };
+          delete next[unmatchedRowId];
+          return next;
+        });
+      } else {
+        const err = await response.json();
+        toast.error(err.error || "Failed to resolve mapping");
+      }
+    } catch {
+      toast.error("Failed to resolve — network error");
+    }
+    setResolving(null);
   }
 
   function toggleCollapse(classification: string) {
@@ -468,6 +574,171 @@ export default function TrialBalancePage() {
                   </div>
                 )}
             </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Unmatched Accounts Resolution */}
+      {unmatchedRows.length > 0 && (
+        <Card className="border-amber-200 dark:border-amber-800">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Link2 className="h-5 w-5 text-amber-600" />
+              Unmatched QBO Accounts ({unmatchedRows.length})
+            </CardTitle>
+            <CardDescription>
+              These accounts from the QuickBooks trial balance could not be
+              matched to your chart of accounts. Map each to an existing account
+              to include its balance and fix the variance.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>QBO Account Name</TableHead>
+                  <TableHead className="text-right w-28">Debit</TableHead>
+                  <TableHead className="text-right w-28">Credit</TableHead>
+                  <TableHead className="w-[280px]">Map To</TableHead>
+                  <TableHead className="w-24"></TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {unmatchedRows.map((row) => {
+                  const groupedAccounts = entityAccounts.reduce<
+                    Record<string, EntityAccount[]>
+                  >((acc, a) => {
+                    const key = a.classification;
+                    if (!acc[key]) acc[key] = [];
+                    acc[key].push(a);
+                    return acc;
+                  }, {});
+
+                  return (
+                    <TableRow key={row.id}>
+                      <TableCell>
+                        <div>
+                          <span className="font-medium">{row.qboAccountName}</span>
+                          {row.qboAccountId && (
+                            <span className="text-xs text-muted-foreground ml-2">
+                              (ID: {row.qboAccountId})
+                            </span>
+                          )}
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {row.debit ? formatCurrency(row.debit) : "—"}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {row.credit ? formatCurrency(row.credit) : "—"}
+                      </TableCell>
+                      <TableCell>
+                        <Popover
+                          open={openPopovers[row.id] ?? false}
+                          onOpenChange={(open) =>
+                            setOpenPopovers((prev) => ({
+                              ...prev,
+                              [row.id]: open,
+                            }))
+                          }
+                        >
+                          <PopoverTrigger asChild>
+                            <Button
+                              variant="outline"
+                              role="combobox"
+                              className="w-full justify-between text-sm"
+                            >
+                              {selectedAccounts[row.id]
+                                ? (() => {
+                                    const acct = entityAccounts.find(
+                                      (a) => a.id === selectedAccounts[row.id]
+                                    );
+                                    return acct
+                                      ? `${acct.account_number ?? ""} ${acct.name}`.trim()
+                                      : "Select account...";
+                                  })()
+                                : "Select account..."}
+                              <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                            </Button>
+                          </PopoverTrigger>
+                          <PopoverContent className="w-[320px] p-0" align="start">
+                            <Command>
+                              <CommandInput placeholder="Search accounts..." />
+                              <CommandList>
+                                <CommandEmpty>No accounts found.</CommandEmpty>
+                                {Object.entries(groupedAccounts).map(
+                                  ([classification, accounts]) => (
+                                    <CommandGroup
+                                      key={classification}
+                                      heading={classification}
+                                    >
+                                      {accounts.map((acct) => (
+                                        <CommandItem
+                                          key={acct.id}
+                                          value={`${acct.account_number ?? ""} ${acct.name} ${acct.account_type}`}
+                                          onSelect={() => {
+                                            setSelectedAccounts((prev) => ({
+                                              ...prev,
+                                              [row.id]: acct.id,
+                                            }));
+                                            setOpenPopovers((prev) => ({
+                                              ...prev,
+                                              [row.id]: false,
+                                            }));
+                                          }}
+                                        >
+                                          <Check
+                                            className={cn(
+                                              "mr-2 h-4 w-4",
+                                              selectedAccounts[row.id] === acct.id
+                                                ? "opacity-100"
+                                                : "opacity-0"
+                                            )}
+                                          />
+                                          <div className="flex flex-col">
+                                            <span className="text-sm">
+                                              {acct.account_number && (
+                                                <span className="font-mono text-muted-foreground mr-1">
+                                                  {acct.account_number}
+                                                </span>
+                                              )}
+                                              {acct.name}
+                                            </span>
+                                            <span className="text-xs text-muted-foreground">
+                                              {acct.account_type}
+                                            </span>
+                                          </div>
+                                        </CommandItem>
+                                      ))}
+                                    </CommandGroup>
+                                  )
+                                )}
+                              </CommandList>
+                            </Command>
+                          </PopoverContent>
+                        </Popover>
+                      </TableCell>
+                      <TableCell>
+                        <Button
+                          size="sm"
+                          onClick={() => handleResolve(row.id)}
+                          disabled={
+                            !selectedAccounts[row.id] ||
+                            resolving === row.id
+                          }
+                        >
+                          {resolving === row.id ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            "Map"
+                          )}
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
           </CardContent>
         </Card>
       )}
