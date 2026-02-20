@@ -19,6 +19,7 @@ import {
   LibraryBig,
   RefreshCw,
   Scale,
+  AlertTriangle,
 } from "lucide-react";
 import {
   Sidebar,
@@ -137,6 +138,11 @@ export function AppSidebar({ user, entityId: entityIdProp }: AppSidebarProps) {
           title: "QBO Sync",
           url: "/sync",
           icon: RefreshCw,
+        },
+        {
+          title: "TB Variance",
+          url: "/tb-variance",
+          icon: AlertTriangle,
         },
         {
           title: "Master GL",

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import {
@@ -111,12 +111,17 @@ const MONTH_NAMES = [
 
 export default function TrialBalancePage() {
   const params = useParams();
+  const searchParams = useSearchParams();
   const entityId = params.entityId as string;
   const supabase = createClient();
 
   const currentPeriod = getCurrentPeriod();
-  const [year, setYear] = useState(String(currentPeriod.year));
-  const [month, setMonth] = useState(String(currentPeriod.month));
+  const [year, setYear] = useState(
+    searchParams.get("year") ?? String(currentPeriod.year)
+  );
+  const [month, setMonth] = useState(
+    searchParams.get("month") ?? String(currentPeriod.month)
+  );
   const [balances, setBalances] = useState<GLBalance[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
