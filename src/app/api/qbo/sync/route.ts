@@ -257,6 +257,7 @@ export async function POST(request: Request) {
         let tbAccountsUnmatched = 0;
         const unmatchedRows: Array<{ name: string; qboId: string | null; debit: number; credit: number }> = [];
         const matchedNames: string[] = [];
+        const matchedAccountIds: string[] = [];
 
         if (tbResponse.ok) {
           const tbData = await tbResponse.json();
@@ -399,6 +400,7 @@ export async function POST(request: Request) {
               tbAccountsMatched++;
               recordsSynced++;
               matchedNames.push(accountName);
+              matchedAccountIds.push(account.id);
             } else {
               tbAccountsUnmatched++;
               unmatchedRows.push({ name: accountName, qboId, debit, credit });
@@ -452,6 +454,39 @@ export async function POST(request: Request) {
               .eq("period_month", targetMonth)
               .in("qbo_account_name", matchedNames)
               .is("resolved_account_id", null);
+          }
+
+          // Step 4c: Remove stale GL balance rows from prior syncs
+          // If an account was in a previous TB but no longer appears, its
+          // GL balance row would persist and throw off the debit/credit totals.
+          if (matchedAccountIds.length > 0) {
+            const { data: staleRows } = await adminClient
+              .from("gl_balances")
+              .select("id, account_id")
+              .eq("entity_id", entityId)
+              .eq("period_year", targetYear)
+              .eq("period_month", targetMonth)
+              .not(
+                "account_id",
+                "in",
+                `(${matchedAccountIds.join(",")})`
+              );
+
+            if (staleRows && staleRows.length > 0) {
+              await adminClient
+                .from("gl_balances")
+                .delete()
+                .in(
+                  "id",
+                  staleRows.map((r: { id: string }) => r.id)
+                );
+
+              send({
+                step: "matching",
+                detail: `Removed ${staleRows.length} stale GL balance rows from prior syncs`,
+                progress: 93,
+              });
+            }
           }
         } else {
           send({
