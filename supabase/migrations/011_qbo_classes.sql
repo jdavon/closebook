@@ -50,8 +50,21 @@ ALTER TABLE commission_account_assignments
   ADD COLUMN qbo_class_id uuid REFERENCES qbo_classes(id) ON DELETE SET NULL;
 
 -- Replace the old unique constraint with one that handles NULL class IDs
-ALTER TABLE commission_account_assignments
-  DROP CONSTRAINT commission_account_assignments_commission_profile_id_account_key;
+-- (constraint name may be truncated, so look it up dynamically)
+DO $$
+DECLARE
+  _con text;
+BEGIN
+  SELECT conname INTO _con
+    FROM pg_constraint
+   WHERE conrelid = 'commission_account_assignments'::regclass
+     AND contype = 'u'
+   LIMIT 1;
+
+  IF _con IS NOT NULL THEN
+    EXECUTE format('ALTER TABLE commission_account_assignments DROP CONSTRAINT %I', _con);
+  END IF;
+END $$;
 
 CREATE UNIQUE INDEX idx_commission_assignments_unique
   ON commission_account_assignments(
