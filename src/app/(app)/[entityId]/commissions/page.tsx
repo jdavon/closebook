@@ -744,8 +744,13 @@ export default function CommissionsPage() {
                                 </TableHeader>
                                 <TableBody>
                                   {profileAssignments.map((a) => {
-                                    const netChange =
+                                    const rawChange =
                                       detailBalances[a.account_id] ?? 0;
+                                    // Negate revenue accounts (GL stores credits as negative)
+                                    const netChange =
+                                      a.role === "revenue"
+                                        ? rawChange * -1
+                                        : rawChange;
                                     return (
                                       <TableRow key={a.id}>
                                         <TableCell className="font-mono text-muted-foreground">

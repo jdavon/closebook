@@ -216,7 +216,7 @@ export async function POST(request: Request) {
         .filter((a: { role: string }) => a.role === "expense")
         .map((a: { account_id: string }) => a.account_id);
 
-      // Sum revenue net_change
+      // Sum revenue net_change (negate because GL stores credits as negative)
       let totalRevenue = 0;
       if (revenueAccountIds.length > 0) {
         const { data: revBalances } = await adminClient
@@ -231,7 +231,7 @@ export async function POST(request: Request) {
           (sum: number, b: { net_change: number | null }) =>
             sum + Number(b.net_change ?? 0),
           0
-        );
+        ) * -1;
       }
 
       // Sum expense net_change
