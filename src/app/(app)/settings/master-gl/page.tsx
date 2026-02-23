@@ -56,9 +56,11 @@ import {
   Unlink,
   BarChart3,
   Pencil,
+  Upload,
   Wand2,
 } from "lucide-react";
 import type { AccountClassification } from "@/lib/types/database";
+import { ImportMappingsDialog } from "./import-mappings-dialog";
 
 interface MasterAccount {
   id: string;
@@ -179,6 +181,9 @@ export default function MasterGLPage() {
   const [showBulkDialog, setShowBulkDialog] = useState(false);
   const [bulkEntityId, setBulkEntityId] = useState<string>("");
   const [bulkRunning, setBulkRunning] = useState(false);
+
+  // Import wizard state
+  const [showImportDialog, setShowImportDialog] = useState(false);
 
   const loadOrganization = useCallback(async () => {
     const {
@@ -547,6 +552,10 @@ export default function MasterGLPage() {
           >
             <BarChart3 className="mr-2 h-4 w-4" />
             Consolidated View
+          </Button>
+          <Button variant="outline" onClick={() => setShowImportDialog(true)}>
+            <Upload className="mr-2 h-4 w-4" />
+            Import Mappings
           </Button>
           <Button variant="outline" onClick={() => setShowBulkDialog(true)}>
             <Wand2 className="mr-2 h-4 w-4" />
@@ -1062,6 +1071,16 @@ export default function MasterGLPage() {
           )}
         </SheetContent>
       </Sheet>
+
+      {/* Import Mappings Wizard */}
+      <ImportMappingsDialog
+        open={showImportDialog}
+        onOpenChange={setShowImportDialog}
+        entities={entities}
+        onComplete={() => {
+          Promise.all([loadMasterAccounts(), loadMappings()]);
+        }}
+      />
     </div>
   );
 }
