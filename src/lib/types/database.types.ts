@@ -1796,6 +1796,7 @@ export type Database = {
           commission_profile_id: string
           account_id: string
           role: string
+          qbo_class_id: string | null
           created_at: string
         }
         Insert: {
@@ -1803,6 +1804,7 @@ export type Database = {
           commission_profile_id: string
           account_id: string
           role: string
+          qbo_class_id?: string | null
           created_at?: string
         }
         Update: {
@@ -1810,6 +1812,7 @@ export type Database = {
           commission_profile_id?: string
           account_id?: string
           role?: string
+          qbo_class_id?: string | null
           created_at?: string
         }
         Relationships: [
@@ -1823,6 +1826,12 @@ export type Database = {
             foreignKeyName: "commission_account_assignments_account_id_fkey"
             columns: ["account_id"]
             referencedRelation: "accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "commission_account_assignments_qbo_class_id_fkey"
+            columns: ["qbo_class_id"]
+            referencedRelation: "qbo_classes"
             referencedColumns: ["id"]
           },
         ]
@@ -1887,6 +1896,113 @@ export type Database = {
             foreignKeyName: "commission_results_entity_id_fkey"
             columns: ["entity_id"]
             referencedRelation: "entities"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      qbo_classes: {
+        Row: {
+          id: string
+          entity_id: string
+          qbo_id: string
+          name: string
+          fully_qualified_name: string | null
+          is_active: boolean
+          parent_class_id: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          entity_id: string
+          qbo_id: string
+          name: string
+          fully_qualified_name?: string | null
+          is_active?: boolean
+          parent_class_id?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          entity_id?: string
+          qbo_id?: string
+          name?: string
+          fully_qualified_name?: string | null
+          is_active?: boolean
+          parent_class_id?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "qbo_classes_entity_id_fkey"
+            columns: ["entity_id"]
+            referencedRelation: "entities"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "qbo_classes_parent_class_id_fkey"
+            columns: ["parent_class_id"]
+            referencedRelation: "qbo_classes"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      gl_class_balances: {
+        Row: {
+          id: string
+          entity_id: string
+          account_id: string
+          qbo_class_id: string
+          period_year: number
+          period_month: number
+          net_change: number
+          synced_at: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          entity_id: string
+          account_id: string
+          qbo_class_id: string
+          period_year: number
+          period_month: number
+          net_change?: number
+          synced_at?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          entity_id?: string
+          account_id?: string
+          qbo_class_id?: string
+          period_year?: number
+          period_month?: number
+          net_change?: number
+          synced_at?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "gl_class_balances_entity_id_fkey"
+            columns: ["entity_id"]
+            referencedRelation: "entities"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "gl_class_balances_account_id_fkey"
+            columns: ["account_id"]
+            referencedRelation: "accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "gl_class_balances_qbo_class_id_fkey"
+            columns: ["qbo_class_id"]
+            referencedRelation: "qbo_classes"
             referencedColumns: ["id"]
           },
         ]

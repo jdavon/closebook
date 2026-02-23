@@ -89,17 +89,26 @@ interface CommissionProfile {
   created_at: string;
 }
 
+interface QboClass {
+  id: string;
+  name: string;
+}
+
 interface AccountAssignment {
   id: string;
   commission_profile_id: string;
   account_id: string;
   role: "revenue" | "expense";
+  qbo_class_id: string | null;
   accounts?: {
     name: string;
     account_number: string | null;
     classification: string;
     account_type: string;
   };
+  qbo_classes?: {
+    name: string;
+  } | null;
 }
 
 interface CommissionResult {
@@ -128,6 +137,7 @@ interface EntityAccount {
 interface FormAssignment {
   account_id: string;
   role: "revenue" | "expense";
+  qbo_class_id: string | null;
 }
 
 // ── Page ───────────────────────────────────────────────────────────────
@@ -153,6 +163,12 @@ export default function CommissionsPage() {
   const [detailBalances, setDetailBalances] = useState<
     Record<string, number>
   >({});
+
+  // QBO Classes
+  const [qboClasses, setQboClasses] = useState<QboClass[]>([]);
+  const [classBalances, setClassBalances] = useState<
+    Record<string, number>
+  >({}); // key: `${account_id}__${class_id}`
 
   // UI
   const [loading, setLoading] = useState(true);
@@ -210,6 +226,16 @@ export default function CommissionsPage() {
 
     setAccounts((acctData ?? []) as EntityAccount[]);
 
+    // Fetch QBO classes for the entity
+    const { data: classData } = await supabase
+      .from("qbo_classes")
+      .select("id, name")
+      .eq("entity_id", entityId)
+      .eq("is_active", true)
+      .order("name");
+
+    setQboClasses((classData ?? []) as QboClass[]);
+
     // Fetch GL balances for detail expansion (all accounts for this period)
     const { data: glData } = await supabase
       .from("gl_balances")
@@ -223,6 +249,22 @@ export default function CommissionsPage() {
       balanceMap[row.account_id] = Number(row.net_change ?? 0);
     }
     setDetailBalances(balanceMap);
+
+    // Fetch class-level GL balances for detail expansion
+    const { data: classGlData } = await supabase
+      .from("gl_class_balances")
+      .select("account_id, qbo_class_id, net_change")
+      .eq("entity_id", entityId)
+      .eq("period_year", periodYear)
+      .eq("period_month", periodMonth);
+
+    const classBalanceMap: Record<string, number> = {};
+    for (const row of classGlData ?? []) {
+      classBalanceMap[`${row.account_id}__${row.qbo_class_id}`] = Number(
+        row.net_change ?? 0
+      );
+    }
+    setClassBalances(classBalanceMap);
 
     setLoading(false);
   }, [entityId, periodYear, periodMonth, supabase]);
@@ -359,6 +401,7 @@ export default function CommissionsPage() {
       profileAssignments.map((a) => ({
         account_id: a.account_id,
         role: a.role,
+        qbo_class_id: a.qbo_class_id ?? null,
       }))
     );
     setOpenPopovers({});
@@ -389,7 +432,13 @@ export default function CommissionsPage() {
             name: formName.trim(),
             commission_rate: rateNum / 100, // Convert percentage to decimal
             notes: formNotes.trim() || null,
-            assignments: formAssignments.filter((a) => a.account_id),
+            assignments: formAssignments
+              .filter((a) => a.account_id)
+              .map((a) => ({
+                account_id: a.account_id,
+                role: a.role,
+                qbo_class_id: a.qbo_class_id,
+              })),
           },
         }),
       });
@@ -414,7 +463,7 @@ export default function CommissionsPage() {
   function addAssignmentRow() {
     setFormAssignments((prev) => [
       ...prev,
-      { account_id: "", role: "revenue" },
+      { account_id: "", role: "revenue", qbo_class_id: null },
     ]);
   }
 
@@ -424,8 +473,8 @@ export default function CommissionsPage() {
 
   function updateAssignment(
     index: number,
-    field: "account_id" | "role",
-    value: string
+    field: "account_id" | "role" | "qbo_class_id",
+    value: string | null
   ) {
     setFormAssignments((prev) =>
       prev.map((a, i) => (i === index ? { ...a, [field]: value } : a))
@@ -734,6 +783,9 @@ export default function CommissionsPage() {
                                     <TableHead>Account #</TableHead>
                                     <TableHead>Account Name</TableHead>
                                     <TableHead>Type</TableHead>
+                                    {qboClasses.length > 0 && (
+                                      <TableHead>Class</TableHead>
+                                    )}
                                     <TableHead className="text-center">
                                       Role
                                     </TableHead>
@@ -744,8 +796,10 @@ export default function CommissionsPage() {
                                 </TableHeader>
                                 <TableBody>
                                   {profileAssignments.map((a) => {
-                                    const rawChange =
-                                      detailBalances[a.account_id] ?? 0;
+                                    // Use class-specific balance if a class filter is set
+                                    const rawChange = a.qbo_class_id
+                                      ? classBalances[`${a.account_id}__${a.qbo_class_id}`] ?? 0
+                                      : detailBalances[a.account_id] ?? 0;
                                     // Negate revenue accounts (GL stores credits as negative)
                                     const netChange =
                                       a.role === "revenue"
@@ -762,6 +816,11 @@ export default function CommissionsPage() {
                                         <TableCell className="text-muted-foreground">
                                           {a.accounts?.account_type ?? "—"}
                                         </TableCell>
+                                        {qboClasses.length > 0 && (
+                                          <TableCell className="text-muted-foreground">
+                                            {a.qbo_classes?.name ?? "All"}
+                                          </TableCell>
+                                        )}
                                         <TableCell className="text-center">
                                           <Badge
                                             variant={
@@ -1040,6 +1099,32 @@ export default function CommissionsPage() {
                             </SelectItem>
                           </SelectContent>
                         </Select>
+
+                        {/* Class Filter (optional) */}
+                        {qboClasses.length > 0 && (
+                          <Select
+                            value={assignment.qbo_class_id ?? "all"}
+                            onValueChange={(v) =>
+                              updateAssignment(
+                                index,
+                                "qbo_class_id",
+                                v === "all" ? null : v
+                              )
+                            }
+                          >
+                            <SelectTrigger className="w-[160px]">
+                              <SelectValue placeholder="All Classes" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="all">All Classes</SelectItem>
+                              {qboClasses.map((cls) => (
+                                <SelectItem key={cls.id} value={cls.id}>
+                                  {cls.name}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        )}
 
                         {/* Remove */}
                         <Button

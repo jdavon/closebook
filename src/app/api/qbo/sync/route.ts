@@ -213,12 +213,91 @@ export async function POST(request: Request) {
             send({
               step: "accounts",
               detail: `${accountsSynced} accounts saved`,
-              progress: 40,
+              progress: 30,
             });
           } else {
             send({
               step: "accounts",
               detail: `Failed to fetch accounts (HTTP ${accountsResponse.status})`,
+              progress: 30,
+            });
+          }
+
+          // Step 2b: Fetch QBO Classes
+          send({
+            step: "classes",
+            detail: "Fetching classes from QuickBooks...",
+            progress: 32,
+          });
+
+          const classesResponse = await fetch(
+            `${apiBaseUrl}/v3/company/${connection.realm_id}/query?query=${encodeURIComponent(
+              "SELECT * FROM Class MAXRESULTS 1000"
+            )}`,
+            {
+              headers: {
+                Authorization: `Bearer ${accessToken}`,
+                Accept: "application/json",
+              },
+            }
+          );
+
+          let classesSynced = 0;
+
+          if (classesResponse.ok) {
+            const classesData = await classesResponse.json();
+            const qboClasses =
+              classesData.QueryResponse?.Class ?? [];
+
+            // First pass: upsert all classes
+            for (const qboClass of qboClasses) {
+              await adminClient.from("qbo_classes").upsert(
+                {
+                  entity_id: entityId,
+                  qbo_id: String(qboClass.Id),
+                  name: qboClass.Name,
+                  fully_qualified_name:
+                    qboClass.FullyQualifiedName ?? null,
+                  is_active: qboClass.Active ?? true,
+                },
+                { onConflict: "entity_id,qbo_id" }
+              );
+              classesSynced++;
+              recordsSynced++;
+            }
+
+            // Second pass: set parent_class_id for sub-classes
+            for (const qboClass of qboClasses) {
+              if (qboClass.ParentRef?.value) {
+                const { data: parentClass } = await adminClient
+                  .from("qbo_classes")
+                  .select("id")
+                  .eq("entity_id", entityId)
+                  .eq("qbo_id", String(qboClass.ParentRef.value))
+                  .maybeSingle();
+
+                if (parentClass) {
+                  await adminClient
+                    .from("qbo_classes")
+                    .update({ parent_class_id: parentClass.id })
+                    .eq("entity_id", entityId)
+                    .eq("qbo_id", String(qboClass.Id));
+                }
+              }
+            }
+
+            send({
+              step: "classes",
+              detail: classesSynced > 0
+                ? `${classesSynced} classes saved`
+                : "No classes found in QuickBooks",
+              progress: 40,
+            });
+          } else {
+            // Classes are optional — entity may not use them
+            send({
+              step: "classes",
+              detail: "No classes found or fetch skipped",
               progress: 40,
             });
           }
@@ -494,6 +573,241 @@ export async function POST(request: Request) {
             detail: `Failed to fetch trial balance (HTTP ${tbResponse.status})`,
             progress: 90,
           });
+        }
+
+        // Step 4d: Fetch P&L by Class (only if entity has classes)
+        const { data: entityClasses } = await adminClient
+          .from("qbo_classes")
+          .select("id, qbo_id, name")
+          .eq("entity_id", entityId)
+          .eq("is_active", true);
+
+        if (entityClasses && entityClasses.length > 0) {
+          send({
+            step: "pl_by_class",
+            detail: "Fetching P&L by Class report...",
+            progress: 91,
+          });
+
+          const plResponse = await fetch(
+            `${apiBaseUrl}/v3/company/${connection.realm_id}/reports/ProfitAndLoss?start_date=${startDate}&end_date=${endDate}&summarize_column_by=Class`,
+            {
+              headers: {
+                Authorization: `Bearer ${accessToken}`,
+                Accept: "application/json",
+              },
+            }
+          );
+
+          if (plResponse.ok) {
+            const plData = await plResponse.json();
+
+            // Parse columns to build class index map
+            const columns = plData?.Columns?.Column ?? [];
+            const classColumns: Array<{
+              index: number;
+              classDbId: string | null;
+            }> = [];
+
+            // Build lookup from class name to DB record
+            const classNameMap = new Map(
+              entityClasses.map((c: { id: string; name: string }) => [c.name, c.id])
+            );
+
+            for (let i = 1; i < columns.length; i++) {
+              const col = columns[i];
+              const colTitle =
+                col.ColTitle ??
+                (col.MetaData ?? []).find(
+                  (m: { Name: string }) => m.Name === "ColTitle"
+                )?.Value;
+
+              if (colTitle && colTitle !== "TOTAL" && colTitle !== "Total") {
+                classColumns.push({
+                  index: i,
+                  classDbId: classNameMap.get(colTitle) ?? null,
+                });
+              }
+            }
+
+            // Recursively extract P&L account rows with section tracking
+            function extractPLRows(
+              rows: Array<Record<string, unknown>>,
+              currentSection: string
+            ): Array<{
+              accountName: string;
+              qboId: string | null;
+              values: (number | null)[];
+              section: string;
+            }> {
+              const result: Array<{
+                accountName: string;
+                qboId: string | null;
+                values: (number | null)[];
+                section: string;
+              }> = [];
+
+              for (const row of rows) {
+                // Track section from Header
+                let section = currentSection;
+                const header = row.Header as
+                  | { ColData?: Array<{ value?: string }> }
+                  | undefined;
+                if (header?.ColData?.[0]?.value) {
+                  section = header.ColData[0].value;
+                }
+
+                // Recurse into nested rows
+                const nested = row.Rows as
+                  | { Row?: Array<Record<string, unknown>> }
+                  | undefined;
+                if (nested?.Row) {
+                  result.push(...extractPLRows(nested.Row, section));
+                  continue;
+                }
+
+                // Skip Summary rows
+                if (row.Summary !== undefined || row.group !== undefined) continue;
+
+                const colData = row.ColData as
+                  | Array<{ value?: string; id?: string }>
+                  | undefined;
+                if (colData && colData.length > 1) {
+                  const accountName = colData[0]?.value ?? "";
+                  const qboId = colData[0]?.id ?? null;
+                  if (accountName) {
+                    const values = colData
+                      .slice(1)
+                      .map((c) => {
+                        const v = parseFloat(c.value ?? "");
+                        return isNaN(v) ? null : v;
+                      });
+                    result.push({ accountName, qboId, values, section });
+                  }
+                }
+              }
+              return result;
+            }
+
+            const plRows = plData?.Rows?.Row ?? [];
+            const plAccountRows = extractPLRows(plRows, "");
+            const matchedClassBalanceIds: string[] = [];
+            let classBalancesUpserted = 0;
+
+            for (const row of plAccountRows) {
+              // Match account using 3-tier strategy
+              let account: { id: string } | null = null;
+
+              if (row.qboId) {
+                const { data: qboMatch } = await adminClient
+                  .from("accounts")
+                  .select("id")
+                  .eq("entity_id", entityId)
+                  .eq("qbo_id", row.qboId)
+                  .maybeSingle();
+                account = qboMatch;
+              }
+              if (!account) {
+                const { data: fqnMatch } = await adminClient
+                  .from("accounts")
+                  .select("id")
+                  .eq("entity_id", entityId)
+                  .eq("fully_qualified_name", row.accountName)
+                  .maybeSingle();
+                account = fqnMatch;
+              }
+              if (!account) {
+                const { data: nameMatch } = await adminClient
+                  .from("accounts")
+                  .select("id")
+                  .eq("entity_id", entityId)
+                  .eq("name", row.accountName)
+                  .maybeSingle();
+                account = nameMatch;
+              }
+              if (!account) continue;
+
+              // Determine if this is an income section (needs sign flip to match GL convention)
+              const isIncomeSection =
+                row.section.toLowerCase().includes("income") ||
+                row.section.toLowerCase().includes("revenue");
+
+              for (const classCol of classColumns) {
+                if (!classCol.classDbId) continue;
+
+                const rawValue = row.values[classCol.index - 1];
+                if (rawValue === null || rawValue === undefined) continue;
+
+                // P&L shows income as positive. GL stores revenue as negative (credit convention).
+                // Negate income rows to match gl_balances sign convention.
+                const netChange = isIncomeSection ? rawValue * -1 : rawValue;
+
+                const { data: upsertedRow } = await adminClient
+                  .from("gl_class_balances")
+                  .upsert(
+                    {
+                      entity_id: entityId,
+                      account_id: account.id,
+                      qbo_class_id: classCol.classDbId,
+                      period_year: targetYear,
+                      period_month: targetMonth,
+                      net_change: netChange,
+                      synced_at: new Date().toISOString(),
+                    },
+                    {
+                      onConflict:
+                        "entity_id,account_id,qbo_class_id,period_year,period_month",
+                    }
+                  )
+                  .select("id")
+                  .maybeSingle();
+
+                if (upsertedRow) {
+                  matchedClassBalanceIds.push(upsertedRow.id);
+                }
+                classBalancesUpserted++;
+              }
+            }
+
+            // Clean up stale class balance rows
+            if (matchedClassBalanceIds.length > 0) {
+              const { data: staleClassRows } = await adminClient
+                .from("gl_class_balances")
+                .select("id")
+                .eq("entity_id", entityId)
+                .eq("period_year", targetYear)
+                .eq("period_month", targetMonth)
+                .not(
+                  "id",
+                  "in",
+                  `(${matchedClassBalanceIds.join(",")})`
+                );
+
+              if (staleClassRows && staleClassRows.length > 0) {
+                await adminClient
+                  .from("gl_class_balances")
+                  .delete()
+                  .in(
+                    "id",
+                    staleClassRows.map((r: { id: string }) => r.id)
+                  );
+              }
+            }
+
+            recordsSynced += classBalancesUpserted;
+
+            send({
+              step: "pl_by_class",
+              detail: `${classBalancesUpserted} class-level balances saved`,
+              progress: 94,
+            });
+          } else {
+            send({
+              step: "pl_by_class",
+              detail: `P&L by Class fetch failed (HTTP ${plResponse.status})`,
+              progress: 94,
+            });
+          }
         }
 
         // Step 5: Finalize
