@@ -20,6 +20,7 @@ import {
   RefreshCw,
   Scale,
   AlertTriangle,
+  Percent,
 } from "lucide-react";
 import {
   Sidebar,
@@ -121,6 +122,11 @@ export function AppSidebar({ user, entityId: entityIdProp }: AppSidebarProps) {
           title: "Payroll Accruals",
           url: `${entityPrefix}/payroll`,
           icon: Users,
+        },
+        {
+          title: "Commissions",
+          url: `${entityPrefix}/commissions`,
+          icon: Percent,
         },
         {
           title: "Reports & KPIs",

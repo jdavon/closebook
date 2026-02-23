@@ -91,3 +91,5 @@ export type NormalBalance = "debit" | "credit";
 export type DebtType = "term_loan" | "line_of_credit";
 
 export type DebtStatus = "active" | "paid_off" | "inactive";
+
+export type CommissionAccountRole = "revenue" | "expense";

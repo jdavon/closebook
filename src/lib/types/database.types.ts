@@ -1747,6 +1747,150 @@ export type Database = {
           },
         ]
       }
+      commission_profiles: {
+        Row: {
+          id: string
+          entity_id: string
+          name: string
+          commission_rate: number
+          is_active: boolean
+          notes: string | null
+          created_by: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          entity_id: string
+          name: string
+          commission_rate: number
+          is_active?: boolean
+          notes?: string | null
+          created_by?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          entity_id?: string
+          name?: string
+          commission_rate?: number
+          is_active?: boolean
+          notes?: string | null
+          created_by?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "commission_profiles_entity_id_fkey"
+            columns: ["entity_id"]
+            referencedRelation: "entities"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      commission_account_assignments: {
+        Row: {
+          id: string
+          commission_profile_id: string
+          account_id: string
+          role: string
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          commission_profile_id: string
+          account_id: string
+          role: string
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          commission_profile_id?: string
+          account_id?: string
+          role?: string
+          created_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "commission_account_assignments_commission_profile_id_fkey"
+            columns: ["commission_profile_id"]
+            referencedRelation: "commission_profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "commission_account_assignments_account_id_fkey"
+            columns: ["account_id"]
+            referencedRelation: "accounts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      commission_results: {
+        Row: {
+          id: string
+          commission_profile_id: string
+          entity_id: string
+          period_year: number
+          period_month: number
+          total_revenue: number
+          total_expenses: number
+          commission_base: number
+          commission_rate: number
+          commission_earned: number
+          is_payable: boolean
+          marked_payable_at: string | null
+          marked_payable_by: string | null
+          calculated_at: string
+        }
+        Insert: {
+          id?: string
+          commission_profile_id: string
+          entity_id: string
+          period_year: number
+          period_month: number
+          total_revenue?: number
+          total_expenses?: number
+          commission_base?: number
+          commission_rate: number
+          commission_earned?: number
+          is_payable?: boolean
+          marked_payable_at?: string | null
+          marked_payable_by?: string | null
+          calculated_at?: string
+        }
+        Update: {
+          id?: string
+          commission_profile_id?: string
+          entity_id?: string
+          period_year?: number
+          period_month?: number
+          total_revenue?: number
+          total_expenses?: number
+          commission_base?: number
+          commission_rate?: number
+          commission_earned?: number
+          is_payable?: boolean
+          marked_payable_at?: string | null
+          marked_payable_by?: string | null
+          calculated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "commission_results_commission_profile_id_fkey"
+            columns: ["commission_profile_id"]
+            referencedRelation: "commission_profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "commission_results_entity_id_fkey"
+            columns: ["entity_id"]
+            referencedRelation: "entities"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never
