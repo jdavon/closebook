@@ -76,6 +76,26 @@ export function AppSidebar({ user, entityId: entityIdProp }: AppSidebarProps) {
   const entityId = detectedEntityId;
   const entityPrefix = entityId ? `/${entityId}` : "";
 
+  const toolsItems = entityId
+    ? [
+        {
+          title: "Revenue Accruals",
+          url: `${entityPrefix}/revenue`,
+          icon: Receipt,
+        },
+        {
+          title: "Payroll Accruals",
+          url: `${entityPrefix}/payroll`,
+          icon: Users,
+        },
+        {
+          title: "Commissions",
+          url: `${entityPrefix}/commissions`,
+          icon: Percent,
+        },
+      ]
+    : [];
+
   const mainNavItems = entityId
     ? [
         {
@@ -112,21 +132,6 @@ export function AppSidebar({ user, entityId: entityIdProp }: AppSidebarProps) {
           title: "Debt Schedule",
           url: `${entityPrefix}/debt`,
           icon: Landmark,
-        },
-        {
-          title: "Revenue Accruals",
-          url: `${entityPrefix}/revenue`,
-          icon: Receipt,
-        },
-        {
-          title: "Payroll Accruals",
-          url: `${entityPrefix}/payroll`,
-          icon: Users,
-        },
-        {
-          title: "Commissions",
-          url: `${entityPrefix}/commissions`,
-          icon: Percent,
         },
         {
           title: "Reports & KPIs",
@@ -242,6 +247,29 @@ export function AppSidebar({ user, entityId: entityIdProp }: AppSidebarProps) {
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
+
+        {toolsItems.length > 0 && (
+          <SidebarGroup>
+            <SidebarGroupLabel>Tools</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {toolsItems.map((item) => (
+                  <SidebarMenuItem key={item.title}>
+                    <SidebarMenuButton
+                      asChild
+                      isActive={pathname === item.url || pathname.startsWith(item.url + "/")}
+                    >
+                      <Link href={item.url}>
+                        <item.icon />
+                        <span>{item.title}</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ))}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        )}
 
         <SidebarGroup>
           <SidebarGroupLabel>Settings</SidebarGroupLabel>

@@ -41,17 +41,21 @@ export function EntitySelector({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" className="gap-2">
-          <Building2 className="h-4 w-4 text-muted-foreground" />
-          <span className="font-medium">
-            {currentEntity ? currentEntity.name : "Select Entity"}
-          </span>
-          {currentEntity && (
-            <span className="text-xs text-muted-foreground">
-              ({currentEntity.code})
-            </span>
+        <Button variant="ghost" className="gap-1.5 px-2 h-auto py-1">
+          {currentEntity ? (
+            <>
+              <span className="font-medium">
+                {currentEntity.name}
+              </span>
+              <ChevronsUpDown className="h-3.5 w-3.5 text-muted-foreground" />
+            </>
+          ) : (
+            <>
+              <Building2 className="h-4 w-4 text-muted-foreground" />
+              <span className="font-medium">Select Entity</span>
+              <ChevronsUpDown className="ml-1 h-4 w-4 text-muted-foreground" />
+            </>
           )}
-          <ChevronsUpDown className="ml-1 h-4 w-4 text-muted-foreground" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-64">
