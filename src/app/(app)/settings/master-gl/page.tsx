@@ -56,6 +56,7 @@ import {
   Unlink,
   BarChart3,
   Pencil,
+  Wand2,
 } from "lucide-react";
 import type { AccountClassification } from "@/lib/types/database";
 
@@ -173,6 +174,11 @@ export default function MasterGLPage() {
   const [mappingSheetOpen, setMappingSheetOpen] = useState(false);
   const [selectedEntityId, setSelectedEntityId] = useState<string>("");
   const [selectedAccountId, setSelectedAccountId] = useState<string>("");
+
+  // Bulk setup state
+  const [showBulkDialog, setShowBulkDialog] = useState(false);
+  const [bulkEntityId, setBulkEntityId] = useState<string>("");
+  const [bulkRunning, setBulkRunning] = useState(false);
 
   const loadOrganization = useCallback(async () => {
     const {
@@ -430,6 +436,46 @@ export default function MasterGLPage() {
     await loadMappings();
   }
 
+  async function handleBulkSetup() {
+    if (!bulkEntityId) {
+      toast.error("Please select an entity");
+      return;
+    }
+
+    setBulkRunning(true);
+    try {
+      const response = await fetch("/api/master-accounts/bulk-setup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ entityId: bulkEntityId }),
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        toast.error(data.error || "Bulk setup failed");
+        setBulkRunning(false);
+        return;
+      }
+
+      const unmappedCount = data.unmapped?.length ?? 0;
+      toast.success(
+        `Mapped ${data.mappingsCreated} of ${data.totalEntityAccounts} entity accounts` +
+          (unmappedCount > 0 ? ` (${unmappedCount} unmapped)` : "")
+      );
+
+      if (unmappedCount > 0) {
+        console.log("Unmapped entity accounts:", data.unmapped);
+      }
+
+      setShowBulkDialog(false);
+      setBulkEntityId("");
+      await Promise.all([loadMasterAccounts(), loadMappings()]);
+    } catch {
+      toast.error("An error occurred during bulk setup");
+    }
+    setBulkRunning(false);
+  }
+
   // Filter accounts
   const filtered = masterAccounts.filter((a) => {
     const matchesSearch =
@@ -501,6 +547,10 @@ export default function MasterGLPage() {
           >
             <BarChart3 className="mr-2 h-4 w-4" />
             Consolidated View
+          </Button>
+          <Button variant="outline" onClick={() => setShowBulkDialog(true)}>
+            <Wand2 className="mr-2 h-4 w-4" />
+            Bulk Setup
           </Button>
           <Button onClick={openAddDialog}>
             <Plus className="mr-2 h-4 w-4" />
@@ -812,6 +862,53 @@ export default function MasterGLPage() {
                 : editingAccount
                 ? "Update Account"
                 : "Create Account"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Bulk Setup Dialog */}
+      <Dialog open={showBulkDialog} onOpenChange={setShowBulkDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Bulk Setup — Map Entity Accounts</DialogTitle>
+            <DialogDescription>
+              Auto-maps the selected entity&apos;s accounts to existing master
+              GL accounts using predefined rules. Safe to run multiple
+              times — existing mappings are preserved.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label>Entity to Map</Label>
+              <Select value={bulkEntityId} onValueChange={setBulkEntityId}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select entity..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {entities.map((e) => (
+                    <SelectItem key={e.id} value={e.id}>
+                      {e.name} ({e.code})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setShowBulkDialog(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleBulkSetup}
+              disabled={bulkRunning || !bulkEntityId}
+            >
+              {bulkRunning ? "Running..." : "Run Bulk Setup"}
             </Button>
           </DialogFooter>
         </DialogContent>
