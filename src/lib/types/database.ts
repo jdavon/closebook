@@ -93,3 +93,5 @@ export type DebtType = "term_loan" | "line_of_credit";
 export type DebtStatus = "active" | "paid_off" | "inactive";
 
 export type CommissionAccountRole = "revenue" | "expense";
+
+export type ClassFilterMode = "all" | "include" | "exclude";

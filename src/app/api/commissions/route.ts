@@ -46,7 +46,7 @@ export async function GET(request: Request) {
     const { data: allAssignments } = await adminClient
       .from("commission_account_assignments")
       .select(
-        "id, commission_profile_id, account_id, role, qbo_class_id, accounts(name, account_number, classification, account_type), qbo_classes(name)"
+        "id, commission_profile_id, account_id, role, class_filter_mode, qbo_class_ids, accounts(name, account_number, classification, account_type)"
       )
       .in("commission_profile_id", profileIds);
 
@@ -145,11 +145,17 @@ export async function POST(request: Request) {
 
     if (profile.assignments?.length > 0) {
       const assignmentRows = profile.assignments.map(
-        (a: { account_id: string; role: string; qbo_class_id?: string | null }) => ({
+        (a: {
+          account_id: string;
+          role: string;
+          class_filter_mode?: string;
+          qbo_class_ids?: string[];
+        }) => ({
           commission_profile_id: profileId,
           account_id: a.account_id,
           role: a.role,
-          qbo_class_id: a.qbo_class_id || null,
+          class_filter_mode: a.class_filter_mode || "all",
+          qbo_class_ids: a.qbo_class_ids ?? [],
         })
       );
 
@@ -203,34 +209,55 @@ export async function POST(request: Request) {
     const results = [];
 
     for (const profile of profiles) {
-      // Get assignments (with optional class filter)
+      // Get assignments (with class filter mode)
       const { data: assignments } = await adminClient
         .from("commission_account_assignments")
-        .select("account_id, role, qbo_class_id")
+        .select("account_id, role, class_filter_mode, qbo_class_ids")
         .eq("commission_profile_id", profile.id);
 
       let totalRevenue = 0;
       let totalExpenses = 0;
 
       for (const assignment of assignments ?? []) {
-        const a = assignment as { account_id: string; role: string; qbo_class_id: string | null };
+        const a = assignment as {
+          account_id: string;
+          role: string;
+          class_filter_mode: string;
+          qbo_class_ids: string[];
+        };
         let netChange = 0;
 
-        if (a.qbo_class_id) {
-          // Class-specific: query gl_class_balances
-          const { data: classBalance } = await adminClient
+        if (a.class_filter_mode === "include" && a.qbo_class_ids.length > 0) {
+          // Include mode: sum gl_class_balances for selected classes only
+          const { data: classBalances } = await adminClient
             .from("gl_class_balances")
             .select("net_change")
             .eq("entity_id", entityId)
             .eq("period_year", periodYear)
             .eq("period_month", periodMonth)
             .eq("account_id", a.account_id)
-            .eq("qbo_class_id", a.qbo_class_id)
-            .maybeSingle();
+            .in("qbo_class_id", a.qbo_class_ids);
 
-          netChange = Number(classBalance?.net_change ?? 0);
+          netChange = (classBalances ?? []).reduce(
+            (sum, row) => sum + Number(row.net_change ?? 0),
+            0
+          );
+        } else if (a.class_filter_mode === "exclude" && a.qbo_class_ids.length > 0) {
+          // Exclude mode: fetch all class balances, filter out excluded in JS
+          const { data: allClassBalances } = await adminClient
+            .from("gl_class_balances")
+            .select("qbo_class_id, net_change")
+            .eq("entity_id", entityId)
+            .eq("period_year", periodYear)
+            .eq("period_month", periodMonth)
+            .eq("account_id", a.account_id);
+
+          const excludeSet = new Set(a.qbo_class_ids);
+          netChange = (allClassBalances ?? [])
+            .filter((row) => !excludeSet.has(row.qbo_class_id))
+            .reduce((sum, row) => sum + Number(row.net_change ?? 0), 0);
         } else {
-          // No class filter: use full gl_balances (existing behavior)
+          // All classes: use full gl_balances (existing behavior)
           const { data: balance } = await adminClient
             .from("gl_balances")
             .select("net_change")

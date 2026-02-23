@@ -75,7 +75,7 @@ import {
   getPeriodLabel,
 } from "@/lib/utils/dates";
 import { cn } from "@/lib/utils";
-import type { AccountClassification } from "@/lib/types/database";
+import type { AccountClassification, ClassFilterMode } from "@/lib/types/database";
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -99,16 +99,14 @@ interface AccountAssignment {
   commission_profile_id: string;
   account_id: string;
   role: "revenue" | "expense";
-  qbo_class_id: string | null;
+  class_filter_mode: ClassFilterMode;
+  qbo_class_ids: string[];
   accounts?: {
     name: string;
     account_number: string | null;
     classification: string;
     account_type: string;
   };
-  qbo_classes?: {
-    name: string;
-  } | null;
 }
 
 interface CommissionResult {
@@ -137,7 +135,8 @@ interface EntityAccount {
 interface FormAssignment {
   account_id: string;
   role: "revenue" | "expense";
-  qbo_class_id: string | null;
+  class_filter_mode: ClassFilterMode;
+  qbo_class_ids: string[];
 }
 
 // ── Page ───────────────────────────────────────────────────────────────
@@ -401,7 +400,8 @@ export default function CommissionsPage() {
       profileAssignments.map((a) => ({
         account_id: a.account_id,
         role: a.role,
-        qbo_class_id: a.qbo_class_id ?? null,
+        class_filter_mode: (a.class_filter_mode ?? "all") as ClassFilterMode,
+        qbo_class_ids: a.qbo_class_ids ?? [],
       }))
     );
     setOpenPopovers({});
@@ -416,6 +416,15 @@ export default function CommissionsPage() {
     const rateNum = parseFloat(formRate);
     if (isNaN(rateNum) || rateNum < 0) {
       toast.error("Please enter a valid commission rate");
+      return;
+    }
+
+    // Validate class selections
+    const invalidClassFilter = formAssignments.find(
+      (a) => a.account_id && a.class_filter_mode !== "all" && a.qbo_class_ids.length === 0
+    );
+    if (invalidClassFilter) {
+      toast.error("Please select at least one class for include/exclude filter");
       return;
     }
 
@@ -437,7 +446,8 @@ export default function CommissionsPage() {
               .map((a) => ({
                 account_id: a.account_id,
                 role: a.role,
-                qbo_class_id: a.qbo_class_id,
+                class_filter_mode: a.class_filter_mode,
+                qbo_class_ids: a.class_filter_mode === "all" ? [] : a.qbo_class_ids,
               })),
           },
         }),
@@ -463,7 +473,7 @@ export default function CommissionsPage() {
   function addAssignmentRow() {
     setFormAssignments((prev) => [
       ...prev,
-      { account_id: "", role: "revenue", qbo_class_id: null },
+      { account_id: "", role: "revenue", class_filter_mode: "all" as ClassFilterMode, qbo_class_ids: [] },
     ]);
   }
 
@@ -473,11 +483,31 @@ export default function CommissionsPage() {
 
   function updateAssignment(
     index: number,
-    field: "account_id" | "role" | "qbo_class_id",
-    value: string | null
+    field: "account_id" | "role" | "class_filter_mode",
+    value: string
   ) {
     setFormAssignments((prev) =>
-      prev.map((a, i) => (i === index ? { ...a, [field]: value } : a))
+      prev.map((a, i) => {
+        if (i !== index) return a;
+        const updated = { ...a, [field]: value };
+        // Reset class IDs when switching to "all"
+        if (field === "class_filter_mode" && value === "all") {
+          updated.qbo_class_ids = [];
+        }
+        return updated;
+      })
+    );
+  }
+
+  function toggleClassId(index: number, classId: string) {
+    setFormAssignments((prev) =>
+      prev.map((a, i) => {
+        if (i !== index) return a;
+        const ids = a.qbo_class_ids.includes(classId)
+          ? a.qbo_class_ids.filter((id) => id !== classId)
+          : [...a.qbo_class_ids, classId];
+        return { ...a, qbo_class_ids: ids };
+      })
     );
   }
 
@@ -491,6 +521,37 @@ export default function CommissionsPage() {
       }
       return next;
     });
+  }
+
+  // ── Detail row helpers ──────────────────────────────────────────────
+
+  function getAssignmentRawBalance(a: AccountAssignment): number {
+    if (a.class_filter_mode === "all" || a.qbo_class_ids.length === 0) {
+      return detailBalances[a.account_id] ?? 0;
+    }
+    if (a.class_filter_mode === "include") {
+      return a.qbo_class_ids.reduce(
+        (sum, cid) => sum + (classBalances[`${a.account_id}__${cid}`] ?? 0),
+        0
+      );
+    }
+    // exclude: sum all class balances for this account MINUS excluded ones
+    const excludeSet = new Set(a.qbo_class_ids);
+    return Object.entries(classBalances)
+      .filter(([key]) => {
+        const [acctId, classId] = key.split("__");
+        return acctId === a.account_id && !excludeSet.has(classId);
+      })
+      .reduce((sum, [, val]) => sum + val, 0);
+  }
+
+  function getClassFilterLabel(a: AccountAssignment): string {
+    if (a.class_filter_mode === "all" || a.qbo_class_ids.length === 0) return "All Classes";
+    const names = a.qbo_class_ids
+      .map((id) => qboClasses.find((c) => c.id === id)?.name ?? "Unknown")
+      .sort();
+    const prefix = a.class_filter_mode === "include" ? "Include: " : "Exclude: ";
+    return prefix + names.join(", ");
   }
 
   // ── Render ───────────────────────────────────────────────────────────
@@ -796,10 +857,7 @@ export default function CommissionsPage() {
                                 </TableHeader>
                                 <TableBody>
                                   {profileAssignments.map((a) => {
-                                    // Use class-specific balance if a class filter is set
-                                    const rawChange = a.qbo_class_id
-                                      ? classBalances[`${a.account_id}__${a.qbo_class_id}`] ?? 0
-                                      : detailBalances[a.account_id] ?? 0;
+                                    const rawChange = getAssignmentRawBalance(a);
                                     // Negate revenue accounts (GL stores credits as negative)
                                     const netChange =
                                       a.role === "revenue"
@@ -817,8 +875,24 @@ export default function CommissionsPage() {
                                           {a.accounts?.account_type ?? "—"}
                                         </TableCell>
                                         {qboClasses.length > 0 && (
-                                          <TableCell className="text-muted-foreground">
-                                            {a.qbo_classes?.name ?? "All"}
+                                          <TableCell className="text-muted-foreground text-xs max-w-[200px]">
+                                            <span title={getClassFilterLabel(a)}>
+                                              {a.class_filter_mode === "all" ? (
+                                                "All Classes"
+                                              ) : (
+                                                <span className="flex items-center gap-1 flex-wrap">
+                                                  <Badge
+                                                    variant={a.class_filter_mode === "include" ? "default" : "destructive"}
+                                                    className="text-[10px] px-1.5 py-0"
+                                                  >
+                                                    {a.class_filter_mode === "include" ? "Include" : "Exclude"}
+                                                  </Badge>
+                                                  {a.qbo_class_ids
+                                                    .map((id) => qboClasses.find((c) => c.id === id)?.name ?? "?")
+                                                    .join(", ")}
+                                                </span>
+                                              )}
+                                            </span>
                                           </TableCell>
                                         )}
                                         <TableCell className="text-center">
@@ -1102,28 +1176,70 @@ export default function CommissionsPage() {
 
                         {/* Class Filter (optional) */}
                         {qboClasses.length > 0 && (
-                          <Select
-                            value={assignment.qbo_class_id ?? "all"}
-                            onValueChange={(v) =>
-                              updateAssignment(
-                                index,
-                                "qbo_class_id",
-                                v === "all" ? null : v
-                              )
-                            }
-                          >
-                            <SelectTrigger className="w-[160px]">
-                              <SelectValue placeholder="All Classes" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="all">All Classes</SelectItem>
-                              {qboClasses.map((cls) => (
-                                <SelectItem key={cls.id} value={cls.id}>
-                                  {cls.name}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
+                          <div className="flex items-center gap-1">
+                            {/* Mode Selector */}
+                            <Select
+                              value={assignment.class_filter_mode}
+                              onValueChange={(v) =>
+                                updateAssignment(index, "class_filter_mode", v)
+                              }
+                            >
+                              <SelectTrigger className="w-[130px]">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="all">All Classes</SelectItem>
+                                <SelectItem value="include">Include</SelectItem>
+                                <SelectItem value="exclude">Exclude</SelectItem>
+                              </SelectContent>
+                            </Select>
+
+                            {/* Multi-select class picker (only when include/exclude) */}
+                            {assignment.class_filter_mode !== "all" && (
+                              <Popover>
+                                <PopoverTrigger asChild>
+                                  <Button
+                                    variant="outline"
+                                    className="w-[150px] justify-between text-xs"
+                                  >
+                                    {assignment.qbo_class_ids.length === 0
+                                      ? "Select classes..."
+                                      : `${assignment.qbo_class_ids.length} selected`}
+                                    <ChevronsUpDown className="ml-1 h-3 w-3 shrink-0 opacity-50" />
+                                  </Button>
+                                </PopoverTrigger>
+                                <PopoverContent className="w-[220px] p-0" align="start">
+                                  <Command>
+                                    <CommandInput placeholder="Search classes..." />
+                                    <CommandList>
+                                      <CommandEmpty>No classes found.</CommandEmpty>
+                                      <CommandGroup>
+                                        {qboClasses.map((cls) => (
+                                          <CommandItem
+                                            key={cls.id}
+                                            value={cls.name}
+                                            onSelect={() => toggleClassId(index, cls.id)}
+                                          >
+                                            <div className={cn(
+                                              "mr-2 flex h-4 w-4 items-center justify-center rounded-sm border border-primary",
+                                              assignment.qbo_class_ids.includes(cls.id)
+                                                ? "bg-primary text-primary-foreground"
+                                                : "opacity-50"
+                                            )}>
+                                              {assignment.qbo_class_ids.includes(cls.id) && (
+                                                <Check className="h-3 w-3" />
+                                              )}
+                                            </div>
+                                            {cls.name}
+                                          </CommandItem>
+                                        ))}
+                                      </CommandGroup>
+                                    </CommandList>
+                                  </Command>
+                                </PopoverContent>
+                              </Popover>
+                            )}
+                          </div>
                         )}
 
                         {/* Remove */}

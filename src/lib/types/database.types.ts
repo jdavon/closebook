@@ -1796,7 +1796,8 @@ export type Database = {
           commission_profile_id: string
           account_id: string
           role: string
-          qbo_class_id: string | null
+          class_filter_mode: string
+          qbo_class_ids: string[]
           created_at: string
         }
         Insert: {
@@ -1804,7 +1805,8 @@ export type Database = {
           commission_profile_id: string
           account_id: string
           role: string
-          qbo_class_id?: string | null
+          class_filter_mode?: string
+          qbo_class_ids?: string[]
           created_at?: string
         }
         Update: {
@@ -1812,7 +1814,8 @@ export type Database = {
           commission_profile_id?: string
           account_id?: string
           role?: string
-          qbo_class_id?: string | null
+          class_filter_mode?: string
+          qbo_class_ids?: string[]
           created_at?: string
         }
         Relationships: [
@@ -1826,12 +1829,6 @@ export type Database = {
             foreignKeyName: "commission_account_assignments_account_id_fkey"
             columns: ["account_id"]
             referencedRelation: "accounts"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "commission_account_assignments_qbo_class_id_fkey"
-            columns: ["qbo_class_id"]
-            referencedRelation: "qbo_classes"
             referencedColumns: ["id"]
           },
         ]
