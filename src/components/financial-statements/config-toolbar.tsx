@@ -23,6 +23,7 @@ const TAB_LABELS: Record<StatementTab, string> = {
   "income-statement": "Income Statement",
   "balance-sheet": "Balance Sheet",
   "cash-flow": "Cash Flow",
+  "pro-forma": "Pro Forma Adjustments",
   all: "All Statements",
 };
 
@@ -34,6 +35,7 @@ interface ConfigToolbarProps {
   granularity: Granularity;
   includeBudget: boolean;
   includeYoY: boolean;
+  includeProForma?: boolean;
   onStartYearChange: (year: number) => void;
   onStartMonthChange: (month: number) => void;
   onEndYearChange: (year: number) => void;
@@ -41,6 +43,7 @@ interface ConfigToolbarProps {
   onGranularityChange: (granularity: Granularity) => void;
   onIncludeBudgetChange: (val: boolean) => void;
   onIncludeYoYChange: (val: boolean) => void;
+  onIncludeProFormaChange?: (val: boolean) => void;
   onExport: () => void;
   onExportAll?: () => void;
   onPrint: () => void;
@@ -63,6 +66,7 @@ export function ConfigToolbar({
   granularity,
   includeBudget,
   includeYoY,
+  includeProForma,
   onStartYearChange,
   onStartMonthChange,
   onEndYearChange,
@@ -70,6 +74,7 @@ export function ConfigToolbar({
   onGranularityChange,
   onIncludeBudgetChange,
   onIncludeYoYChange,
+  onIncludeProFormaChange,
   onExport,
   onExportAll,
   onPrint,
@@ -193,6 +198,17 @@ export function ConfigToolbar({
           />
           Budget
         </label>
+        {onIncludeProFormaChange && (
+          <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+            <Checkbox
+              checked={includeProForma ?? false}
+              onCheckedChange={(checked) =>
+                onIncludeProFormaChange(checked === true)
+              }
+            />
+            Pro Forma
+          </label>
+        )}
       </div>
 
       {/* Separator */}

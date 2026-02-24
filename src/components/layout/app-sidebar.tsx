@@ -22,6 +22,7 @@ import {
   AlertTriangle,
   Percent,
   FileText,
+  Wallet,
 } from "lucide-react";
 import {
   Sidebar,
@@ -133,6 +134,11 @@ export function AppSidebar({ user, entityId: entityIdProp }: AppSidebarProps) {
           title: "Debt Schedule",
           url: `${entityPrefix}/debt`,
           icon: Landmark,
+        },
+        {
+          title: "Budget",
+          url: `${entityPrefix}/reports/budget`,
+          icon: Wallet,
         },
         {
           title: "Reports & KPIs",

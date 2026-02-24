@@ -40,6 +40,7 @@ export default function FinancialStatementsPage() {
     granularity,
     includeBudget,
     includeYoY,
+    includeProForma: false,
   };
 
   const { data, loading, error } = useFinancialStatements(config);

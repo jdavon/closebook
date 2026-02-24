@@ -35,6 +35,7 @@ export function useFinancialStatements(
       granularity: config.granularity,
       includeBudget: String(config.includeBudget),
       includeYoY: String(config.includeYoY),
+      includeProForma: String(config.includeProForma),
     });
 
     if (config.entityId) params.set("entityId", config.entityId);
@@ -72,6 +73,7 @@ export function useFinancialStatements(
     config.granularity,
     config.includeBudget,
     config.includeYoY,
+    config.includeProForma,
   ]);
 
   useEffect(() => {

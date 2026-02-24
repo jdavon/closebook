@@ -82,6 +82,70 @@ export function StatementTable({
     );
   }
 
+  // Last period key for YoY comparison columns
+  const lastPeriodKey = periods[periods.length - 1]?.key ?? "";
+
+  function renderYoYCells(line: LineItem) {
+    const isMargin = line.id.endsWith("_margin");
+    const pyAmount = line.priorYearAmounts?.[lastPeriodKey];
+    const currentAmount = line.amounts[lastPeriodKey];
+
+    // Prior Year column
+    const pyCell =
+      pyAmount !== undefined && pyAmount !== null ? (
+        isMargin ? (
+          <span className="italic text-muted-foreground">
+            {(pyAmount * 100) < 0
+              ? `(${Math.abs(pyAmount * 100).toFixed(1)}%)`
+              : `${(pyAmount * 100).toFixed(1)}%`}
+          </span>
+        ) : (
+          formatStatementAmount(pyAmount, line.showDollarSign)
+        )
+      ) : null;
+
+    // YoY Change column
+    let changeCell: React.ReactNode = null;
+    if (
+      !isMargin &&
+      pyAmount !== undefined &&
+      pyAmount !== null &&
+      currentAmount !== undefined &&
+      currentAmount !== null
+    ) {
+      const change = currentAmount - pyAmount;
+      if (change === 0) {
+        changeCell = "\u2014";
+      } else {
+        const formatted = formatStatementAmount(change, false);
+        const positive = change >= 0;
+        changeCell = (
+          <span className={positive ? "text-green-600" : "text-red-600"}>
+            {formatted}
+          </span>
+        );
+      }
+    } else if (isMargin && pyAmount !== undefined && pyAmount !== null && currentAmount !== undefined) {
+      const changePts = (currentAmount - pyAmount) * 100;
+      if (Math.abs(changePts) < 0.05) {
+        changeCell = "\u2014";
+      } else {
+        changeCell = (
+          <span className={changePts >= 0 ? "text-green-600 italic" : "text-red-600 italic"}>
+            {changePts >= 0 ? "+" : ""}{changePts.toFixed(1)}pp
+          </span>
+        );
+      }
+    }
+
+    return (
+      <>
+        <td>{pyCell}</td>
+        <td>{changeCell}</td>
+      </>
+    );
+  }
+
   // Total columns per period: 1 for actual, +1 for budget, +1 for variance
   const colsPerPeriod = 1 + (showBudget ? 2 : 0);
   const totalCols =
@@ -190,12 +254,7 @@ export function StatementTable({
                           )}
                         </>
                       ))}
-                  {showYoY && (
-                    <>
-                      <td></td>
-                      <td></td>
-                    </>
-                  )}
+                  {showYoY && renderYoYCells(line)}
                 </tr>
               );
             }
@@ -270,22 +329,7 @@ export function StatementTable({
                       >
                         <td>{line.label}</td>
                         {renderPeriodCells(line, "budget-row")}
-                        {showYoY && (
-                          <>
-                            <td>
-                              {line.priorYearAmounts
-                                ? renderAmount(
-                                    {
-                                      ...line,
-                                      amounts: line.priorYearAmounts,
-                                    },
-                                    periods[periods.length - 1]?.key ?? ""
-                                  )
-                                : null}
-                            </td>
-                            <td></td>
-                          </>
-                        )}
+                        {showYoY && renderYoYCells(line)}
                       </tr>
                     );
                   })}
@@ -301,12 +345,7 @@ export function StatementTable({
                   >
                     <td>{section.subtotalLine.label}</td>
                     {renderPeriodCells(section.subtotalLine, "subtotal")}
-                    {showYoY && (
-                      <>
-                        <td></td>
-                        <td></td>
-                      </>
-                    )}
+                    {showYoY && renderYoYCells(section.subtotalLine)}
                   </tr>
                 )}
 

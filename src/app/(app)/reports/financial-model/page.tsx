@@ -16,6 +16,7 @@ import { getCurrentPeriod } from "@/lib/utils/dates";
 import { StatementCard } from "@/components/financial-statements/statement-card";
 import { ConfigToolbar } from "@/components/financial-statements/config-toolbar";
 import { useFinancialStatements } from "@/components/financial-statements/use-financial-statements";
+import { ProFormaTab } from "@/components/financial-statements/pro-forma-tab";
 import type {
   Granularity,
   Scope,
@@ -47,6 +48,7 @@ export default function FinancialModelPage() {
   const [granularity, setGranularity] = useState<Granularity>("monthly");
   const [includeBudget, setIncludeBudget] = useState(false);
   const [includeYoY, setIncludeYoY] = useState(false);
+  const [includeProForma, setIncludeProForma] = useState(false);
   const [activeTab, setActiveTab] = useState<StatementTab>("all");
 
   // Load organization
@@ -92,6 +94,7 @@ export default function FinancialModelPage() {
     granularity,
     includeBudget,
     includeYoY,
+    includeProForma,
   };
 
   // Only fetch when we have the IDs we need
@@ -111,6 +114,7 @@ export default function FinancialModelPage() {
       granularity,
       includeBudget: String(includeBudget),
       includeYoY: String(includeYoY),
+      includeProForma: String(includeProForma),
       statements,
     });
     if (scope === "entity" && selectedEntityId) {
@@ -209,6 +213,7 @@ export default function FinancialModelPage() {
         granularity={granularity}
         includeBudget={includeBudget}
         includeYoY={includeYoY}
+        includeProForma={includeProForma}
         onStartYearChange={setStartYear}
         onStartMonthChange={setStartMonth}
         onEndYearChange={setEndYear}
@@ -216,6 +221,7 @@ export default function FinancialModelPage() {
         onGranularityChange={setGranularity}
         onIncludeBudgetChange={setIncludeBudget}
         onIncludeYoYChange={setIncludeYoY}
+        onIncludeProFormaChange={setIncludeProForma}
         onExport={handleExport}
         onExportAll={handleExportAll}
         onPrint={handlePrint}
@@ -263,6 +269,7 @@ export default function FinancialModelPage() {
             <TabsTrigger value="income-statement">Income Statement</TabsTrigger>
             <TabsTrigger value="balance-sheet">Balance Sheet</TabsTrigger>
             <TabsTrigger value="cash-flow">Cash Flow</TabsTrigger>
+            <TabsTrigger value="pro-forma">Pro Forma Adjustments</TabsTrigger>
           </TabsList>
 
           {/* All Statements */}
@@ -328,6 +335,20 @@ export default function FinancialModelPage() {
               periods={data.periods}
               showBudget={false}
               showYoY={includeYoY}
+            />
+          </TabsContent>
+
+          {/* Pro Forma Adjustments */}
+          <TabsContent value="pro-forma">
+            <ProFormaTab
+              organizationId={organizationId}
+              entities={entities}
+              scope={scope}
+              selectedEntityId={selectedEntityId}
+              startYear={startYear}
+              startMonth={startMonth}
+              endYear={endYear}
+              endMonth={endMonth}
             />
           </TabsContent>
         </Tabs>

@@ -84,11 +84,30 @@ function collectAllMonths(
           set.add(pyKey);
           result.push({ year: m.year - 1, month: m.month });
         }
+        // Prior month of prior year (needed for cash flow beginning balances)
+        const pyPriorMonth = m.month === 1 ? 12 : m.month - 1;
+        const pyPriorYear = m.month === 1 ? m.year - 2 : m.year - 1;
+        const pyPriorKey = `${pyPriorYear}-${pyPriorMonth}`;
+        if (!set.has(pyPriorKey)) {
+          set.add(pyPriorKey);
+          result.push({ year: pyPriorYear, month: pyPriorMonth });
+        }
       }
     }
   }
 
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// Helper: create prior year buckets (same keys, months shifted back 1 year)
+// ---------------------------------------------------------------------------
+
+function createPriorYearBuckets(buckets: PeriodBucket[]): PeriodBucket[] {
+  return buckets.map((b) => ({
+    ...b,
+    months: b.months.map((m) => ({ year: m.year - 1, month: m.month })),
+  }));
 }
 
 // ---------------------------------------------------------------------------
@@ -143,6 +162,55 @@ function aggregateBudgetByBucket(
   }
 
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// Helper: inject pro forma adjustments into consolidated balances
+// ---------------------------------------------------------------------------
+
+interface RawProFormaAdjustment {
+  master_account_id: string;
+  period_year: number;
+  period_month: number;
+  amount: number;
+}
+
+/**
+ * Inject pro forma adjustments into consolidatedBalances.
+ * Each adjustment adds to net_change (and ending_balance) for the
+ * matching master account + period. If no existing balance row exists
+ * for that account/period, a new one is created.
+ */
+function injectProFormaAdjustments(
+  consolidatedBalances: RawGLBalance[],
+  adjustments: RawProFormaAdjustment[],
+  entityId: string
+): void {
+  const balIndex = new Map<string, RawGLBalance>();
+  for (const b of consolidatedBalances) {
+    balIndex.set(`${b.account_id}-${b.period_year}-${b.period_month}`, b);
+  }
+
+  for (const adj of adjustments) {
+    const key = `${adj.master_account_id}-${adj.period_year}-${adj.period_month}`;
+    const existing = balIndex.get(key);
+    if (existing) {
+      existing.net_change += adj.amount;
+      existing.ending_balance += adj.amount;
+    } else {
+      const newBal: RawGLBalance = {
+        account_id: adj.master_account_id,
+        entity_id: entityId,
+        period_year: adj.period_year,
+        period_month: adj.period_month,
+        beginning_balance: 0,
+        ending_balance: adj.amount,
+        net_change: adj.amount,
+      };
+      consolidatedBalances.push(newBal);
+      balIndex.set(key, newBal);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -254,12 +322,15 @@ function buildStatement(
   aggregated: Map<string, BucketedAmounts>,
   buckets: PeriodBucket[],
   useNetChange: boolean, // true for P&L, false for BS
-  budgetByAccount?: Map<string, Record<string, number>> // account ID -> bucket key -> budget amount
+  budgetByAccount?: Map<string, Record<string, number>>, // account ID -> bucket key -> budget amount
+  pyAggregated?: Map<string, BucketedAmounts> // prior year aggregated data for YoY
 ): StatementData {
   const sections: StatementSection[] = [];
   const sectionTotals: Record<string, Record<string, number>> = {};
   const sectionBudgetTotals: Record<string, Record<string, number>> = {};
+  const sectionPyTotals: Record<string, Record<string, number>> = {};
   const hasBudget = budgetByAccount && budgetByAccount.size > 0;
+  const hasPY = !!pyAggregated;
 
   for (const config of sectionConfigs) {
     const sectionAccounts = accounts.filter(
@@ -277,18 +348,24 @@ function buildStatement(
     const lines: LineItem[] = [];
     const totals: Record<string, number> = {};
     const budgetTotals: Record<string, number> = {};
+    const pyTotals: Record<string, number> = {};
 
     // Initialize totals
     for (const bucket of buckets) {
       totals[bucket.key] = 0;
       budgetTotals[bucket.key] = 0;
+      pyTotals[bucket.key] = 0;
     }
 
     let lineIndex = 0;
     for (const account of sectionAccounts) {
       const bucketed = aggregated.get(account.id);
+      const pyBucketed = hasPY ? pyAggregated!.get(account.id) : undefined;
       const amounts: Record<string, number> = {};
       const budgetAmounts: Record<string, number> | undefined = hasBudget
+        ? {}
+        : undefined;
+      const priorYearAmounts: Record<string, number> | undefined = hasPY
         ? {}
         : undefined;
 
@@ -300,9 +377,18 @@ function buildStatement(
         amounts[bucket.key] = useNetChange
           ? (config.classification === "Revenue" ? -raw : raw)
           : raw;
-        totals[bucket.key] += useNetChange
-          ? (config.classification === "Revenue" ? -raw : raw)
-          : raw;
+        totals[bucket.key] += amounts[bucket.key];
+
+        // Prior year amounts
+        if (hasPY && priorYearAmounts) {
+          const pyRaw = useNetChange
+            ? (pyBucketed?.netChange[bucket.key] ?? 0)
+            : (pyBucketed?.endingBalance[bucket.key] ?? 0);
+          priorYearAmounts[bucket.key] = useNetChange
+            ? (config.classification === "Revenue" ? -pyRaw : pyRaw)
+            : pyRaw;
+          pyTotals[bucket.key] += priorYearAmounts[bucket.key];
+        }
 
         // Budget amounts (already stored as positive in budget_amounts table)
         if (hasBudget && budgetAmounts) {
@@ -319,6 +405,7 @@ function buildStatement(
         accountNumber: account.accountNumber ?? undefined,
         amounts,
         budgetAmounts,
+        priorYearAmounts,
         indent: 1,
         isTotal: false,
         isGrandTotal: false,
@@ -331,6 +418,7 @@ function buildStatement(
 
     sectionTotals[config.id] = totals;
     sectionBudgetTotals[config.id] = budgetTotals;
+    sectionPyTotals[config.id] = pyTotals;
 
     // Subtotal line
     const subtotalLine: LineItem = {
@@ -338,6 +426,7 @@ function buildStatement(
       label: `Total ${config.title.charAt(0)}${config.title.slice(1).toLowerCase()}`,
       amounts: totals,
       budgetAmounts: hasBudget ? { ...budgetTotals } : undefined,
+      priorYearAmounts: hasPY ? { ...pyTotals } : undefined,
       indent: 0,
       isTotal: true,
       isGrandTotal: false,
@@ -371,20 +460,31 @@ function buildStatement(
       const compBudgetAmounts: Record<string, number> | undefined = hasBudget
         ? {}
         : undefined;
+      const compPyAmounts: Record<string, number> | undefined = hasPY
+        ? {}
+        : undefined;
 
       for (const bucket of buckets) {
         let val = 0;
         let budgetVal = 0;
+        let pyVal = 0;
         for (const { sectionId, sign } of comp.formula) {
           val += (sectionTotals[sectionId]?.[bucket.key] ?? 0) * sign;
           if (hasBudget) {
             budgetVal +=
               (sectionBudgetTotals[sectionId]?.[bucket.key] ?? 0) * sign;
           }
+          if (hasPY) {
+            pyVal +=
+              (sectionPyTotals[sectionId]?.[bucket.key] ?? 0) * sign;
+          }
         }
         amounts[bucket.key] = val;
         if (compBudgetAmounts) {
           compBudgetAmounts[bucket.key] = budgetVal;
+        }
+        if (compPyAmounts) {
+          compPyAmounts[bucket.key] = pyVal;
         }
       }
 
@@ -398,6 +498,7 @@ function buildStatement(
           label: comp.label,
           amounts,
           budgetAmounts: compBudgetAmounts,
+          priorYearAmounts: compPyAmounts,
           indent: 0,
           isTotal: !comp.isGrandTotal,
           isGrandTotal: comp.isGrandTotal ?? false,
@@ -415,10 +516,18 @@ function buildStatement(
       ) {
         const revenueKey = "revenue";
         const marginAmounts: Record<string, number> = {};
+        const pyMarginAmounts: Record<string, number> | undefined = hasPY
+          ? {}
+          : undefined;
         for (const bucket of buckets) {
           const revenue = sectionTotals[revenueKey]?.[bucket.key] ?? 0;
           marginAmounts[bucket.key] =
             revenue !== 0 ? amounts[bucket.key] / revenue : 0;
+          if (hasPY && pyMarginAmounts && compPyAmounts) {
+            const pyRevenue = sectionPyTotals[revenueKey]?.[bucket.key] ?? 0;
+            pyMarginAmounts[bucket.key] =
+              pyRevenue !== 0 ? compPyAmounts[bucket.key] / pyRevenue : 0;
+          }
         }
 
         const marginLabel =
@@ -436,6 +545,7 @@ function buildStatement(
             id: `${comp.id}_margin`,
             label: marginLabel,
             amounts: marginAmounts,
+            priorYearAmounts: pyMarginAmounts,
             indent: 1,
             isTotal: false,
             isGrandTotal: false,
@@ -464,9 +574,13 @@ function buildCashFlowStatement(
   aggregated: Map<string, BucketedAmounts>,
   buckets: PeriodBucket[],
   depreciationByBucket: Record<string, number>,
-  netIncomeByBucket: Record<string, number>
+  netIncomeByBucket: Record<string, number>,
+  pyAggregated?: Map<string, BucketedAmounts>,
+  pyDepreciationByBucket?: Record<string, number>,
+  pyNetIncomeByBucket?: Record<string, number>
 ): StatementData {
   const sections: StatementSection[] = [];
+  const hasPY = !!pyAggregated;
 
   // --- OPERATING ACTIVITIES ---
   const operatingLines: LineItem[] = [];
@@ -476,6 +590,7 @@ function buildCashFlowStatement(
     id: "cf-net-income",
     label: "Net income",
     amounts: { ...netIncomeByBucket },
+    priorYearAmounts: hasPY ? { ...pyNetIncomeByBucket! } : undefined,
     indent: 1,
     isTotal: false,
     isGrandTotal: false,
@@ -501,6 +616,7 @@ function buildCashFlowStatement(
     id: "cf-depreciation",
     label: "Depreciation and amortization",
     amounts: { ...depreciationByBucket },
+    priorYearAmounts: hasPY ? { ...pyDepreciationByBucket! } : undefined,
     indent: 1,
     isTotal: false,
     isGrandTotal: false,
@@ -530,29 +646,44 @@ function buildCashFlowStatement(
     OPERATING_CURRENT_LIABILITY_TYPES.includes(a.accountType)
   );
 
-  let operatingTotal: Record<string, number> = {};
+  const operatingTotal: Record<string, number> = {};
+  const pyOperatingTotal: Record<string, number> = {};
   for (const bucket of buckets) {
     operatingTotal[bucket.key] =
       (netIncomeByBucket[bucket.key] ?? 0) +
       (depreciationByBucket[bucket.key] ?? 0);
+    pyOperatingTotal[bucket.key] = hasPY
+      ? (pyNetIncomeByBucket![bucket.key] ?? 0) +
+        (pyDepreciationByBucket![bucket.key] ?? 0)
+      : 0;
   }
 
   // Working capital asset changes (increase in asset = cash outflow, negative)
   for (const account of wcAssets) {
     const bucketed = aggregated.get(account.id);
+    const pyBucketed = hasPY ? pyAggregated!.get(account.id) : undefined;
     const amounts: Record<string, number> = {};
+    const pyAmounts: Record<string, number> | undefined = hasPY ? {} : undefined;
     for (const bucket of buckets) {
-      // Change = ending - beginning for the bucket period
       const change =
         (bucketed?.endingBalance[bucket.key] ?? 0) -
         (bucketed?.beginningBalance[bucket.key] ?? 0);
-      amounts[bucket.key] = -change; // increase in assets = cash outflow
+      amounts[bucket.key] = -change;
       operatingTotal[bucket.key] += -change;
+
+      if (hasPY && pyAmounts) {
+        const pyChange =
+          (pyBucketed?.endingBalance[bucket.key] ?? 0) -
+          (pyBucketed?.beginningBalance[bucket.key] ?? 0);
+        pyAmounts[bucket.key] = -pyChange;
+        pyOperatingTotal[bucket.key] += -pyChange;
+      }
     }
     operatingLines.push({
       id: `cf-wc-${account.id}`,
       label: account.name,
       amounts,
+      priorYearAmounts: pyAmounts,
       indent: 1,
       isTotal: false,
       isGrandTotal: false,
@@ -565,18 +696,29 @@ function buildCashFlowStatement(
   // Working capital liability changes (increase in liability = cash inflow, positive)
   for (const account of wcLiabilities) {
     const bucketed = aggregated.get(account.id);
+    const pyBucketed = hasPY ? pyAggregated!.get(account.id) : undefined;
     const amounts: Record<string, number> = {};
+    const pyAmounts: Record<string, number> | undefined = hasPY ? {} : undefined;
     for (const bucket of buckets) {
       const change =
         (bucketed?.endingBalance[bucket.key] ?? 0) -
         (bucketed?.beginningBalance[bucket.key] ?? 0);
-      amounts[bucket.key] = change; // increase in liabilities = cash inflow
+      amounts[bucket.key] = change;
       operatingTotal[bucket.key] += change;
+
+      if (hasPY && pyAmounts) {
+        const pyChange =
+          (pyBucketed?.endingBalance[bucket.key] ?? 0) -
+          (pyBucketed?.beginningBalance[bucket.key] ?? 0);
+        pyAmounts[bucket.key] = pyChange;
+        pyOperatingTotal[bucket.key] += pyChange;
+      }
     }
     operatingLines.push({
       id: `cf-wc-${account.id}`,
       label: account.name,
       amounts,
+      priorYearAmounts: pyAmounts,
       indent: 1,
       isTotal: false,
       isGrandTotal: false,
@@ -594,6 +736,7 @@ function buildCashFlowStatement(
       id: "cf-operating-total",
       label: "Net cash provided by (used in) operating activities",
       amounts: operatingTotal,
+      priorYearAmounts: hasPY ? { ...pyOperatingTotal } : undefined,
       indent: 0,
       isTotal: true,
       isGrandTotal: false,
@@ -608,29 +751,38 @@ function buildCashFlowStatement(
     INVESTING_ACCOUNT_TYPES.includes(a.accountType)
   );
   const investingLines: LineItem[] = [];
-  let investingTotal: Record<string, number> = {};
+  const investingTotal: Record<string, number> = {};
+  const pyInvestingTotal: Record<string, number> = {};
   for (const bucket of buckets) {
     investingTotal[bucket.key] = 0;
+    pyInvestingTotal[bucket.key] = 0;
   }
 
   for (const account of investingAccounts) {
     const bucketed = aggregated.get(account.id);
+    const pyBucketed = hasPY ? pyAggregated!.get(account.id) : undefined;
     const amounts: Record<string, number> = {};
+    const pyAmounts: Record<string, number> | undefined = hasPY ? {} : undefined;
     for (const bucket of buckets) {
       const change =
         (bucketed?.endingBalance[bucket.key] ?? 0) -
         (bucketed?.beginningBalance[bucket.key] ?? 0);
-      // Add back depreciation that was already counted in operating
-      // (fixed asset NBV decreased by depreciation — that's not a cash outflow from investing)
-      const adjustedChange = -change + (depreciationByBucket[bucket.key] ?? 0);
-      // Actually, simpler: just use net change in the account
       amounts[bucket.key] = -change;
       investingTotal[bucket.key] += -change;
+
+      if (hasPY && pyAmounts) {
+        const pyChange =
+          (pyBucketed?.endingBalance[bucket.key] ?? 0) -
+          (pyBucketed?.beginningBalance[bucket.key] ?? 0);
+        pyAmounts[bucket.key] = -pyChange;
+        pyInvestingTotal[bucket.key] += -pyChange;
+      }
     }
     investingLines.push({
       id: `cf-inv-${account.id}`,
       label: account.name,
       amounts,
+      priorYearAmounts: pyAmounts,
       indent: 1,
       isTotal: false,
       isGrandTotal: false,
@@ -648,6 +800,7 @@ function buildCashFlowStatement(
       id: "cf-investing-total",
       label: "Net cash used in investing activities",
       amounts: investingTotal,
+      priorYearAmounts: hasPY ? { ...pyInvestingTotal } : undefined,
       indent: 0,
       isTotal: true,
       isGrandTotal: false,
@@ -665,25 +818,38 @@ function buildCashFlowStatement(
     FINANCING_EQUITY_TYPES.includes(a.accountType)
   );
   const financingLines: LineItem[] = [];
-  let financingTotal: Record<string, number> = {};
+  const financingTotal: Record<string, number> = {};
+  const pyFinancingTotal: Record<string, number> = {};
   for (const bucket of buckets) {
     financingTotal[bucket.key] = 0;
+    pyFinancingTotal[bucket.key] = 0;
   }
 
   for (const account of [...financingLiabilities, ...financingEquity]) {
     const bucketed = aggregated.get(account.id);
+    const pyBucketed = hasPY ? pyAggregated!.get(account.id) : undefined;
     const amounts: Record<string, number> = {};
+    const pyAmounts: Record<string, number> | undefined = hasPY ? {} : undefined;
     for (const bucket of buckets) {
       const change =
         (bucketed?.endingBalance[bucket.key] ?? 0) -
         (bucketed?.beginningBalance[bucket.key] ?? 0);
       amounts[bucket.key] = change;
       financingTotal[bucket.key] += change;
+
+      if (hasPY && pyAmounts) {
+        const pyChange =
+          (pyBucketed?.endingBalance[bucket.key] ?? 0) -
+          (pyBucketed?.beginningBalance[bucket.key] ?? 0);
+        pyAmounts[bucket.key] = pyChange;
+        pyFinancingTotal[bucket.key] += pyChange;
+      }
     }
     financingLines.push({
       id: `cf-fin-${account.id}`,
       label: account.name,
       amounts,
+      priorYearAmounts: pyAmounts,
       indent: 1,
       isTotal: false,
       isGrandTotal: false,
@@ -701,6 +867,7 @@ function buildCashFlowStatement(
       id: "cf-financing-total",
       label: "Net cash provided by (used in) financing activities",
       amounts: financingTotal,
+      priorYearAmounts: hasPY ? { ...pyFinancingTotal } : undefined,
       indent: 0,
       isTotal: true,
       isGrandTotal: false,
@@ -714,6 +881,9 @@ function buildCashFlowStatement(
   const netCashChange: Record<string, number> = {};
   const cashBeginning: Record<string, number> = {};
   const cashEnding: Record<string, number> = {};
+  const pyNetCashChange: Record<string, number> = {};
+  const pyCashBeginning: Record<string, number> = {};
+  const pyCashEnding: Record<string, number> = {};
 
   const cashAccounts = accounts.filter((a) =>
     CASH_ACCOUNT_TYPES.includes(a.accountType)
@@ -734,6 +904,23 @@ function buildCashFlowStatement(
     }
     cashBeginning[bucket.key] = beginBal;
     cashEnding[bucket.key] = endBal;
+
+    if (hasPY) {
+      pyNetCashChange[bucket.key] =
+        pyOperatingTotal[bucket.key] +
+        pyInvestingTotal[bucket.key] +
+        pyFinancingTotal[bucket.key];
+
+      let pyBeginBal = 0;
+      let pyEndBal = 0;
+      for (const ca of cashAccounts) {
+        const pyBucketed = pyAggregated!.get(ca.id);
+        pyBeginBal += pyBucketed?.beginningBalance[bucket.key] ?? 0;
+        pyEndBal += pyBucketed?.endingBalance[bucket.key] ?? 0;
+      }
+      pyCashBeginning[bucket.key] = pyBeginBal;
+      pyCashEnding[bucket.key] = pyEndBal;
+    }
   }
 
   sections.push({
@@ -744,6 +931,7 @@ function buildCashFlowStatement(
         id: "cf-net-change",
         label: "NET INCREASE (DECREASE) IN CASH",
         amounts: netCashChange,
+        priorYearAmounts: hasPY ? pyNetCashChange : undefined,
         indent: 0,
         isTotal: true,
         isGrandTotal: false,
@@ -755,6 +943,7 @@ function buildCashFlowStatement(
         id: "cf-cash-beginning",
         label: "Cash at beginning of period",
         amounts: cashBeginning,
+        priorYearAmounts: hasPY ? pyCashBeginning : undefined,
         indent: 1,
         isTotal: false,
         isGrandTotal: false,
@@ -767,6 +956,7 @@ function buildCashFlowStatement(
       id: "cf-cash-ending",
       label: "CASH AT END OF PERIOD",
       amounts: cashEnding,
+      priorYearAmounts: hasPY ? pyCashEnding : undefined,
       indent: 0,
       isTotal: false,
       isGrandTotal: true,
@@ -808,6 +998,7 @@ export async function GET(request: Request) {
   const granularity = (searchParams.get("granularity") ?? "monthly") as Granularity;
   const includeBudget = searchParams.get("includeBudget") === "true";
   const includeYoY = searchParams.get("includeYoY") === "true";
+  const includeProForma = searchParams.get("includeProForma") === "true";
 
   if (scope === "entity" && !entityId) {
     return NextResponse.json(
@@ -976,6 +1167,24 @@ export async function GET(request: Request) {
       }
     }
 
+    // --- Pro Forma Adjustments (entity scope) ---
+    if (includeProForma) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- pro_forma_adjustments not in generated types
+      const { data: proFormaRows } = await (admin as any)
+        .from("pro_forma_adjustments")
+        .select("master_account_id, period_year, period_month, amount")
+        .eq("entity_id", entityId!)
+        .eq("is_excluded", false);
+
+      if (proFormaRows && proFormaRows.length > 0) {
+        injectProFormaAdjustments(
+          consolidatedBalances,
+          proFormaRows as RawProFormaAdjustment[],
+          entityId!
+        );
+      }
+    }
+
     // Aggregate into buckets
     const aggregated = aggregateByBucket(
       consolidatedAccounts,
@@ -983,8 +1192,16 @@ export async function GET(request: Request) {
       buckets
     );
 
+    // Prior year aggregation for YoY
+    let pyAggregated: Map<string, BucketedAmounts> | undefined;
+    if (includeYoY) {
+      const pyBuckets = createPriorYearBuckets(buckets);
+      pyAggregated = aggregateByBucket(consolidatedAccounts, consolidatedBalances, pyBuckets);
+    }
+
     // Get depreciation data for cash flow
     const depreciationByBucket: Record<string, number> = {};
+    const pyDepreciationByBucket: Record<string, number> = {};
     {
       const { data: assetIds } = await admin
         .from("fixed_assets")
@@ -994,17 +1211,23 @@ export async function GET(request: Request) {
       const ids = (assetIds ?? []).map((a) => a.id);
       for (const bucket of buckets) {
         depreciationByBucket[bucket.key] = 0;
+        pyDepreciationByBucket[bucket.key] = 0;
       }
 
       if (ids.length > 0) {
         const uniqueYears = [
           ...new Set(buckets.flatMap((b) => b.months.map((m) => m.year))),
         ];
+        // Include prior years for YoY depreciation
+        const allDepYears = includeYoY
+          ? [...new Set([...uniqueYears, ...uniqueYears.map((y) => y - 1)])]
+          : uniqueYears;
+
         const { data: depRows } = await admin
           .from("fixed_asset_depreciation")
           .select("period_year, period_month, book_depreciation")
           .in("fixed_asset_id", ids)
-          .in("period_year", uniqueYears);
+          .in("period_year", allDepYears);
 
         // Aggregate into buckets
         for (const bucket of buckets) {
@@ -1014,6 +1237,21 @@ export async function GET(request: Request) {
           for (const row of depRows ?? []) {
             if (monthSet.has(`${row.period_year}-${row.period_month}`)) {
               depreciationByBucket[bucket.key] += row.book_depreciation;
+            }
+          }
+        }
+
+        // Prior year depreciation
+        if (includeYoY) {
+          const pyBuckets = createPriorYearBuckets(buckets);
+          for (const bucket of pyBuckets) {
+            const monthSet = new Set(
+              bucket.months.map((m) => `${m.year}-${m.month}`)
+            );
+            for (const row of depRows ?? []) {
+              if (monthSet.has(`${row.period_year}-${row.period_month}`)) {
+                pyDepreciationByBucket[bucket.key] += row.book_depreciation;
+              }
             }
           }
         }
@@ -1074,11 +1312,13 @@ export async function GET(request: Request) {
       aggregated,
       buckets,
       true, // use net_change
-      budgetByAccount
+      budgetByAccount,
+      pyAggregated
     );
 
     // Extract net income by bucket for cash flow
     const netIncomeByBucket: Record<string, number> = {};
+    const pyNetIncomeByBucket: Record<string, number> = {};
     const netIncomeSection = incomeStatement.sections.find(
       (s) => s.id === "net_income"
     );
@@ -1086,10 +1326,13 @@ export async function GET(request: Request) {
       for (const bucket of buckets) {
         netIncomeByBucket[bucket.key] =
           netIncomeSection.subtotalLine.amounts[bucket.key] ?? 0;
+        pyNetIncomeByBucket[bucket.key] =
+          netIncomeSection.subtotalLine.priorYearAmounts?.[bucket.key] ?? 0;
       }
     } else {
       for (const bucket of buckets) {
         netIncomeByBucket[bucket.key] = 0;
+        pyNetIncomeByBucket[bucket.key] = 0;
       }
     }
 
@@ -1102,7 +1345,9 @@ export async function GET(request: Request) {
       consolidatedAccounts,
       aggregated,
       buckets,
-      false // use ending_balance
+      false, // use ending_balance
+      undefined, // no budget for BS
+      pyAggregated
     );
 
     // Build Cash Flow Statement
@@ -1111,7 +1356,10 @@ export async function GET(request: Request) {
       aggregated,
       buckets,
       depreciationByBucket,
-      netIncomeByBucket
+      netIncomeByBucket,
+      includeYoY ? pyAggregated : undefined,
+      includeYoY ? pyDepreciationByBucket : undefined,
+      includeYoY ? pyNetIncomeByBucket : undefined
     );
 
     // Build periods array
@@ -1291,12 +1539,37 @@ export async function GET(request: Request) {
       }
     }
 
+    // --- Pro Forma Adjustments (organization scope) ---
+    if (includeProForma) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- pro_forma_adjustments not in generated types
+      const { data: proFormaRows } = await (admin as any)
+        .from("pro_forma_adjustments")
+        .select("master_account_id, period_year, period_month, amount")
+        .eq("organization_id", organizationId!)
+        .eq("is_excluded", false);
+
+      if (proFormaRows && proFormaRows.length > 0) {
+        injectProFormaAdjustments(
+          consolidatedBalances,
+          proFormaRows as RawProFormaAdjustment[],
+          "consolidated"
+        );
+      }
+    }
+
     // Aggregate into buckets
     const aggregated = aggregateByBucket(
       consolidatedAccounts,
       consolidatedBalances,
       buckets
     );
+
+    // Prior year aggregation for YoY
+    let pyAggregated: Map<string, BucketedAmounts> | undefined;
+    if (includeYoY) {
+      const pyBuckets = createPriorYearBuckets(buckets);
+      pyAggregated = aggregateByBucket(consolidatedAccounts, consolidatedBalances, pyBuckets);
+    }
 
     // Get depreciation across all entities
     const { data: entities } = await admin
@@ -1307,8 +1580,10 @@ export async function GET(request: Request) {
 
     const entityIds = (entities ?? []).map((e) => e.id);
     const depreciationByBucket: Record<string, number> = {};
+    const pyDepreciationByBucket: Record<string, number> = {};
     for (const bucket of buckets) {
       depreciationByBucket[bucket.key] = 0;
+      pyDepreciationByBucket[bucket.key] = 0;
     }
 
     if (entityIds.length > 0) {
@@ -1322,11 +1597,16 @@ export async function GET(request: Request) {
         const uniqueYears = [
           ...new Set(buckets.flatMap((b) => b.months.map((m) => m.year))),
         ];
+        // Include prior years for YoY depreciation
+        const allDepYears = includeYoY
+          ? [...new Set([...uniqueYears, ...uniqueYears.map((y) => y - 1)])]
+          : uniqueYears;
+
         const { data: depRows } = await admin
           .from("fixed_asset_depreciation")
           .select("period_year, period_month, book_depreciation")
           .in("fixed_asset_id", ids)
-          .in("period_year", uniqueYears);
+          .in("period_year", allDepYears);
 
         for (const bucket of buckets) {
           const monthSet = new Set(
@@ -1335,6 +1615,21 @@ export async function GET(request: Request) {
           for (const row of depRows ?? []) {
             if (monthSet.has(`${row.period_year}-${row.period_month}`)) {
               depreciationByBucket[bucket.key] += row.book_depreciation;
+            }
+          }
+        }
+
+        // Prior year depreciation
+        if (includeYoY) {
+          const pyBuckets = createPriorYearBuckets(buckets);
+          for (const bucket of pyBuckets) {
+            const monthSet = new Set(
+              bucket.months.map((m) => `${m.year}-${m.month}`)
+            );
+            for (const row of depRows ?? []) {
+              if (monthSet.has(`${row.period_year}-${row.period_month}`)) {
+                pyDepreciationByBucket[bucket.key] += row.book_depreciation;
+              }
             }
           }
         }
@@ -1393,16 +1688,20 @@ export async function GET(request: Request) {
       aggregated,
       buckets,
       true,
-      orgBudgetByAccount
+      orgBudgetByAccount,
+      pyAggregated
     );
 
     const netIncomeByBucket: Record<string, number> = {};
+    const pyNetIncomeByBucket: Record<string, number> = {};
     const netIncomeSection = incomeStatement.sections.find(
       (s) => s.id === "net_income"
     );
     for (const bucket of buckets) {
       netIncomeByBucket[bucket.key] =
         netIncomeSection?.subtotalLine?.amounts[bucket.key] ?? 0;
+      pyNetIncomeByBucket[bucket.key] =
+        netIncomeSection?.subtotalLine?.priorYearAmounts?.[bucket.key] ?? 0;
     }
 
     // Balance Sheet (no budget — P&L only)
@@ -1414,7 +1713,9 @@ export async function GET(request: Request) {
       consolidatedAccounts,
       aggregated,
       buckets,
-      false
+      false,
+      undefined, // no budget for BS
+      pyAggregated
     );
 
     const cashFlowStatement = buildCashFlowStatement(
@@ -1422,7 +1723,10 @@ export async function GET(request: Request) {
       aggregated,
       buckets,
       depreciationByBucket,
-      netIncomeByBucket
+      netIncomeByBucket,
+      includeYoY ? pyAggregated : undefined,
+      includeYoY ? pyDepreciationByBucket : undefined,
+      includeYoY ? pyNetIncomeByBucket : undefined
     );
 
     const periods: Period[] = buckets.map((b) => ({

@@ -2,7 +2,7 @@
 
 export type Granularity = "monthly" | "quarterly" | "yearly";
 export type Scope = "entity" | "organization";
-export type StatementTab = "income-statement" | "balance-sheet" | "cash-flow" | "all";
+export type StatementTab = "income-statement" | "balance-sheet" | "cash-flow" | "pro-forma" | "all";
 
 /** A single time period column in the statements */
 export interface Period {
@@ -77,4 +77,27 @@ export interface FinancialModelConfig {
   granularity: Granularity;
   includeBudget: boolean;
   includeYoY: boolean;
+  includeProForma: boolean;
+}
+
+/** A pro forma adjustment row from the database */
+export interface ProFormaAdjustment {
+  id: string;
+  organization_id: string;
+  entity_id: string;
+  master_account_id: string;
+  period_year: number;
+  period_month: number;
+  amount: number;
+  description: string;
+  notes: string | null;
+  is_excluded: boolean;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+  // Joined fields for display
+  entity_name?: string;
+  entity_code?: string;
+  master_account_name?: string;
+  master_account_number?: string;
 }
