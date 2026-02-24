@@ -964,7 +964,7 @@ export default function CommissionsPage() {
 
       {/* Add/Edit Salesperson Dialog */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-w-4xl">
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>
               {editingProfile ? "Edit Salesperson" : "Add Salesperson"}
@@ -1014,7 +1014,8 @@ export default function CommissionsPage() {
                 value={formNotes}
                 onChange={(e) => setFormNotes(e.target.value)}
                 placeholder="Additional notes..."
-                rows={2}
+                rows={3}
+                className="max-h-[120px] resize-none"
               />
             </div>
 
