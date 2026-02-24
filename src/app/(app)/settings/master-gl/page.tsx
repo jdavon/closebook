@@ -706,7 +706,7 @@ export default function MasterGLPage() {
                                           </Badge>
                                         );
                                       }))
-                                    )}
+                                    }
                                   </div>
                                 </TableCell>
                                 <TableCell>
