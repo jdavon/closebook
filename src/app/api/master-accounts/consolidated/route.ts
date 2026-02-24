@@ -112,7 +112,16 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: balError.message }, { status: 500 });
     }
 
-    glBalances = balances ?? [];
+    // Coerce numeric fields from Supabase strings to JS numbers
+    glBalances = (balances ?? []).map((b) => ({
+      account_id: b.account_id,
+      entity_id: b.entity_id,
+      ending_balance: Number(b.ending_balance),
+      debit_total: Number(b.debit_total),
+      credit_total: Number(b.credit_total),
+      net_change: Number(b.net_change),
+      beginning_balance: Number(b.beginning_balance),
+    }));
   }
 
   // Get entities for entity names

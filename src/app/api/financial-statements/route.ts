@@ -51,6 +51,24 @@ interface RawAccount {
 }
 
 // ---------------------------------------------------------------------------
+// Helper: coerce Supabase numeric(19,4) fields from strings to numbers.
+// PostgREST returns numeric/decimal columns as strings, not JS numbers.
+// ---------------------------------------------------------------------------
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function parseGLBalance(row: any): RawGLBalance {
+  return {
+    account_id: row.account_id,
+    entity_id: row.entity_id,
+    period_year: Number(row.period_year),
+    period_month: Number(row.period_month),
+    beginning_balance: Number(row.beginning_balance),
+    ending_balance: Number(row.ending_balance),
+    net_change: Number(row.net_change),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Helper: build all individual (year, month) tuples we need to query
 // ---------------------------------------------------------------------------
 
@@ -136,7 +154,7 @@ function aggregateBudgetByBucket(
       budgetIndex.set(ba.account_id, byPeriod);
     }
     const key = `${ba.period_year}-${ba.period_month}`;
-    byPeriod.set(key, (byPeriod.get(key) ?? 0) + ba.amount);
+    byPeriod.set(key, (byPeriod.get(key) ?? 0) + Number(ba.amount));
   }
 
   // Aggregate by master account and bucket
@@ -195,17 +213,17 @@ function injectProFormaAdjustments(
     const key = `${adj.master_account_id}-${adj.period_year}-${adj.period_month}`;
     const existing = balIndex.get(key);
     if (existing) {
-      existing.net_change += adj.amount;
-      existing.ending_balance += adj.amount;
+      existing.net_change += Number(adj.amount);
+      existing.ending_balance += Number(adj.amount);
     } else {
       const newBal: RawGLBalance = {
         account_id: adj.master_account_id,
         entity_id: entityId,
-        period_year: adj.period_year,
-        period_month: adj.period_month,
+        period_year: Number(adj.period_year),
+        period_month: Number(adj.period_month),
         beginning_balance: 0,
-        ending_balance: adj.amount,
-        net_change: adj.amount,
+        ending_balance: Number(adj.amount),
+        net_change: Number(adj.amount),
       };
       consolidatedBalances.push(newBal);
       balIndex.set(key, newBal);
@@ -1081,7 +1099,8 @@ export async function GET(request: Request) {
       .from("master_account_mappings")
       .select("master_account_id, entity_id, account_id")
       .in("master_account_id", masterAccountIds)
-      .eq("entity_id", entityId!);
+      .eq("entity_id", entityId!)
+      .limit(10000);
 
     // Get GL balances for mapped accounts
     const mappedAccountIds = (mappings ?? []).map((m) => m.account_id);
@@ -1095,14 +1114,16 @@ export async function GET(request: Request) {
           "account_id, entity_id, period_year, period_month, beginning_balance, ending_balance, net_change"
         )
         .in("account_id", mappedAccountIds)
-        .in("period_year", uniqueYears);
+        .in("period_year", uniqueYears)
+        .limit(10000);
 
       const monthSet = new Set(
         allMonths.map(
           (m) => `${m.year}-${String(m.month).padStart(2, "0")}`
         )
       );
-      glBalances = (balances ?? []).filter((b) =>
+      // Coerce numeric fields from Supabase strings to JS numbers
+      glBalances = (balances ?? []).map(parseGLBalance).filter((b) =>
         monthSet.has(
           `${b.period_year}-${String(b.period_month).padStart(2, "0")}`
         )
@@ -1236,7 +1257,7 @@ export async function GET(request: Request) {
           );
           for (const row of depRows ?? []) {
             if (monthSet.has(`${row.period_year}-${row.period_month}`)) {
-              depreciationByBucket[bucket.key] += row.book_depreciation;
+              depreciationByBucket[bucket.key] += Number(row.book_depreciation);
             }
           }
         }
@@ -1250,7 +1271,7 @@ export async function GET(request: Request) {
             );
             for (const row of depRows ?? []) {
               if (monthSet.has(`${row.period_year}-${row.period_month}`)) {
-                pyDepreciationByBucket[bucket.key] += row.book_depreciation;
+                pyDepreciationByBucket[bucket.key] += Number(row.book_depreciation);
               }
             }
           }
@@ -1450,7 +1471,8 @@ export async function GET(request: Request) {
     const { data: mappings } = await admin
       .from("master_account_mappings")
       .select("master_account_id, entity_id, account_id")
-      .in("master_account_id", masterAccountIds);
+      .in("master_account_id", masterAccountIds)
+      .limit(10000);
 
     // Get GL balances for mapped accounts
     const mappedAccountIds = (mappings ?? []).map((m) => m.account_id);
@@ -1464,14 +1486,16 @@ export async function GET(request: Request) {
           "account_id, entity_id, period_year, period_month, beginning_balance, ending_balance, net_change"
         )
         .in("account_id", mappedAccountIds)
-        .in("period_year", uniqueYears);
+        .in("period_year", uniqueYears)
+        .limit(10000);
 
       const monthSet = new Set(
         allMonths.map(
           (m) => `${m.year}-${String(m.month).padStart(2, "0")}`
         )
       );
-      glBalances = (balances ?? []).filter((b) =>
+      // Coerce numeric fields from Supabase strings to JS numbers
+      glBalances = (balances ?? []).map(parseGLBalance).filter((b) =>
         monthSet.has(
           `${b.period_year}-${String(b.period_month).padStart(2, "0")}`
         )
@@ -1614,7 +1638,7 @@ export async function GET(request: Request) {
           );
           for (const row of depRows ?? []) {
             if (monthSet.has(`${row.period_year}-${row.period_month}`)) {
-              depreciationByBucket[bucket.key] += row.book_depreciation;
+              depreciationByBucket[bucket.key] += Number(row.book_depreciation);
             }
           }
         }
@@ -1628,7 +1652,7 @@ export async function GET(request: Request) {
             );
             for (const row of depRows ?? []) {
               if (monthSet.has(`${row.period_year}-${row.period_month}`)) {
-                pyDepreciationByBucket[bucket.key] += row.book_depreciation;
+                pyDepreciationByBucket[bucket.key] += Number(row.book_depreciation);
               }
             }
           }
