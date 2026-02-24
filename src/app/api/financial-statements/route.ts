@@ -441,7 +441,7 @@ function buildStatement(
     // Subtotal line
     const subtotalLine: LineItem = {
       id: `${config.id}-total`,
-      label: `Total ${config.title.charAt(0)}${config.title.slice(1).toLowerCase()}`,
+      label: config.title ? `Total ${config.title}` : "",
       amounts: totals,
       budgetAmounts: hasBudget ? { ...budgetTotals } : undefined,
       priorYearAmounts: hasPY ? { ...pyTotals } : undefined,
@@ -528,8 +528,8 @@ function buildStatement(
 
       // Add margin % line for key totals
       if (
-        comp.id === "gross_profit" ||
-        comp.id === "operating_income" ||
+        comp.id === "gross_margin" ||
+        comp.id === "operating_margin" ||
         comp.id === "net_income"
       ) {
         const revenueKey = "revenue";
@@ -549,9 +549,9 @@ function buildStatement(
         }
 
         const marginLabel =
-          comp.id === "gross_profit"
+          comp.id === "gross_margin"
             ? "Gross Margin %"
-            : comp.id === "operating_income"
+            : comp.id === "operating_margin"
               ? "Operating Margin %"
               : "Net Income Margin %";
 

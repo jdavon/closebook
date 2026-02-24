@@ -354,9 +354,9 @@ export default function BudgetPage({
   function getComputedLinesAfter(sectionId: string): ComputedLine[] {
     if (!viewData) return [];
     const sectionOrder: Record<string, string> = {
-      cogs: "gross_profit",
-      operating_expenses: "operating_income",
-      other_expense: "net_income",
+      direct_operating_costs: "gross_margin",
+      other_operating_costs: "operating_margin",
+      other_income: "net_income",
     };
     const expectedId = sectionOrder[sectionId];
     if (!expectedId) return [];

@@ -259,6 +259,28 @@ export function StatementTable({
               );
             }
 
+            // Headerless section with lines (below-the-line items) — render lines only, no header or subtotal
+            if (!hasTitle && hasLines) {
+              return (
+                <tbody key={section.id}>
+                  {section.lines.map((line) => {
+                    const isStriped = stripeIndex % 2 === 0;
+                    stripeIndex++;
+                    return (
+                      <tr
+                        key={line.id}
+                        className={`stmt-line-item ${isStriped ? "stmt-row-striped" : ""}`}
+                      >
+                        <td style={{ paddingLeft: "2rem" }}>{line.label}</td>
+                        {renderPeriodCells(line, "budget-row")}
+                        {showYoY && renderYoYCells(line)}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              );
+            }
+
             // Section with title and lines
             return (
               <tbody key={section.id}>
