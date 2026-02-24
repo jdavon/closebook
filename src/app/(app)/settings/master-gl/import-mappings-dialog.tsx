@@ -256,9 +256,10 @@ export function ImportMappingsDialog({
       <DialogContent
         className={
           step === 3
-            ? "max-w-5xl max-h-[85vh] flex flex-col"
-            : "max-w-lg"
+            ? "max-h-[85vh] flex flex-col"
+            : ""
         }
+        style={step === 3 ? { maxWidth: "64rem" } : undefined}
       >
         {/* Step indicator */}
         <div className="flex items-center gap-1 mb-2">
@@ -507,7 +508,7 @@ export function ImportMappingsDialog({
             </div>
 
             {/* Preview table */}
-            <div className="flex-1 overflow-y-auto border rounded-md min-h-0">
+            <div className="flex-1 overflow-auto border rounded-md min-h-0">
               <Table>
                 <TableHeader>
                   <TableRow>
