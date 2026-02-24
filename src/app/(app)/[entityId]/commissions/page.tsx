@@ -964,7 +964,7 @@ export default function CommissionsPage() {
 
       {/* Add/Edit Salesperson Dialog */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">
+        <DialogContent className="max-w-4xl">
           <DialogHeader>
             <DialogTitle>
               {editingProfile ? "Edit Salesperson" : "Add Salesperson"}
