@@ -67,6 +67,7 @@ import {
   ChevronsUpDown,
   X,
   Loader2,
+  AlertTriangle,
 } from "lucide-react";
 import {
   formatCurrency,
@@ -169,6 +170,9 @@ export default function CommissionsPage() {
     Record<string, number>
   >({}); // key: `${account_id}__${class_id}`
 
+  // Diagnostics
+  const [missingClassData, setMissingClassData] = useState(false);
+
   // UI
   const [loading, setLoading] = useState(true);
   const [calculating, setCalculating] = useState(false);
@@ -265,12 +269,25 @@ export default function CommissionsPage() {
     }
     setClassBalances(classBalanceMap);
 
+    // Check if any assignments use include/exclude but class data is missing
+    setMissingClassData(false); // Reset; will be checked in useEffect after state settles
+
     setLoading(false);
   }, [entityId, periodYear, periodMonth, supabase]);
 
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  // Check for missing class balance data when assignments or classBalances change
+  useEffect(() => {
+    const allAssignments = Object.values(assignments).flat();
+    const hasClassFilters = allAssignments.some(
+      (a) => a.class_filter_mode === "include" || a.class_filter_mode === "exclude"
+    );
+    const hasClassBalanceData = Object.keys(classBalances).length > 0;
+    setMissingClassData(hasClassFilters && !hasClassBalanceData);
+  }, [assignments, classBalances]);
 
   // ── Group accounts by classification ─────────────────────────────────
 
@@ -324,9 +341,16 @@ export default function CommissionsPage() {
       });
       const data = await res.json();
       if (data.success) {
-        toast.success(
-          `Calculated commissions for ${data.results.length} salesperson(s)`
-        );
+        if (data.warnings?.length > 0) {
+          toast.warning(
+            `Calculated with warnings: class-level GL data missing for some accounts. Sync P&L by Class from QBO.`,
+            { duration: 8000 }
+          );
+        } else {
+          toast.success(
+            `Calculated commissions for ${data.results.length} salesperson(s)`
+          );
+        }
         await loadData();
       } else {
         toast.error(data.error || "Calculation failed");
@@ -699,6 +723,23 @@ export default function CommissionsPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Missing class balance data warning */}
+      {missingClassData && (
+        <div className="flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-200">
+          <AlertTriangle className="h-5 w-5 shrink-0" />
+          <div>
+            <p className="font-medium">
+              Class-level GL data not found for {getPeriodLabel(periodYear, periodMonth)}
+            </p>
+            <p className="text-amber-700 dark:text-amber-300 mt-0.5">
+              Some commission accounts use Include/Exclude class filters, but no
+              class balance data exists for this period. Run a QBO sync to
+              pull the P&amp;L by Class report, then recalculate.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Commissions Table */}
       <Card>

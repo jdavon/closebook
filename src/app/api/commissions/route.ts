@@ -207,6 +207,7 @@ export async function POST(request: Request) {
     }
 
     const results = [];
+    const warnings: string[] = [];
 
     for (const profile of profiles) {
       // Get assignments (with class filter mode)
@@ -276,6 +277,14 @@ export async function POST(request: Request) {
             0
           );
 
+          // Warn if class data is missing — exclude filter has no effect
+          if (!excludedClassBalances || excludedClassBalances.length === 0) {
+            const classNames = a.qbo_class_ids.join(", ");
+            warnings.push(
+              `${profile.name}: No class-level GL data found for account ${a.account_id} — exclude filter for class(es) [${classNames}] had no effect. Sync P&L by Class from QBO.`
+            );
+          }
+
           netChange = total - excludedSum;
         } else {
           // All classes: use full gl_balances (existing behavior)
@@ -331,7 +340,11 @@ export async function POST(request: Request) {
       });
     }
 
-    return NextResponse.json({ success: true, results });
+    return NextResponse.json({
+      success: true,
+      results,
+      ...(warnings.length > 0 ? { warnings } : {}),
+    });
   }
 
   // ── Mark as Payable ─────────────────────────────────────────────────
