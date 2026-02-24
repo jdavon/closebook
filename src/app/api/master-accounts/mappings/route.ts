@@ -54,7 +54,8 @@ export async function GET(request: Request) {
       )
     `
     )
-    .eq("master_accounts.organization_id", organizationId);
+    .eq("master_accounts.organization_id", organizationId)
+    .limit(5000);
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
