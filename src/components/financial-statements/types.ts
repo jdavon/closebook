@@ -2,6 +2,7 @@
 
 export type Granularity = "monthly" | "quarterly" | "yearly";
 export type Scope = "entity" | "organization";
+export type StatementTab = "income-statement" | "balance-sheet" | "cash-flow" | "all";
 
 /** A single time period column in the statements */
 export interface Period {

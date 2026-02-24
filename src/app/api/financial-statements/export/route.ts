@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import * as XLSX from "xlsx";
-import type { StatementData } from "@/components/financial-statements/types";
+import type { StatementData, StatementTab } from "@/components/financial-statements/types";
 
 // Re-use the main financial statements API logic by fetching from it internally
 async function fetchStatements(request: Request) {
@@ -124,15 +124,30 @@ export async function GET(request: Request) {
       XLSX.utils.book_append_sheet(wb, ws, sheetName);
     }
 
-    addSheet("Income Statement", incomeStatement);
-    addSheet("Balance Sheet", balanceSheet);
-    addSheet("Cash Flow", cashFlowStatement);
+    // Determine which statements to include based on the `statements` query param
+    const { searchParams } = new URL(request.url);
+    const statementsParam = (searchParams.get("statements") ?? "all") as StatementTab;
+
+    if (statementsParam === "all" || statementsParam === "income-statement") {
+      addSheet("Income Statement", incomeStatement);
+    }
+    if (statementsParam === "all" || statementsParam === "balance-sheet") {
+      addSheet("Balance Sheet", balanceSheet);
+    }
+    if (statementsParam === "all" || statementsParam === "cash-flow") {
+      addSheet("Cash Flow", cashFlowStatement);
+    }
 
     const xlsxBuffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
 
     const entityName =
       metadata?.entityName ?? metadata?.organizationName ?? "financial";
-    const filename = `${entityName.replace(/[^a-zA-Z0-9]/g, "_")}_statements_${metadata?.startPeriod}_to_${metadata?.endPeriod}.xlsx`;
+    const statementSuffix =
+      statementsParam === "income-statement" ? "income_statement"
+        : statementsParam === "balance-sheet" ? "balance_sheet"
+        : statementsParam === "cash-flow" ? "cash_flow"
+        : "statements";
+    const filename = `${entityName.replace(/[^a-zA-Z0-9]/g, "_")}_${statementSuffix}_${metadata?.startPeriod}_to_${metadata?.endPeriod}.xlsx`;
 
     return new Response(xlsxBuffer, {
       headers: {

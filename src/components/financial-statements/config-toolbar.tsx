@@ -10,8 +10,21 @@ import {
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Download, Printer } from "lucide-react";
-import type { Granularity } from "./types";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Download, Printer, ChevronDown } from "lucide-react";
+import type { Granularity, StatementTab } from "./types";
+
+const TAB_LABELS: Record<StatementTab, string> = {
+  "income-statement": "Income Statement",
+  "balance-sheet": "Balance Sheet",
+  "cash-flow": "Cash Flow",
+  all: "All Statements",
+};
 
 interface ConfigToolbarProps {
   startYear: number;
@@ -29,8 +42,10 @@ interface ConfigToolbarProps {
   onIncludeBudgetChange: (val: boolean) => void;
   onIncludeYoYChange: (val: boolean) => void;
   onExport: () => void;
+  onExportAll?: () => void;
   onPrint: () => void;
   loading?: boolean;
+  activeTab?: StatementTab;
 }
 
 const MONTHS = [
@@ -56,9 +71,13 @@ export function ConfigToolbar({
   onIncludeBudgetChange,
   onIncludeYoYChange,
   onExport,
+  onExportAll,
   onPrint,
   loading = false,
+  activeTab,
 }: ConfigToolbarProps) {
+  const isIndividualTab = activeTab && activeTab !== "all";
+
   return (
     <div className="stmt-no-print flex flex-wrap items-end gap-3 pb-4 border-b">
       {/* Start Period */}
@@ -181,16 +200,50 @@ export function ConfigToolbar({
 
       {/* Actions */}
       <div className="flex items-center gap-1">
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={onExport}
-          disabled={loading}
-          className="h-8 text-xs"
-        >
-          <Download className="h-3.5 w-3.5 mr-1" />
-          Export
-        </Button>
+        {isIndividualTab ? (
+          /* Split button: main exports current tab, dropdown offers "Export All" */
+          <div className="flex items-center">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onExport}
+              disabled={loading}
+              className="h-8 text-xs rounded-r-none border-r-0"
+            >
+              <Download className="h-3.5 w-3.5 mr-1" />
+              Export {TAB_LABELS[activeTab]}
+            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={loading}
+                  className="h-8 px-1.5 rounded-l-none"
+                >
+                  <ChevronDown className="h-3.5 w-3.5" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={onExportAll}>
+                  <Download className="h-3.5 w-3.5 mr-2" />
+                  Export All Statements
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        ) : (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onExport}
+            disabled={loading}
+            className="h-8 text-xs"
+          >
+            <Download className="h-3.5 w-3.5 mr-1" />
+            Export
+          </Button>
+        )}
         <Button
           variant="ghost"
           size="sm"

@@ -1,9 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { Card, CardContent } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
 import {
   Select,
   SelectContent,
@@ -12,14 +11,15 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { getCurrentPeriod } from "@/lib/utils/dates";
-import { StatementHeader } from "@/components/financial-statements/statement-header";
-import { StatementTable } from "@/components/financial-statements/statement-table";
+import { StatementCard } from "@/components/financial-statements/statement-card";
 import { ConfigToolbar } from "@/components/financial-statements/config-toolbar";
 import { useFinancialStatements } from "@/components/financial-statements/use-financial-statements";
 import type {
   Granularity,
   Scope,
+  StatementTab,
   FinancialModelConfig,
 } from "@/components/financial-statements/types";
 
@@ -47,6 +47,7 @@ export default function FinancialModelPage() {
   const [granularity, setGranularity] = useState<Granularity>("monthly");
   const [includeBudget, setIncludeBudget] = useState(false);
   const [includeYoY, setIncludeYoY] = useState(false);
+  const [activeTab, setActiveTab] = useState<StatementTab>("all");
 
   // Load organization
   const loadOrg = useCallback(async () => {
@@ -100,17 +101,8 @@ export default function FinancialModelPage() {
 
   const { data, loading, error } = useFinancialStatements(config, !!canFetch);
 
-  // Refs for jump navigation
-  const isRef = useRef<HTMLDivElement>(null);
-  const bsRef = useRef<HTMLDivElement>(null);
-  const cfRef = useRef<HTMLDivElement>(null);
-
-  function scrollTo(ref: React.RefObject<HTMLDivElement | null>) {
-    ref.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }
-
-  function handleExport() {
-    const params = new URLSearchParams({
+  function buildExportUrl(statements: StatementTab) {
+    const exportParams = new URLSearchParams({
       scope,
       startYear: String(startYear),
       startMonth: String(startMonth),
@@ -119,14 +111,23 @@ export default function FinancialModelPage() {
       granularity,
       includeBudget: String(includeBudget),
       includeYoY: String(includeYoY),
+      statements,
     });
     if (scope === "entity" && selectedEntityId) {
-      params.set("entityId", selectedEntityId);
+      exportParams.set("entityId", selectedEntityId);
     }
     if (scope === "organization" && organizationId) {
-      params.set("organizationId", organizationId);
+      exportParams.set("organizationId", organizationId);
     }
-    window.location.href = `/api/financial-statements/export?${params.toString()}`;
+    return `/api/financial-statements/export?${exportParams.toString()}`;
+  }
+
+  function handleExport() {
+    window.location.href = buildExportUrl(activeTab);
+  }
+
+  function handleExportAll() {
+    window.location.href = buildExportUrl("all");
   }
 
   function handlePrint() {
@@ -135,6 +136,17 @@ export default function FinancialModelPage() {
 
   const companyName =
     data?.metadata.organizationName ?? data?.metadata.entityName ?? "";
+
+  const titlePrefix = scope === "organization" ? "Consolidated " : "";
+
+  const sharedCardProps = {
+    companyName,
+    startYear,
+    startMonth,
+    endYear,
+    endMonth,
+    granularity,
+  };
 
   return (
     <div className="space-y-4">
@@ -205,39 +217,11 @@ export default function FinancialModelPage() {
         onIncludeBudgetChange={setIncludeBudget}
         onIncludeYoYChange={setIncludeYoY}
         onExport={handleExport}
+        onExportAll={handleExportAll}
         onPrint={handlePrint}
         loading={loading}
+        activeTab={activeTab}
       />
-
-      {/* Jump navigation */}
-      {data && !loading && canFetch && (
-        <div className="stmt-no-print flex gap-2">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="text-xs h-7"
-            onClick={() => scrollTo(isRef)}
-          >
-            Income Statement
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="text-xs h-7"
-            onClick={() => scrollTo(bsRef)}
-          >
-            Balance Sheet
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="text-xs h-7"
-            onClick={() => scrollTo(cfRef)}
-          >
-            Cash Flow
-          </Button>
-        </div>
-      )}
 
       {!canFetch && !loading && (
         <Card>
@@ -270,85 +254,83 @@ export default function FinancialModelPage() {
       )}
 
       {!loading && !error && data && data.periods.length > 0 && canFetch && (
-        <>
-          <div ref={isRef}>
-            <Card>
-              <CardContent className="pt-2 pb-6 px-4">
-                <StatementHeader
-                  companyName={companyName}
-                  statementTitle={
-                    scope === "organization"
-                      ? "Consolidated Income Statement"
-                      : "Income Statement"
-                  }
-                  startYear={startYear}
-                  startMonth={startMonth}
-                  endYear={endYear}
-                  endMonth={endMonth}
-                  granularity={granularity}
-                />
-                <StatementTable
-                  data={data.incomeStatement}
-                  periods={data.periods}
-                  showBudget={includeBudget}
-                  showYoY={includeYoY}
-                />
-              </CardContent>
-            </Card>
-          </div>
+        <Tabs
+          value={activeTab}
+          onValueChange={(v) => setActiveTab(v as StatementTab)}
+        >
+          <TabsList className="stmt-no-print">
+            <TabsTrigger value="all">All Statements</TabsTrigger>
+            <TabsTrigger value="income-statement">Income Statement</TabsTrigger>
+            <TabsTrigger value="balance-sheet">Balance Sheet</TabsTrigger>
+            <TabsTrigger value="cash-flow">Cash Flow</TabsTrigger>
+          </TabsList>
 
-          <div ref={bsRef} className="stmt-page-break">
-            <Card>
-              <CardContent className="pt-2 pb-6 px-4">
-                <StatementHeader
-                  companyName={companyName}
-                  statementTitle={
-                    scope === "organization"
-                      ? "Consolidated Balance Sheet"
-                      : "Balance Sheet"
-                  }
-                  startYear={startYear}
-                  startMonth={startMonth}
-                  endYear={endYear}
-                  endMonth={endMonth}
-                  granularity={granularity}
-                />
-                <StatementTable
-                  data={data.balanceSheet}
-                  periods={data.periods}
-                  showBudget={includeBudget}
-                  showYoY={includeYoY}
-                />
-              </CardContent>
-            </Card>
-          </div>
+          {/* All Statements */}
+          <TabsContent value="all" className="space-y-4">
+            <StatementCard
+              {...sharedCardProps}
+              statementTitle={`${titlePrefix}Income Statement`}
+              statementData={data.incomeStatement}
+              periods={data.periods}
+              showBudget={includeBudget}
+              showYoY={includeYoY}
+            />
+            <StatementCard
+              {...sharedCardProps}
+              statementTitle={`${titlePrefix}Balance Sheet`}
+              statementData={data.balanceSheet}
+              periods={data.periods}
+              showBudget={includeBudget}
+              showYoY={includeYoY}
+              pageBreak
+            />
+            <StatementCard
+              {...sharedCardProps}
+              statementTitle={`${titlePrefix}Statement of Cash Flows`}
+              statementData={data.cashFlowStatement}
+              periods={data.periods}
+              showBudget={false}
+              showYoY={includeYoY}
+              pageBreak
+            />
+          </TabsContent>
 
-          <div ref={cfRef} className="stmt-page-break">
-            <Card>
-              <CardContent className="pt-2 pb-6 px-4">
-                <StatementHeader
-                  companyName={companyName}
-                  statementTitle={
-                    scope === "organization"
-                      ? "Consolidated Statement of Cash Flows"
-                      : "Statement of Cash Flows"
-                  }
-                  startYear={startYear}
-                  startMonth={startMonth}
-                  endYear={endYear}
-                  endMonth={endMonth}
-                  granularity={granularity}
-                />
-                <StatementTable
-                  data={data.cashFlowStatement}
-                  periods={data.periods}
-                  showBudget={false}
-                  showYoY={includeYoY}
-                />
-              </CardContent>
-            </Card>
-          </div>
-        </>
+          {/* Income Statement */}
+          <TabsContent value="income-statement">
+            <StatementCard
+              {...sharedCardProps}
+              statementTitle={`${titlePrefix}Income Statement`}
+              statementData={data.incomeStatement}
+              periods={data.periods}
+              showBudget={includeBudget}
+              showYoY={includeYoY}
+            />
+          </TabsContent>
+
+          {/* Balance Sheet */}
+          <TabsContent value="balance-sheet">
+            <StatementCard
+              {...sharedCardProps}
+              statementTitle={`${titlePrefix}Balance Sheet`}
+              statementData={data.balanceSheet}
+              periods={data.periods}
+              showBudget={includeBudget}
+              showYoY={includeYoY}
+            />
+          </TabsContent>
+
+          {/* Cash Flow */}
+          <TabsContent value="cash-flow">
+            <StatementCard
+              {...sharedCardProps}
+              statementTitle={`${titlePrefix}Statement of Cash Flows`}
+              statementData={data.cashFlowStatement}
+              periods={data.periods}
+              showBudget={false}
+              showYoY={includeYoY}
+            />
+          </TabsContent>
+        </Tabs>
       )}
     </div>
   );
