@@ -98,9 +98,7 @@ export default function FinancialModelPage() {
     (scope === "organization" && organizationId) ||
     (scope === "entity" && selectedEntityId);
 
-  const { data, loading, error } = useFinancialStatements(
-    canFetch ? config : { ...config, scope: "entity", entityId: "__none__" }
-  );
+  const { data, loading, error } = useFinancialStatements(config, !!canFetch);
 
   // Refs for jump navigation
   const isRef = useRef<HTMLDivElement>(null);

@@ -14,13 +14,15 @@ interface UseFinancialStatementsReturn {
 }
 
 export function useFinancialStatements(
-  config: FinancialModelConfig
+  config: FinancialModelConfig,
+  enabled: boolean = true
 ): UseFinancialStatementsReturn {
   const [data, setData] = useState<FinancialStatementsResponse | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
+    if (!enabled) return;
     setLoading(true);
     setError(null);
 
@@ -59,6 +61,7 @@ export function useFinancialStatements(
       setLoading(false);
     }
   }, [
+    enabled,
     config.scope,
     config.entityId,
     config.organizationId,
