@@ -92,6 +92,60 @@ function collectAllMonths(
 }
 
 // ---------------------------------------------------------------------------
+// Helper: aggregate budget amounts into period buckets
+// ---------------------------------------------------------------------------
+
+interface RawBudgetAmount {
+  account_id: string;
+  period_month: number;
+  period_year: number;
+  amount: number;
+}
+
+function aggregateBudgetByBucket(
+  budgetAmounts: RawBudgetAmount[],
+  buckets: PeriodBucket[],
+  /** Maps entity account_id -> master account_id */
+  entityToMaster: Map<string, string>
+): Map<string, Record<string, number>> {
+  // Index budget amounts: entity_account_id -> "year-month" -> amount
+  const budgetIndex = new Map<string, Map<string, number>>();
+  for (const ba of budgetAmounts) {
+    let byPeriod = budgetIndex.get(ba.account_id);
+    if (!byPeriod) {
+      byPeriod = new Map();
+      budgetIndex.set(ba.account_id, byPeriod);
+    }
+    const key = `${ba.period_year}-${ba.period_month}`;
+    byPeriod.set(key, (byPeriod.get(key) ?? 0) + ba.amount);
+  }
+
+  // Aggregate by master account and bucket
+  const result = new Map<string, Record<string, number>>();
+
+  for (const [entityAccountId, periodAmounts] of budgetIndex) {
+    const masterAccountId = entityToMaster.get(entityAccountId);
+    if (!masterAccountId) continue;
+
+    let masterBuckets = result.get(masterAccountId);
+    if (!masterBuckets) {
+      masterBuckets = {};
+      result.set(masterAccountId, masterBuckets);
+    }
+
+    for (const bucket of buckets) {
+      for (const m of bucket.months) {
+        const periodKey = `${m.year}-${m.month}`;
+        const val = periodAmounts.get(periodKey) ?? 0;
+        masterBuckets[bucket.key] = (masterBuckets[bucket.key] ?? 0) + val;
+      }
+    }
+  }
+
+  return result;
+}
+
+// ---------------------------------------------------------------------------
 // Helper: aggregate balances into buckets
 // ---------------------------------------------------------------------------
 
@@ -199,10 +253,13 @@ function buildStatement(
   accounts: AccountInfo[],
   aggregated: Map<string, BucketedAmounts>,
   buckets: PeriodBucket[],
-  useNetChange: boolean // true for P&L, false for BS
+  useNetChange: boolean, // true for P&L, false for BS
+  budgetByAccount?: Map<string, Record<string, number>> // account ID -> bucket key -> budget amount
 ): StatementData {
   const sections: StatementSection[] = [];
   const sectionTotals: Record<string, Record<string, number>> = {};
+  const sectionBudgetTotals: Record<string, Record<string, number>> = {};
+  const hasBudget = budgetByAccount && budgetByAccount.size > 0;
 
   for (const config of sectionConfigs) {
     const sectionAccounts = accounts.filter(
@@ -219,16 +276,21 @@ function buildStatement(
     // Build line items
     const lines: LineItem[] = [];
     const totals: Record<string, number> = {};
+    const budgetTotals: Record<string, number> = {};
 
     // Initialize totals
     for (const bucket of buckets) {
       totals[bucket.key] = 0;
+      budgetTotals[bucket.key] = 0;
     }
 
     let lineIndex = 0;
     for (const account of sectionAccounts) {
       const bucketed = aggregated.get(account.id);
       const amounts: Record<string, number> = {};
+      const budgetAmounts: Record<string, number> | undefined = hasBudget
+        ? {}
+        : undefined;
 
       for (const bucket of buckets) {
         const raw = useNetChange
@@ -241,6 +303,14 @@ function buildStatement(
         totals[bucket.key] += useNetChange
           ? (config.classification === "Revenue" ? -raw : raw)
           : raw;
+
+        // Budget amounts (already stored as positive in budget_amounts table)
+        if (hasBudget && budgetAmounts) {
+          const acctBudget = budgetByAccount!.get(account.id);
+          const budgetVal = acctBudget?.[bucket.key] ?? 0;
+          budgetAmounts[bucket.key] = budgetVal;
+          budgetTotals[bucket.key] += budgetVal;
+        }
       }
 
       lines.push({
@@ -248,6 +318,7 @@ function buildStatement(
         label: account.name,
         accountNumber: account.accountNumber ?? undefined,
         amounts,
+        budgetAmounts,
         indent: 1,
         isTotal: false,
         isGrandTotal: false,
@@ -259,12 +330,14 @@ function buildStatement(
     }
 
     sectionTotals[config.id] = totals;
+    sectionBudgetTotals[config.id] = budgetTotals;
 
     // Subtotal line
     const subtotalLine: LineItem = {
       id: `${config.id}-total`,
       label: `Total ${config.title.charAt(0)}${config.title.slice(1).toLowerCase()}`,
       amounts: totals,
+      budgetAmounts: hasBudget ? { ...budgetTotals } : undefined,
       indent: 0,
       isTotal: true,
       isGrandTotal: false,
@@ -295,12 +368,24 @@ function buildStatement(
 
     for (const comp of computedAfter) {
       const amounts: Record<string, number> = {};
+      const compBudgetAmounts: Record<string, number> | undefined = hasBudget
+        ? {}
+        : undefined;
+
       for (const bucket of buckets) {
         let val = 0;
+        let budgetVal = 0;
         for (const { sectionId, sign } of comp.formula) {
           val += (sectionTotals[sectionId]?.[bucket.key] ?? 0) * sign;
+          if (hasBudget) {
+            budgetVal +=
+              (sectionBudgetTotals[sectionId]?.[bucket.key] ?? 0) * sign;
+          }
         }
         amounts[bucket.key] = val;
+        if (compBudgetAmounts) {
+          compBudgetAmounts[bucket.key] = budgetVal;
+        }
       }
 
       // Create a pseudo-section with just the computed line
@@ -312,6 +397,7 @@ function buildStatement(
           id: comp.id,
           label: comp.label,
           amounts,
+          budgetAmounts: compBudgetAmounts,
           indent: 0,
           isTotal: !comp.isGrandTotal,
           isGrandTotal: comp.isGrandTotal ?? false,
@@ -764,51 +850,138 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: "Entity not found" }, { status: 404 });
     }
 
-    // Get accounts
-    const { data: accountRows } = await admin
-      .from("accounts")
-      .select("id, name, account_number, classification, account_type, account_sub_type")
-      .eq("entity_id", entityId!)
+    // Get org info
+    const { data: org } = await admin
+      .from("organizations")
+      .select("name")
+      .eq("id", entity.organization_id)
+      .single();
+
+    // Get master accounts for the organization (same structure as consolidated)
+    const { data: masterAccounts } = await admin
+      .from("master_accounts")
+      .select("*")
+      .eq("organization_id", entity.organization_id)
       .eq("is_active", true)
+      .order("display_order")
       .order("account_number");
 
-    const accounts: AccountInfo[] = reclassifyAccounts(
-      (accountRows ?? []).map((a) => ({
-        id: a.id,
-        name: a.name,
-        accountNumber: a.account_number,
-        classification: a.classification,
-        accountType: a.account_type,
-      }))
-    );
+    if (!masterAccounts || masterAccounts.length === 0) {
+      return NextResponse.json({
+        periods: [],
+        incomeStatement: { id: "income_statement", title: "Income Statement", sections: [] },
+        balanceSheet: { id: "balance_sheet", title: "Balance Sheet", sections: [] },
+        cashFlowStatement: { id: "cash_flow", title: "Statement of Cash Flows", sections: [] },
+        metadata: {
+          entityName: entity.name,
+          organizationName: org?.name ?? undefined,
+          generatedAt: new Date().toISOString(),
+          scope,
+          granularity,
+          startPeriod: `${startYear}-${startMonth}`,
+          endPeriod: `${endYear}-${endMonth}`,
+        },
+      });
+    }
 
-    // Get GL balances for all needed months
-    const accountIds = accounts.map((a) => a.id);
+    // Get mappings for THIS entity only
+    const masterAccountIds = masterAccounts.map((ma) => ma.id);
+    const { data: mappings } = await admin
+      .from("master_account_mappings")
+      .select("master_account_id, entity_id, account_id")
+      .in("master_account_id", masterAccountIds)
+      .eq("entity_id", entityId!);
+
+    // Get GL balances for mapped accounts
+    const mappedAccountIds = (mappings ?? []).map((m) => m.account_id);
     let glBalances: RawGLBalance[] = [];
 
-    if (accountIds.length > 0 && allMonths.length > 0) {
-      // Build year-month filter
-      const yearMonthPairs = allMonths.map(
-        (m) => `${m.year}-${String(m.month).padStart(2, "0")}`
-      );
+    if (mappedAccountIds.length > 0) {
       const uniqueYears = [...new Set(allMonths.map((m) => m.year))];
-
       const { data: balances } = await admin
         .from("gl_balances")
         .select(
           "account_id, entity_id, period_year, period_month, beginning_balance, ending_balance, net_change"
         )
-        .eq("entity_id", entityId!)
+        .in("account_id", mappedAccountIds)
         .in("period_year", uniqueYears);
 
-      // Filter to only the months we need
-      const monthSet = new Set(yearMonthPairs);
+      const monthSet = new Set(
+        allMonths.map(
+          (m) => `${m.year}-${String(m.month).padStart(2, "0")}`
+        )
+      );
       glBalances = (balances ?? []).filter((b) =>
         monthSet.has(
           `${b.period_year}-${String(b.period_month).padStart(2, "0")}`
         )
       );
     }
+
+    // Build mapping: master account ID -> list of entity account_ids
+    const masterToEntityAccounts = new Map<string, string[]>();
+    for (const m of mappings ?? []) {
+      const existing = masterToEntityAccounts.get(m.master_account_id) ?? [];
+      existing.push(m.account_id);
+      masterToEntityAccounts.set(m.master_account_id, existing);
+    }
+
+    // Consolidate: For each master account, sum the GL balances of mapped entity accounts
+    const consolidatedAccounts: AccountInfo[] = masterAccounts.map((ma) => ({
+      id: ma.id,
+      name: ma.name,
+      accountNumber: ma.account_number,
+      classification: ma.classification,
+      accountType: ma.account_type,
+    }));
+
+    const consolidatedBalances: RawGLBalance[] = [];
+
+    for (const ma of masterAccounts) {
+      const entityAccountIds = masterToEntityAccounts.get(ma.id) ?? [];
+      const entityBalances = glBalances.filter((b) =>
+        entityAccountIds.includes(b.account_id)
+      );
+
+      // Group by period
+      const periodMap = new Map<
+        string,
+        { beginning: number; ending: number; netChange: number }
+      >();
+
+      for (const b of entityBalances) {
+        const key = `${b.period_year}-${b.period_month}`;
+        const existing = periodMap.get(key) ?? {
+          beginning: 0,
+          ending: 0,
+          netChange: 0,
+        };
+        existing.beginning += b.beginning_balance;
+        existing.ending += b.ending_balance;
+        existing.netChange += b.net_change;
+        periodMap.set(key, existing);
+      }
+
+      for (const [key, vals] of periodMap) {
+        const [y, m] = key.split("-").map(Number);
+        consolidatedBalances.push({
+          account_id: ma.id, // use master account ID
+          entity_id: entityId!,
+          period_year: y,
+          period_month: m,
+          beginning_balance: vals.beginning,
+          ending_balance: vals.ending,
+          net_change: vals.netChange,
+        });
+      }
+    }
+
+    // Aggregate into buckets
+    const aggregated = aggregateByBucket(
+      consolidatedAccounts,
+      consolidatedBalances,
+      buckets
+    );
 
     // Get depreciation data for cash flow
     const depreciationByBucket: Record<string, number> = {};
@@ -847,8 +1020,49 @@ export async function GET(request: Request) {
       }
     }
 
-    // Aggregate balances
-    const aggregated = aggregateByBucket(accounts, glBalances, buckets);
+    // --------------- Budget data (entity scope) ---------------
+    let budgetByAccount: Map<string, Record<string, number>> | undefined;
+
+    if (includeBudget) {
+      // Determine which fiscal years we need budgets for
+      const budgetYears = [
+        ...new Set(buckets.flatMap((b) => b.months.map((m) => m.year))),
+      ];
+
+      // Find active budget versions for this entity in those years
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- budget tables not yet in generated types
+      const { data: activeVersions } = await (admin as any)
+        .from("budget_versions")
+        .select("id, fiscal_year")
+        .eq("entity_id", entityId!)
+        .eq("is_active", true)
+        .in("fiscal_year", budgetYears);
+
+      const versionIds = (activeVersions ?? []).map(
+        (v: { id: string }) => v.id
+      );
+
+      if (versionIds.length > 0) {
+        // Fetch budget amounts for those versions
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- budget tables not yet in generated types
+        const { data: budgetRows } = await (admin as any)
+          .from("budget_amounts")
+          .select("account_id, period_year, period_month, amount")
+          .in("budget_version_id", versionIds);
+
+        // Build reverse mapping: entity account_id -> master_account_id
+        const entityToMaster = new Map<string, string>();
+        for (const m of mappings ?? []) {
+          entityToMaster.set(m.account_id, m.master_account_id);
+        }
+
+        budgetByAccount = aggregateBudgetByBucket(
+          (budgetRows ?? []) as RawBudgetAmount[],
+          buckets,
+          entityToMaster
+        );
+      }
+    }
 
     // Build Income Statement
     const incomeStatement = buildStatement(
@@ -856,10 +1070,11 @@ export async function GET(request: Request) {
       "Income Statement",
       INCOME_STATEMENT_SECTIONS,
       INCOME_STATEMENT_COMPUTED,
-      accounts,
+      consolidatedAccounts,
       aggregated,
       buckets,
-      true // use net_change
+      true, // use net_change
+      budgetByAccount
     );
 
     // Extract net income by bucket for cash flow
@@ -878,13 +1093,13 @@ export async function GET(request: Request) {
       }
     }
 
-    // Build Balance Sheet
+    // Build Balance Sheet (no budget data — budgets are P&L only)
     const balanceSheet = buildStatement(
       "balance_sheet",
       "Balance Sheet",
       BALANCE_SHEET_SECTIONS,
       BALANCE_SHEET_COMPUTED,
-      accounts,
+      consolidatedAccounts,
       aggregated,
       buckets,
       false // use ending_balance
@@ -892,7 +1107,7 @@ export async function GET(request: Request) {
 
     // Build Cash Flow Statement
     const cashFlowStatement = buildCashFlowStatement(
-      accounts,
+      consolidatedAccounts,
       aggregated,
       buckets,
       depreciationByBucket,
@@ -908,13 +1123,6 @@ export async function GET(request: Request) {
       endMonth: b.endMonth,
       endYear: b.endYear,
     }));
-
-    // Get org name
-    const { data: org } = await admin
-      .from("organizations")
-      .select("name")
-      .eq("id", entity.organization_id)
-      .single();
 
     const response: FinancialStatementsResponse = {
       periods,
@@ -1133,6 +1341,48 @@ export async function GET(request: Request) {
       }
     }
 
+    // --------------- Budget data (organization scope) ---------------
+    let orgBudgetByAccount: Map<string, Record<string, number>> | undefined;
+
+    if (includeBudget && entityIds.length > 0) {
+      const budgetYears = [
+        ...new Set(buckets.flatMap((b) => b.months.map((m) => m.year))),
+      ];
+
+      // Find active budget versions across ALL entities in the org
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- budget tables not yet in generated types
+      const { data: activeVersions } = await (admin as any)
+        .from("budget_versions")
+        .select("id, fiscal_year, entity_id")
+        .in("entity_id", entityIds)
+        .eq("is_active", true)
+        .in("fiscal_year", budgetYears);
+
+      const versionIds = (activeVersions ?? []).map(
+        (v: { id: string }) => v.id
+      );
+
+      if (versionIds.length > 0) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- budget tables not yet in generated types
+        const { data: budgetRows } = await (admin as any)
+          .from("budget_amounts")
+          .select("account_id, period_year, period_month, amount")
+          .in("budget_version_id", versionIds);
+
+        // Build reverse mapping: entity account_id -> master_account_id
+        const entityToMaster = new Map<string, string>();
+        for (const m of mappings ?? []) {
+          entityToMaster.set(m.account_id, m.master_account_id);
+        }
+
+        orgBudgetByAccount = aggregateBudgetByBucket(
+          (budgetRows ?? []) as RawBudgetAmount[],
+          buckets,
+          entityToMaster
+        );
+      }
+    }
+
     // Build statements
     const incomeStatement = buildStatement(
       "income_statement",
@@ -1142,7 +1392,8 @@ export async function GET(request: Request) {
       consolidatedAccounts,
       aggregated,
       buckets,
-      true
+      true,
+      orgBudgetByAccount
     );
 
     const netIncomeByBucket: Record<string, number> = {};
@@ -1154,6 +1405,7 @@ export async function GET(request: Request) {
         netIncomeSection?.subtotalLine?.amounts[bucket.key] ?? 0;
     }
 
+    // Balance Sheet (no budget — P&L only)
     const balanceSheet = buildStatement(
       "balance_sheet",
       "Consolidated Balance Sheet",

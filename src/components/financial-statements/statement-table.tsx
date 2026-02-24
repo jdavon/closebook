@@ -52,8 +52,64 @@ export function StatementTable({
     return formatStatementAmount(amount, line.showDollarSign);
   }
 
+  function renderBudgetAmount(line: LineItem, periodKey: string) {
+    const budget = line.budgetAmounts?.[periodKey];
+    if (budget === undefined || budget === null) return null;
+    return formatStatementAmount(budget, false);
+  }
+
+  function renderVariance(line: LineItem, periodKey: string) {
+    const actual = line.amounts[periodKey];
+    const budget = line.budgetAmounts?.[periodKey];
+    if (
+      actual === undefined ||
+      actual === null ||
+      budget === undefined ||
+      budget === null
+    )
+      return null;
+
+    const variance = actual - budget;
+    if (variance === 0) return "\u2014";
+
+    const formatted = formatStatementAmount(variance, false);
+    // Green if favorable (positive for revenue, negative for expense)
+    const favorable = variance >= 0;
+    return (
+      <span className={favorable ? "text-green-600" : "text-red-600"}>
+        {formatted}
+      </span>
+    );
+  }
+
+  // Total columns per period: 1 for actual, +1 for budget, +1 for variance
+  const colsPerPeriod = 1 + (showBudget ? 2 : 0);
+  const totalCols =
+    1 + periods.length * colsPerPeriod + (showYoY ? 2 : 0);
+
   // Determine stripe index for alternating row colors
   let stripeIndex = 0;
+
+  function renderPeriodCells(
+    line: LineItem,
+    renderFn: "amount" | "budget-row" | "subtotal" | "computed"
+  ) {
+    return periods.map((period) => (
+      <>
+        <td key={period.key}>{renderAmount(line, period.key)}</td>
+        {showBudget && (
+          <>
+            <td key={`${period.key}-budget`}>
+              {renderBudgetAmount(line, period.key)}
+            </td>
+            <td key={`${period.key}-var`}>
+              {renderVariance(line, period.key)}
+            </td>
+          </>
+        )}
+      </>
+    ));
+  }
 
   return (
     <div className="overflow-x-auto">
@@ -62,16 +118,28 @@ export function StatementTable({
           <tr>
             <th className="min-w-[280px]"></th>
             {periods.map((period) => (
-              <th key={period.key} className="min-w-[120px]">
-                {period.label}
-              </th>
-            ))}
-            {showBudget && (
               <>
-                <th className="min-w-[120px]">Budget</th>
-                <th className="min-w-[120px]">Variance</th>
+                <th key={period.key} className="min-w-[110px]">
+                  {period.label}
+                </th>
+                {showBudget && (
+                  <>
+                    <th
+                      key={`${period.key}-budget`}
+                      className="min-w-[100px] text-muted-foreground"
+                    >
+                      Budget
+                    </th>
+                    <th
+                      key={`${period.key}-var`}
+                      className="min-w-[90px] text-muted-foreground"
+                    >
+                      Var $
+                    </th>
+                  </>
+                )}
               </>
-            )}
+            ))}
             {showYoY && (
               <>
                 <th className="min-w-[120px]">Prior Year</th>
@@ -107,15 +175,21 @@ export function StatementTable({
                   >
                     {line.label}
                   </td>
-                  {periods.map((period) => (
-                    <td key={period.key}>{renderAmount(line, period.key)}</td>
-                  ))}
-                  {showBudget && (
-                    <>
-                      <td></td>
-                      <td></td>
-                    </>
-                  )}
+                  {!isMargin
+                    ? renderPeriodCells(line, "computed")
+                    : periods.map((period) => (
+                        <>
+                          <td key={period.key}>
+                            {renderAmount(line, period.key)}
+                          </td>
+                          {showBudget && (
+                            <>
+                              <td key={`${period.key}-budget`}></td>
+                              <td key={`${period.key}-var`}></td>
+                            </>
+                          )}
+                        </>
+                      ))}
                   {showYoY && (
                     <>
                       <td></td>
@@ -132,14 +206,7 @@ export function StatementTable({
                 {/* Section header */}
                 {hasTitle && (
                   <tr className="stmt-section-header">
-                    <td
-                      colSpan={
-                        periods.length +
-                        1 +
-                        (showBudget ? 2 : 0) +
-                        (showYoY ? 2 : 0)
-                      }
-                    >
+                    <td colSpan={totalCols}>
                       {hasLines ? (
                         <button
                           onClick={() => toggleSection(section.id)}
@@ -162,14 +229,7 @@ export function StatementTable({
                 {/* Separator row */}
                 {hasTitle && (
                   <tr className="stmt-separator">
-                    <td
-                      colSpan={
-                        periods.length +
-                        1 +
-                        (showBudget ? 2 : 0) +
-                        (showYoY ? 2 : 0)
-                      }
-                    ></td>
+                    <td colSpan={totalCols}></td>
                   </tr>
                 )}
 
@@ -180,13 +240,11 @@ export function StatementTable({
                       return (
                         <tr key={line.id} className="stmt-section-header">
                           <td
-                            colSpan={
-                              periods.length +
-                              1 +
-                              (showBudget ? 2 : 0) +
-                              (showYoY ? 2 : 0)
-                            }
-                            style={{ paddingLeft: "2rem", fontSize: "0.8125rem" }}
+                            colSpan={totalCols}
+                            style={{
+                              paddingLeft: "2rem",
+                              fontSize: "0.8125rem",
+                            }}
                           >
                             <em>{line.label}</em>
                           </td>
@@ -197,14 +255,7 @@ export function StatementTable({
                     if (line.isSeparator) {
                       return (
                         <tr key={line.id} className="stmt-separator">
-                          <td
-                            colSpan={
-                              periods.length +
-                              1 +
-                              (showBudget ? 2 : 0) +
-                              (showYoY ? 2 : 0)
-                            }
-                          ></td>
+                          <td colSpan={totalCols}></td>
                         </tr>
                       );
                     }
@@ -218,30 +269,16 @@ export function StatementTable({
                         className={`stmt-line-item ${isStriped ? "stmt-row-striped" : ""}`}
                       >
                         <td>{line.label}</td>
-                        {periods.map((period) => (
-                          <td key={period.key}>
-                            {renderAmount(line, period.key)}
-                          </td>
-                        ))}
-                        {showBudget && (
-                          <>
-                            <td>
-                              {line.budgetAmounts
-                                ? renderAmount(
-                                    { ...line, amounts: line.budgetAmounts },
-                                    periods[periods.length - 1]?.key ?? ""
-                                  )
-                                : null}
-                            </td>
-                            <td></td>
-                          </>
-                        )}
+                        {renderPeriodCells(line, "budget-row")}
                         {showYoY && (
                           <>
                             <td>
                               {line.priorYearAmounts
                                 ? renderAmount(
-                                    { ...line, amounts: line.priorYearAmounts },
+                                    {
+                                      ...line,
+                                      amounts: line.priorYearAmounts,
+                                    },
                                     periods[periods.length - 1]?.key ?? ""
                                   )
                                 : null}
@@ -263,17 +300,7 @@ export function StatementTable({
                     }
                   >
                     <td>{section.subtotalLine.label}</td>
-                    {periods.map((period) => (
-                      <td key={period.key}>
-                        {renderAmount(section.subtotalLine!, period.key)}
-                      </td>
-                    ))}
-                    {showBudget && (
-                      <>
-                        <td></td>
-                        <td></td>
-                      </>
-                    )}
+                    {renderPeriodCells(section.subtotalLine, "subtotal")}
                     {showYoY && (
                       <>
                         <td></td>
@@ -285,14 +312,7 @@ export function StatementTable({
 
                 {/* Add spacing after section */}
                 <tr className="stmt-separator">
-                  <td
-                    colSpan={
-                      periods.length +
-                      1 +
-                      (showBudget ? 2 : 0) +
-                      (showYoY ? 2 : 0)
-                    }
-                  ></td>
+                  <td colSpan={totalCols}></td>
                 </tr>
               </tbody>
             );

@@ -694,15 +694,18 @@ export default function MasterGLPage() {
                                         No mappings
                                       </span>
                                     ) : (
-                                      accountMappings.map((m) => (
-                                        <Badge
-                                          key={m.id}
-                                          variant="destructive"
-                                          className="text-xs"
-                                        >
-                                          {(m.entities?.code?.[0] ?? "?") + (m.accounts?.account_number ?? "")}
-                                        </Badge>
-                                      ))
+                                      accountMappings.map((m) => {
+                                        const prefix = m.entities?.code?.[0] ?? "?";
+                                        const isHdr = prefix === "H";
+                                        return (
+                                          <Badge
+                                            key={m.id}
+                                            className={`text-xs text-white ${isHdr ? "bg-blue-600 hover:bg-blue-700" : "bg-black hover:bg-gray-800"}`}
+                                          >
+                                            {prefix + (m.accounts?.account_number ?? "")}
+                                          </Badge>
+                                        );
+                                      }))
                                     )}
                                   </div>
                                 </TableCell>
