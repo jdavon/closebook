@@ -6,7 +6,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { ArrowRight, BarChart3, FileText, Upload, TrendingUp } from "lucide-react";
+import { ArrowRight, BarChart3, DollarSign, FileText, Upload, TrendingUp } from "lucide-react";
 
 export default async function ReportsPage({
   params,
@@ -18,9 +18,15 @@ export default async function ReportsPage({
   const reportSections = [
     {
       title: "Financial Statements",
-      description: "Auto-generated P&L, Balance Sheet, and Cash Flow from QuickBooks data",
+      description: "Three-statement model: Income Statement, Balance Sheet, Cash Flow with multi-period and budget comparison",
       icon: FileText,
       href: `/${entityId}/reports/financial-statements`,
+    },
+    {
+      title: "Budget Management",
+      description: "Create budget versions, import XLSX data, and manage budget vs actual comparisons",
+      icon: DollarSign,
+      href: `/${entityId}/reports/budget`,
     },
     {
       title: "Flux Analysis",

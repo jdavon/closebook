@@ -383,6 +383,329 @@ const EQUITY: MasterAccountTemplate[] = [
 ];
 
 // ---------------------------------------------------------------------------
+// INCOME STATEMENT — REVENUE
+// ---------------------------------------------------------------------------
+
+const REVENUE: MasterAccountTemplate[] = [
+  {
+    accountNumber: "M4000",
+    name: "Rental Revenue - Vehicles",
+    classification: "Revenue",
+    accountType: "Income",
+    normalBalance: "credit",
+    displayOrder: 1100,
+    mappingRules: [
+      { accountNumber: "4000" },
+      { nameContains: "Rental Revenue - Vehicle" },
+    ],
+  },
+  {
+    accountNumber: "M4010",
+    name: "Rental Revenue - Trailers",
+    classification: "Revenue",
+    accountType: "Income",
+    normalBalance: "credit",
+    displayOrder: 1110,
+    mappingRules: [
+      { accountNumber: "4010" },
+      { nameContains: "Rental Revenue - Trailer" },
+    ],
+  },
+  {
+    accountNumber: "M4020",
+    name: "Rental Services",
+    classification: "Revenue",
+    accountType: "Income",
+    normalBalance: "credit",
+    displayOrder: 1120,
+    mappingRules: [
+      { accountNumber: "4020" },
+      { nameContains: "Rental Services" },
+    ],
+  },
+  {
+    accountNumber: "M4030",
+    name: "Parking Revenue",
+    classification: "Revenue",
+    accountType: "Income",
+    normalBalance: "credit",
+    displayOrder: 1130,
+    mappingRules: [
+      { accountNumber: "4030" },
+      { nameContains: "Parking" },
+    ],
+  },
+  {
+    accountNumber: "M4040",
+    name: "Production Supplies Revenue",
+    classification: "Revenue",
+    accountType: "Income",
+    normalBalance: "credit",
+    displayOrder: 1140,
+    mappingRules: [
+      { accountNumber: "4040" },
+      { nameContains: "Production Supplies" },
+    ],
+  },
+  {
+    accountNumber: "M4050",
+    name: "Labor & Services Revenue",
+    classification: "Revenue",
+    accountType: "Income",
+    normalBalance: "credit",
+    displayOrder: 1150,
+    mappingRules: [
+      { accountNumber: "4050" },
+      { nameContains: "Labor & Services" },
+    ],
+  },
+  {
+    accountNumber: "M4060",
+    name: "Damage Reimbursement",
+    classification: "Revenue",
+    accountType: "Income",
+    normalBalance: "credit",
+    displayOrder: 1160,
+    mappingRules: [
+      { accountNumber: "4060" },
+      { nameContains: "Damage Reimbursement" },
+    ],
+  },
+  {
+    accountNumber: "M4900",
+    name: "Other Revenue",
+    classification: "Revenue",
+    accountType: "Income",
+    normalBalance: "credit",
+    displayOrder: 1190,
+    mappingRules: [
+      { accountNumber: "4900" },
+      { accountType: "Income" },
+    ],
+  },
+  {
+    accountNumber: "M4950",
+    name: "Other Income",
+    classification: "Revenue",
+    accountType: "Other Income",
+    normalBalance: "credit",
+    displayOrder: 1200,
+    mappingRules: [
+      { accountType: "Other Income" },
+    ],
+  },
+];
+
+// ---------------------------------------------------------------------------
+// INCOME STATEMENT — EXPENSES
+// ---------------------------------------------------------------------------
+
+const EXPENSES: MasterAccountTemplate[] = [
+  {
+    accountNumber: "M5000",
+    name: "Auto Insurance",
+    classification: "Expense",
+    accountType: "Cost of Goods Sold",
+    normalBalance: "debit",
+    displayOrder: 1300,
+    mappingRules: [
+      { accountNumber: "5000" },
+      { nameContains: "Auto Insurance" },
+    ],
+  },
+  {
+    accountNumber: "M5010",
+    name: "Maintenance & Repair",
+    classification: "Expense",
+    accountType: "Cost of Goods Sold",
+    normalBalance: "debit",
+    displayOrder: 1310,
+    mappingRules: [
+      { accountNumber: "5010" },
+      { nameContains: "Maintenance & Repair" },
+    ],
+  },
+  {
+    accountNumber: "M5020",
+    name: "Parts & Supplies",
+    classification: "Expense",
+    accountType: "Cost of Goods Sold",
+    normalBalance: "debit",
+    displayOrder: 1320,
+    mappingRules: [
+      { accountNumber: "5020" },
+      { nameContains: "Parts & Supplies" },
+    ],
+  },
+  {
+    accountNumber: "M5030",
+    name: "Vehicle Repairs - Body",
+    classification: "Expense",
+    accountType: "Cost of Goods Sold",
+    normalBalance: "debit",
+    displayOrder: 1330,
+    mappingRules: [
+      { accountNumber: "5030" },
+      { nameContains: "Vehicle Repairs" },
+    ],
+  },
+  {
+    accountNumber: "M5090",
+    name: "Other Operating Costs",
+    classification: "Expense",
+    accountType: "Cost of Goods Sold",
+    normalBalance: "debit",
+    displayOrder: 1390,
+    mappingRules: [
+      { accountType: "Cost of Goods Sold" },
+    ],
+  },
+  {
+    accountNumber: "M6000",
+    name: "Rent",
+    classification: "Expense",
+    accountType: "Expense",
+    normalBalance: "debit",
+    displayOrder: 1400,
+    mappingRules: [
+      { accountNumber: "6000" },
+      { nameContains: "Rent" },
+    ],
+  },
+  {
+    accountNumber: "M6010",
+    name: "Personnel Costs",
+    classification: "Expense",
+    accountType: "Expense",
+    normalBalance: "debit",
+    displayOrder: 1410,
+    mappingRules: [
+      { accountNumber: "6010" },
+      { nameContains: "Personnel" },
+      { nameContains: "Payroll" },
+      { nameContains: "Salary" },
+      { nameContains: "Wages" },
+    ],
+  },
+  {
+    accountNumber: "M6020",
+    name: "Outside Services",
+    classification: "Expense",
+    accountType: "Expense",
+    normalBalance: "debit",
+    displayOrder: 1420,
+    mappingRules: [
+      { accountNumber: "6020" },
+      { nameContains: "Outside Services" },
+    ],
+  },
+  {
+    accountNumber: "M6030",
+    name: "Professional Fees",
+    classification: "Expense",
+    accountType: "Expense",
+    normalBalance: "debit",
+    displayOrder: 1430,
+    mappingRules: [
+      { accountNumber: "6030" },
+      { nameContains: "Professional Fees" },
+    ],
+  },
+  {
+    accountNumber: "M6090",
+    name: "Other Expenses",
+    classification: "Expense",
+    accountType: "Expense",
+    normalBalance: "debit",
+    displayOrder: 1490,
+    mappingRules: [
+      { accountType: "Expense" },
+    ],
+  },
+  {
+    accountNumber: "M7000",
+    name: "Vehicle Depreciation",
+    classification: "Expense",
+    accountType: "Other Expense",
+    normalBalance: "debit",
+    displayOrder: 1500,
+    mappingRules: [
+      { nameContains: "Vehicle Depreciation" },
+    ],
+  },
+  {
+    accountNumber: "M7010",
+    name: "Interest Expense",
+    classification: "Expense",
+    accountType: "Other Expense",
+    normalBalance: "debit",
+    displayOrder: 1510,
+    mappingRules: [
+      { nameContains: "Interest Expense" },
+      { nameContains: "Interest" },
+    ],
+  },
+  {
+    accountNumber: "M7020",
+    name: "Taxes",
+    classification: "Expense",
+    accountType: "Other Expense",
+    normalBalance: "debit",
+    displayOrder: 1520,
+    mappingRules: [
+      { nameContains: "Tax" },
+    ],
+  },
+  {
+    accountNumber: "M7030",
+    name: "Amortization of Goodwill",
+    classification: "Expense",
+    accountType: "Other Expense",
+    normalBalance: "debit",
+    displayOrder: 1530,
+    mappingRules: [
+      { nameContains: "Amortization" },
+      { nameContains: "Goodwill" },
+    ],
+  },
+  {
+    accountNumber: "M7040",
+    name: "(Gain) / Loss on Sale of Vehicles",
+    classification: "Expense",
+    accountType: "Other Expense",
+    normalBalance: "debit",
+    displayOrder: 1540,
+    mappingRules: [
+      { nameContains: "Gain" },
+      { nameContains: "Loss on Sale" },
+    ],
+  },
+  {
+    accountNumber: "M7050",
+    name: "Fixed Asset Depreciation",
+    classification: "Expense",
+    accountType: "Other Expense",
+    normalBalance: "debit",
+    displayOrder: 1550,
+    mappingRules: [
+      { nameContains: "Fixed Asset Depreciation" },
+      { nameContains: "Depreciation" },
+    ],
+  },
+  {
+    accountNumber: "M7900",
+    name: "Other Non-Operating Expenses",
+    classification: "Expense",
+    accountType: "Other Expense",
+    normalBalance: "debit",
+    displayOrder: 1590,
+    mappingRules: [
+      { accountType: "Other Expense" },
+    ],
+  },
+];
+
+// ---------------------------------------------------------------------------
 // FULL TEMPLATE
 // ---------------------------------------------------------------------------
 
@@ -390,6 +713,8 @@ export const MASTER_GL_TEMPLATE: MasterAccountTemplate[] = [
   ...ASSETS,
   ...LIABILITIES,
   ...EQUITY,
+  ...REVENUE,
+  ...EXPENSES,
 ];
 
 /**

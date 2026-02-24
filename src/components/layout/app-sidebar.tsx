@@ -21,6 +21,7 @@ import {
   Scale,
   AlertTriangle,
   Percent,
+  FileText,
 } from "lucide-react";
 import {
   Sidebar,
@@ -154,6 +155,11 @@ export function AppSidebar({ user, entityId: entityIdProp }: AppSidebarProps) {
           title: "TB Variance",
           url: "/tb-variance",
           icon: AlertTriangle,
+        },
+        {
+          title: "Financial Model",
+          url: "/reports/financial-model",
+          icon: FileText,
         },
         {
           title: "Master GL",

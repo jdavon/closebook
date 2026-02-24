@@ -1,21 +1,43 @@
 "use client";
 
-import { useState, useRef } from "react";
-import { useParams } from "next/navigation";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { createClient } from "@/lib/supabase/client";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Label } from "@/components/ui/label";
 import { getCurrentPeriod } from "@/lib/utils/dates";
 import { StatementHeader } from "@/components/financial-statements/statement-header";
 import { StatementTable } from "@/components/financial-statements/statement-table";
 import { ConfigToolbar } from "@/components/financial-statements/config-toolbar";
 import { useFinancialStatements } from "@/components/financial-statements/use-financial-statements";
-import type { Granularity, FinancialModelConfig } from "@/components/financial-statements/types";
+import type {
+  Granularity,
+  Scope,
+  FinancialModelConfig,
+} from "@/components/financial-statements/types";
 
-export default function FinancialStatementsPage() {
-  const params = useParams();
-  const entityId = params.entityId as string;
+interface Entity {
+  id: string;
+  name: string;
+  code: string;
+}
 
+export default function FinancialModelPage() {
+  const supabase = createClient();
   const currentPeriod = getCurrentPeriod();
+
+  // Organization / entity state
+  const [organizationId, setOrganizationId] = useState<string | null>(null);
+  const [entities, setEntities] = useState<Entity[]>([]);
+  const [scope, setScope] = useState<Scope>("organization");
+  const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
 
   // Config state
   const [startYear, setStartYear] = useState(currentPeriod.year);
@@ -26,9 +48,42 @@ export default function FinancialStatementsPage() {
   const [includeBudget, setIncludeBudget] = useState(false);
   const [includeYoY, setIncludeYoY] = useState(false);
 
+  // Load organization
+  const loadOrg = useCallback(async () => {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) return;
+
+    const { data: membership } = await supabase
+      .from("organization_members")
+      .select("organization_id")
+      .eq("user_id", user.id)
+      .single();
+
+    if (membership) {
+      setOrganizationId(membership.organization_id);
+
+      const { data: ents } = await supabase
+        .from("entities")
+        .select("id, name, code")
+        .eq("organization_id", membership.organization_id)
+        .eq("is_active", true)
+        .order("name");
+
+      setEntities(ents ?? []);
+    }
+  }, [supabase]);
+
+  useEffect(() => {
+    loadOrg();
+  }, [loadOrg]);
+
   const config: FinancialModelConfig = {
-    scope: "entity",
-    entityId,
+    scope,
+    entityId: scope === "entity" ? (selectedEntityId ?? undefined) : undefined,
+    organizationId:
+      scope === "organization" ? (organizationId ?? undefined) : undefined,
     startYear,
     startMonth,
     endYear,
@@ -38,7 +93,14 @@ export default function FinancialStatementsPage() {
     includeYoY,
   };
 
-  const { data, loading, error } = useFinancialStatements(config);
+  // Only fetch when we have the IDs we need
+  const canFetch =
+    (scope === "organization" && organizationId) ||
+    (scope === "entity" && selectedEntityId);
+
+  const { data, loading, error } = useFinancialStatements(
+    canFetch ? config : { ...config, scope: "entity", entityId: "__none__" }
+  );
 
   // Refs for jump navigation
   const isRef = useRef<HTMLDivElement>(null);
@@ -51,8 +113,7 @@ export default function FinancialStatementsPage() {
 
   function handleExport() {
     const params = new URLSearchParams({
-      scope: "entity",
-      entityId,
+      scope,
       startYear: String(startYear),
       startMonth: String(startMonth),
       endYear: String(endYear),
@@ -61,6 +122,12 @@ export default function FinancialStatementsPage() {
       includeBudget: String(includeBudget),
       includeYoY: String(includeYoY),
     });
+    if (scope === "entity" && selectedEntityId) {
+      params.set("entityId", selectedEntityId);
+    }
+    if (scope === "organization" && organizationId) {
+      params.set("organizationId", organizationId);
+    }
     window.location.href = `/api/financial-statements/export?${params.toString()}`;
   }
 
@@ -69,18 +136,58 @@ export default function FinancialStatementsPage() {
   }
 
   const companyName =
-    data?.metadata.entityName ?? data?.metadata.organizationName ?? "";
+    data?.metadata.organizationName ?? data?.metadata.entityName ?? "";
 
   return (
     <div className="space-y-4">
       {/* Page header */}
       <div className="stmt-no-print">
         <h1 className="text-2xl font-semibold tracking-tight">
-          Financial Statements
+          Financial Model
         </h1>
         <p className="text-muted-foreground text-sm">
-          Three-statement financial model
+          Consolidated three-statement financial model
         </p>
+      </div>
+
+      {/* Scope selector */}
+      <div className="stmt-no-print flex items-end gap-3 pb-2">
+        <div className="space-y-1">
+          <Label className="text-xs text-muted-foreground">Scope</Label>
+          <Select
+            value={scope}
+            onValueChange={(v) => setScope(v as Scope)}
+          >
+            <SelectTrigger className="w-[160px] h-8 text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="organization">Consolidated</SelectItem>
+              <SelectItem value="entity">Single Entity</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        {scope === "entity" && (
+          <div className="space-y-1">
+            <Label className="text-xs text-muted-foreground">Entity</Label>
+            <Select
+              value={selectedEntityId ?? ""}
+              onValueChange={setSelectedEntityId}
+            >
+              <SelectTrigger className="w-[220px] h-8 text-xs">
+                <SelectValue placeholder="Select entity..." />
+              </SelectTrigger>
+              <SelectContent>
+                {entities.map((e) => (
+                  <SelectItem key={e.id} value={e.id}>
+                    {e.code} — {e.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
       </div>
 
       {/* Config toolbar */}
@@ -105,7 +212,7 @@ export default function FinancialStatementsPage() {
       />
 
       {/* Jump navigation */}
-      {data && !loading && (
+      {data && !loading && canFetch && (
         <div className="stmt-no-print flex gap-2">
           <Button
             variant="ghost"
@@ -134,8 +241,19 @@ export default function FinancialStatementsPage() {
         </div>
       )}
 
-      {/* Loading state */}
-      {loading && (
+      {!canFetch && !loading && (
+        <Card>
+          <CardContent className="py-12 text-center">
+            <p className="text-sm text-muted-foreground">
+              {scope === "entity"
+                ? "Select an entity to view financial statements."
+                : "Loading organization data..."}
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
+      {loading && canFetch && (
         <Card>
           <CardContent className="py-12 text-center">
             <p className="text-sm text-muted-foreground">
@@ -145,7 +263,6 @@ export default function FinancialStatementsPage() {
         </Card>
       )}
 
-      {/* Error state */}
       {error && !loading && (
         <Card>
           <CardContent className="py-12 text-center">
@@ -154,28 +271,18 @@ export default function FinancialStatementsPage() {
         </Card>
       )}
 
-      {/* No data state */}
-      {!loading && !error && data && data.periods.length === 0 && (
-        <Card>
-          <CardContent className="py-12 text-center">
-            <p className="text-sm text-muted-foreground">
-              No balance data for this period range. Sync QuickBooks to
-              populate.
-            </p>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Statements */}
-      {!loading && data && data.periods.length > 0 && (
+      {!loading && !error && data && data.periods.length > 0 && canFetch && (
         <>
-          {/* Income Statement */}
           <div ref={isRef}>
             <Card>
               <CardContent className="pt-2 pb-6 px-4">
                 <StatementHeader
                   companyName={companyName}
-                  statementTitle="Income Statement"
+                  statementTitle={
+                    scope === "organization"
+                      ? "Consolidated Income Statement"
+                      : "Income Statement"
+                  }
                   startYear={startYear}
                   startMonth={startMonth}
                   endYear={endYear}
@@ -192,13 +299,16 @@ export default function FinancialStatementsPage() {
             </Card>
           </div>
 
-          {/* Balance Sheet */}
           <div ref={bsRef} className="stmt-page-break">
             <Card>
               <CardContent className="pt-2 pb-6 px-4">
                 <StatementHeader
                   companyName={companyName}
-                  statementTitle="Balance Sheet"
+                  statementTitle={
+                    scope === "organization"
+                      ? "Consolidated Balance Sheet"
+                      : "Balance Sheet"
+                  }
                   startYear={startYear}
                   startMonth={startMonth}
                   endYear={endYear}
@@ -215,13 +325,16 @@ export default function FinancialStatementsPage() {
             </Card>
           </div>
 
-          {/* Cash Flow Statement */}
           <div ref={cfRef} className="stmt-page-break">
             <Card>
               <CardContent className="pt-2 pb-6 px-4">
                 <StatementHeader
                   companyName={companyName}
-                  statementTitle="Statement of Cash Flows"
+                  statementTitle={
+                    scope === "organization"
+                      ? "Consolidated Statement of Cash Flows"
+                      : "Statement of Cash Flows"
+                  }
                   startYear={startYear}
                   startMonth={startMonth}
                   endYear={endYear}

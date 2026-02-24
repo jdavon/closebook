@@ -95,3 +95,5 @@ export type DebtStatus = "active" | "paid_off" | "inactive";
 export type CommissionAccountRole = "revenue" | "expense";
 
 export type ClassFilterMode = "all" | "include" | "exclude";
+
+export type BudgetStatus = "draft" | "approved" | "archived";

@@ -124,3 +124,137 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* ==========================================================================
+   Financial Statement Styles (management reporting / board deck style)
+   ========================================================================== */
+
+/* Light blue for alternating row shading */
+:root {
+  --stmt-row-stripe: oklch(0.95 0.02 230);
+}
+.dark {
+  --stmt-row-stripe: oklch(0.25 0.01 230);
+}
+
+/* Table base */
+.stmt-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Column headers */
+.stmt-table thead th {
+  text-align: right;
+  font-weight: 600;
+  font-size: 0.8125rem;
+  padding: 0.375rem 0.75rem;
+  border-bottom: 2px solid var(--foreground);
+  white-space: nowrap;
+  color: var(--foreground);
+}
+.stmt-table thead th:first-child {
+  text-align: left;
+}
+
+/* Sub-header row (e.g. "Jan-25" under "Total") */
+.stmt-table thead .stmt-subheader th {
+  font-weight: 400;
+  font-size: 0.75rem;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted-foreground);
+}
+
+/* All cells */
+.stmt-table td {
+  text-align: right;
+  padding: 0.25rem 0.75rem;
+  color: var(--foreground);
+}
+.stmt-table td:first-child {
+  text-align: left;
+}
+
+/* Alternating blue row stripe on line items */
+.stmt-row-striped {
+  background-color: var(--stmt-row-stripe);
+}
+
+/* Section header row (e.g. "Revenue", "Direct Operating Costs") */
+.stmt-section-header td {
+  font-weight: 700;
+  padding-top: 0.75rem;
+  padding-bottom: 0.25rem;
+  font-size: 0.875rem;
+}
+
+/* Indented line item */
+.stmt-line-item td:first-child {
+  padding-left: 2rem;
+}
+
+/* Subtotal row (e.g. "Total Revenue") — bold with top border */
+.stmt-subtotal td {
+  font-weight: 700;
+  border-top: 1px solid var(--foreground);
+  padding-top: 0.375rem;
+  padding-bottom: 0.375rem;
+}
+
+/* Grand total row (e.g. "Net Income") — bold with top + bottom borders */
+.stmt-grand-total td {
+  font-weight: 700;
+  border-top: 2px solid var(--foreground);
+  border-bottom: 2px solid var(--foreground);
+  padding-top: 0.5rem;
+  padding-bottom: 0.5rem;
+}
+
+/* Margin % row — italic, lighter color */
+.stmt-margin-row td {
+  font-style: italic;
+  color: var(--muted-foreground);
+  padding-bottom: 0.5rem;
+}
+
+/* Separator row — blank space between sections */
+.stmt-separator td {
+  height: 1rem;
+}
+
+/* Negative values styling — already handled by parentheses, but
+   we optionally color them for variance columns */
+.stmt-negative {
+  color: oklch(0.577 0.245 27.325);
+}
+.dark .stmt-negative {
+  color: oklch(0.704 0.191 22.216);
+}
+
+.stmt-positive {
+  color: oklch(0.45 0.15 155);
+}
+.dark .stmt-positive {
+  color: oklch(0.65 0.15 155);
+}
+
+/* Print styles */
+@media print {
+  .stmt-no-print {
+    display: none !important;
+  }
+  .stmt-table {
+    font-size: 9pt;
+  }
+  .stmt-page-break {
+    page-break-before: always;
+  }
+  .stmt-row-striped {
+    background-color: #e8f0f8 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+}
