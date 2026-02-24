@@ -526,28 +526,29 @@ export default function CommissionsPage() {
   // ── Detail row helpers ──────────────────────────────────────────────
 
   function getAssignmentRawBalance(a: AccountAssignment): number {
-    if (a.class_filter_mode === "all" || a.qbo_class_ids.length === 0) {
+    const classIds = a.qbo_class_ids ?? [];
+    if (a.class_filter_mode === "all" || classIds.length === 0) {
       return detailBalances[a.account_id] ?? 0;
     }
     if (a.class_filter_mode === "include") {
-      return a.qbo_class_ids.reduce(
+      return classIds.reduce(
         (sum, cid) => sum + (classBalances[`${a.account_id}__${cid}`] ?? 0),
         0
       );
     }
-    // exclude: sum all class balances for this account MINUS excluded ones
-    const excludeSet = new Set(a.qbo_class_ids);
-    return Object.entries(classBalances)
-      .filter(([key]) => {
-        const [acctId, classId] = key.split("__");
-        return acctId === a.account_id && !excludeSet.has(classId);
-      })
-      .reduce((sum, [, val]) => sum + val, 0);
+    // exclude: total balance minus the excluded class balances
+    const totalBalance = detailBalances[a.account_id] ?? 0;
+    const excludedSum = classIds.reduce(
+      (sum, cid) => sum + (classBalances[`${a.account_id}__${cid}`] ?? 0),
+      0
+    );
+    return totalBalance - excludedSum;
   }
 
   function getClassFilterLabel(a: AccountAssignment): string {
-    if (a.class_filter_mode === "all" || a.qbo_class_ids.length === 0) return "All Classes";
-    const names = a.qbo_class_ids
+    const classIds = a.qbo_class_ids ?? [];
+    if (a.class_filter_mode === "all" || classIds.length === 0) return "All Classes";
+    const names = classIds
       .map((id) => qboClasses.find((c) => c.id === id)?.name ?? "Unknown")
       .sort();
     const prefix = a.class_filter_mode === "include" ? "Include: " : "Exclude: ";
@@ -859,10 +860,11 @@ export default function CommissionsPage() {
                                   {profileAssignments.map((a) => {
                                     const rawChange = getAssignmentRawBalance(a);
                                     // Negate revenue accounts (GL stores credits as negative)
+                                    // Use || 0 to avoid -0 display from 0 * -1
                                     const netChange =
-                                      a.role === "revenue"
+                                      (a.role === "revenue"
                                         ? rawChange * -1
-                                        : rawChange;
+                                        : rawChange) || 0;
                                     return (
                                       <TableRow key={a.id}>
                                         <TableCell className="font-mono text-muted-foreground">
@@ -964,7 +966,7 @@ export default function CommissionsPage() {
 
       {/* Add/Edit Salesperson Dialog */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>
               {editingProfile ? "Edit Salesperson" : "Add Salesperson"}

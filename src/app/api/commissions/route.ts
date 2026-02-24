@@ -219,11 +219,16 @@ export async function POST(request: Request) {
       let totalExpenses = 0;
 
       for (const assignment of assignments ?? []) {
-        const a = assignment as {
+        const raw = assignment as {
           account_id: string;
           role: string;
           class_filter_mode: string;
-          qbo_class_ids: string[];
+          qbo_class_ids: string[] | null;
+        };
+        const a = {
+          ...raw,
+          class_filter_mode: raw.class_filter_mode ?? "all",
+          qbo_class_ids: raw.qbo_class_ids ?? [],
         };
         let netChange = 0;
 
@@ -243,19 +248,35 @@ export async function POST(request: Request) {
             0
           );
         } else if (a.class_filter_mode === "exclude" && a.qbo_class_ids.length > 0) {
-          // Exclude mode: fetch all class balances, filter out excluded in JS
-          const { data: allClassBalances } = await adminClient
-            .from("gl_class_balances")
-            .select("qbo_class_id, net_change")
+          // Exclude mode: total balance minus excluded class balances
+          // This correctly handles unclassified transactions that exist in
+          // gl_balances but have no row in gl_class_balances
+          const { data: totalBalance } = await adminClient
+            .from("gl_balances")
+            .select("net_change")
             .eq("entity_id", entityId)
             .eq("period_year", periodYear)
             .eq("period_month", periodMonth)
-            .eq("account_id", a.account_id);
+            .eq("account_id", a.account_id)
+            .maybeSingle();
 
-          const excludeSet = new Set(a.qbo_class_ids);
-          netChange = (allClassBalances ?? [])
-            .filter((row) => !excludeSet.has(row.qbo_class_id))
-            .reduce((sum, row) => sum + Number(row.net_change ?? 0), 0);
+          const total = Number(totalBalance?.net_change ?? 0);
+
+          const { data: excludedClassBalances } = await adminClient
+            .from("gl_class_balances")
+            .select("net_change")
+            .eq("entity_id", entityId)
+            .eq("period_year", periodYear)
+            .eq("period_month", periodMonth)
+            .eq("account_id", a.account_id)
+            .in("qbo_class_id", a.qbo_class_ids);
+
+          const excludedSum = (excludedClassBalances ?? []).reduce(
+            (sum, row) => sum + Number(row.net_change ?? 0),
+            0
+          );
+
+          netChange = total - excludedSum;
         } else {
           // All classes: use full gl_balances (existing behavior)
           const { data: balance } = await adminClient
