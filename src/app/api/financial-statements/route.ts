@@ -1762,7 +1762,8 @@ export async function GET(request: Request) {
       endYear: b.endYear,
     }));
 
-    const response: FinancialStatementsResponse = {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- temporary debug metadata
+    const response: any = {
       periods,
       incomeStatement,
       balanceSheet,
@@ -1774,6 +1775,18 @@ export async function GET(request: Request) {
         granularity,
         startPeriod: `${startYear}-${startMonth}`,
         endPeriod: `${endYear}-${endMonth}`,
+      },
+      // Diagnostic info — remove once issue is resolved
+      _debug: {
+        masterAccountCount: masterAccounts.length,
+        mappingCount: (mappings ?? []).length,
+        mappedAccountIdCount: mappedAccountIds.length,
+        glBalanceRowCount: glBalances.length,
+        consolidatedBalanceCount: consolidatedBalances.length,
+        sampleGLBalance: glBalances[0] ?? null,
+        sampleMapping: (mappings ?? [])[0] ?? null,
+        uniqueYears: [...new Set(allMonths.map((m) => m.year))],
+        allMonthsCount: allMonths.length,
       },
     };
 
