@@ -697,10 +697,10 @@ export default function MasterGLPage() {
                                       accountMappings.map((m) => (
                                         <Badge
                                           key={m.id}
-                                          variant="secondary"
+                                          variant="destructive"
                                           className="text-xs"
                                         >
-                                          {m.entities?.code ?? "???"}
+                                          {(m.entities?.code?.[0] ?? "?") + (m.accounts?.account_number ?? "")}
                                         </Badge>
                                       ))
                                     )}
@@ -971,10 +971,10 @@ export default function MasterGLPage() {
                             <div className="font-medium text-sm">
                               {m.entities?.name ?? "Unknown Entity"}
                               <Badge
-                                variant="secondary"
+                                variant="destructive"
                                 className="ml-2 text-xs"
                               >
-                                {m.entities?.code ?? "???"}
+                                {(m.entities?.code?.[0] ?? "?") + (m.accounts?.account_number ?? "")}
                               </Badge>
                             </div>
                             <div className="text-xs text-muted-foreground mt-0.5">
