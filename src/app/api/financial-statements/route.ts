@@ -1474,18 +1474,31 @@ export async function GET(request: Request) {
       .in("master_account_id", masterAccountIds)
       .limit(10000);
 
-    // Get GL balances for mapped accounts
-    const mappedAccountIds = (mappings ?? []).map((m) => m.account_id);
+    // Get all active entities for this org (small set, used for GL query)
+    const { data: orgEntities } = await admin
+      .from("entities")
+      .select("id")
+      .eq("organization_id", organizationId)
+      .eq("is_active", true);
+    const orgEntityIds = (orgEntities ?? []).map((e) => e.id);
+
+    // Build a Set of mapped account IDs for in-memory filtering
+    const mappedAccountIdSet = new Set(
+      (mappings ?? []).map((m) => m.account_id)
+    );
+
+    // Get GL balances by entity_id (small set of ~6 IDs) instead of
+    // account_id (1000+ IDs that exceed HTTP URL length limits)
     let glBalances: RawGLBalance[] = [];
 
-    if (mappedAccountIds.length > 0) {
+    if (mappedAccountIdSet.size > 0 && orgEntityIds.length > 0) {
       const uniqueYears = [...new Set(allMonths.map((m) => m.year))];
       const { data: balances } = await admin
         .from("gl_balances")
         .select(
           "account_id, entity_id, period_year, period_month, beginning_balance, ending_balance, net_change"
         )
-        .in("account_id", mappedAccountIds)
+        .in("entity_id", orgEntityIds)
         .in("period_year", uniqueYears)
         .limit(10000);
 
@@ -1495,11 +1508,16 @@ export async function GET(request: Request) {
         )
       );
       // Coerce numeric fields from Supabase strings to JS numbers
-      glBalances = (balances ?? []).map(parseGLBalance).filter((b) =>
-        monthSet.has(
-          `${b.period_year}-${String(b.period_month).padStart(2, "0")}`
-        )
-      );
+      // Filter to only mapped accounts and matching months
+      glBalances = (balances ?? [])
+        .map(parseGLBalance)
+        .filter(
+          (b) =>
+            mappedAccountIdSet.has(b.account_id) &&
+            monthSet.has(
+              `${b.period_year}-${String(b.period_month).padStart(2, "0")}`
+            )
+        );
     }
 
     // Build mapping: master account ID -> list of entity account_ids
@@ -1595,14 +1613,8 @@ export async function GET(request: Request) {
       pyAggregated = aggregateByBucket(consolidatedAccounts, consolidatedBalances, pyBuckets);
     }
 
-    // Get depreciation across all entities
-    const { data: entities } = await admin
-      .from("entities")
-      .select("id")
-      .eq("organization_id", organizationId)
-      .eq("is_active", true);
-
-    const entityIds = (entities ?? []).map((e) => e.id);
+    // Reuse entity IDs fetched earlier for GL balance query
+    const entityIds = orgEntityIds;
     const depreciationByBucket: Record<string, number> = {};
     const pyDepreciationByBucket: Record<string, number> = {};
     for (const bucket of buckets) {
@@ -1762,8 +1774,7 @@ export async function GET(request: Request) {
       endYear: b.endYear,
     }));
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- temporary debug metadata
-    const response: any = {
+    const response: FinancialStatementsResponse = {
       periods,
       incomeStatement,
       balanceSheet,
@@ -1775,18 +1786,6 @@ export async function GET(request: Request) {
         granularity,
         startPeriod: `${startYear}-${startMonth}`,
         endPeriod: `${endYear}-${endMonth}`,
-      },
-      // Diagnostic info — remove once issue is resolved
-      _debug: {
-        masterAccountCount: masterAccounts.length,
-        mappingCount: (mappings ?? []).length,
-        mappedAccountIdCount: mappedAccountIds.length,
-        glBalanceRowCount: glBalances.length,
-        consolidatedBalanceCount: consolidatedBalances.length,
-        sampleGLBalance: glBalances[0] ?? null,
-        sampleMapping: (mappings ?? [])[0] ?? null,
-        uniqueYears: [...new Set(allMonths.map((m) => m.year))],
-        allMonthsCount: allMonths.length,
       },
     };
 
