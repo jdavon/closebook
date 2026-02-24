@@ -696,11 +696,16 @@ export default function MasterGLPage() {
                                     ) : (
                                       accountMappings.map((m) => {
                                         const prefix = m.entities?.code?.[0] ?? "?";
-                                        const isHdr = prefix === "H";
+                                        const badgeColor =
+                                          prefix === "H"
+                                            ? "bg-blue-600 hover:bg-blue-700"
+                                            : prefix === "V"
+                                              ? "bg-black hover:bg-gray-800"
+                                              : "bg-red-600 hover:bg-red-700";
                                         return (
                                           <Badge
                                             key={m.id}
-                                            className={`text-xs text-white ${isHdr ? "bg-blue-600 hover:bg-blue-700" : "bg-black hover:bg-gray-800"}`}
+                                            className={`text-xs text-white ${badgeColor}`}
                                           >
                                             {prefix + (m.accounts?.account_number ?? "")}
                                           </Badge>
