@@ -281,20 +281,21 @@ export async function POST(request: NextRequest) {
       continue;
     }
 
-    // Resolve master GL account
+    // Resolve master GL account — try account number first, fall back to name
     let masterMatch: { id: string; name: string } | null = null;
 
-    // 1. Exact name match (case-insensitive)
-    const byName = maByNameLower.get(masterInput.toLowerCase());
-    if (byName) {
-      masterMatch = byName;
+    // 1. Exact account_number match
+    const byNum = maByNumber.get(masterInput);
+    if (byNum) {
+      masterMatch = byNum;
     }
 
-    // 2. Exact account_number match
+    // 2. Exact name match (case-insensitive) — used when account number
+    //    is not available or the user enters a name instead
     if (!masterMatch) {
-      const byNum = maByNumber.get(masterInput);
-      if (byNum) {
-        masterMatch = byNum;
+      const byName = maByNameLower.get(masterInput.toLowerCase());
+      if (byName) {
+        masterMatch = byName;
       }
     }
 

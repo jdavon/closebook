@@ -344,8 +344,8 @@ export function ImportMappingsDialog({
               <DialogTitle>Import Mappings — Upload File</DialogTitle>
               <DialogDescription>
                 Download a template pre-filled with {entityName}&apos;s accounts,
-                fill in the &quot;Master GL Account&quot; column, then upload it
-                here.
+                fill in the &quot;Master GL Account&quot; column with the account
+                number or name, then upload it here.
               </DialogDescription>
             </DialogHeader>
 
