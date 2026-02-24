@@ -13,6 +13,7 @@ import {
   INVESTING_ACCOUNT_TYPES,
   FINANCING_LIABILITY_TYPES,
   FINANCING_EQUITY_TYPES,
+  OTHER_EXPENSE_NAME_PATTERNS,
   type StatementSectionConfig,
   type ComputedLineConfig,
 } from "@/lib/config/statement-sections";
@@ -164,6 +165,26 @@ function aggregateByBucket(
   }
 
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// Helper: reclassify entity "Expense" accounts to "Other Expense" by name
+// ---------------------------------------------------------------------------
+
+function reclassifyAccounts(accounts: AccountInfo[]): AccountInfo[] {
+  return accounts.map((a) => {
+    if (a.classification === "Expense" && a.accountType === "Expense") {
+      const nameLower = a.name.toLowerCase();
+      if (
+        OTHER_EXPENSE_NAME_PATTERNS.some((pattern) =>
+          nameLower.includes(pattern)
+        )
+      ) {
+        return { ...a, accountType: "Other Expense" };
+      }
+    }
+    return a;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -751,13 +772,15 @@ export async function GET(request: Request) {
       .eq("is_active", true)
       .order("account_number");
 
-    const accounts: AccountInfo[] = (accountRows ?? []).map((a) => ({
-      id: a.id,
-      name: a.name,
-      accountNumber: a.account_number,
-      classification: a.classification,
-      accountType: a.account_type,
-    }));
+    const accounts: AccountInfo[] = reclassifyAccounts(
+      (accountRows ?? []).map((a) => ({
+        id: a.id,
+        name: a.name,
+        accountNumber: a.account_number,
+        classification: a.classification,
+        accountType: a.account_type,
+      }))
+    );
 
     // Get GL balances for all needed months
     const accountIds = accounts.map((a) => a.id);

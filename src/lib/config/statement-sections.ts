@@ -208,3 +208,26 @@ export const INVESTING_ACCOUNT_TYPES = ["Fixed Asset", "Other Asset"];
 export const FINANCING_LIABILITY_TYPES = ["Long Term Liability"];
 
 export const FINANCING_EQUITY_TYPES = ["Equity"];
+
+// ---------------------------------------------------------------------------
+// ENTITY-LEVEL RECLASSIFICATION
+// ---------------------------------------------------------------------------
+// QBO classifies all expense accounts as "Expense", but the financial model
+// needs certain non-operating items separated into "Other Expense".
+// These case-insensitive name patterns mirror the master GL template rules.
+// Only applied to accounts with classification="Expense" & accountType="Expense".
+// ---------------------------------------------------------------------------
+
+export const OTHER_EXPENSE_NAME_PATTERNS: string[] = [
+  "vehicle depreciation",
+  "interest expense",
+  "interest",
+  "tax",
+  "amortization",
+  "goodwill",
+  "gain",
+  "loss on sale",
+  "loss on disposal",
+  "fixed asset depreciation",
+  "depreciation",
+];
