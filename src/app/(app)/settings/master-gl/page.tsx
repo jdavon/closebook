@@ -152,6 +152,7 @@ export default function MasterGLPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [classFilter, setClassFilter] = useState("all");
+  const [entityFilter, setEntityFilter] = useState("all");
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
 
   // Dialog state for adding/editing master accounts
@@ -489,7 +490,12 @@ export default function MasterGLPage() {
       a.account_number.includes(search);
     const matchesClass =
       classFilter === "all" || a.classification === classFilter;
-    return matchesSearch && matchesClass;
+    const matchesEntity =
+      entityFilter === "all" ||
+      mappings.some(
+        (m) => m.master_account_id === a.id && m.entity_id === entityFilter
+      );
+    return matchesSearch && matchesClass && matchesEntity;
   });
 
   const grouped = filtered.reduce<Record<string, MasterAccount[]>>(
@@ -586,6 +592,19 @@ export default function MasterGLPage() {
                 {CLASSIFICATIONS.map((c) => (
                   <SelectItem key={c} value={c}>
                     {c}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value={entityFilter} onValueChange={setEntityFilter}>
+              <SelectTrigger className="w-48">
+                <SelectValue placeholder="Entity" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Entities</SelectItem>
+                {entities.map((e) => (
+                  <SelectItem key={e.id} value={e.id}>
+                    {e.code} &mdash; {e.name}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -694,7 +713,9 @@ export default function MasterGLPage() {
                                         No mappings
                                       </span>
                                     ) : (
-                                      accountMappings.map((m) => {
+                                      accountMappings
+                                      .filter((m) => entityFilter === "all" || m.entity_id === entityFilter)
+                                      .map((m) => {
                                         const prefix = m.entities?.code?.[0] ?? "?";
                                         const badgeColor =
                                           prefix === "H"
