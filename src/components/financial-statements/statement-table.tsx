@@ -39,7 +39,7 @@ export function StatementTable({
     if (amount === undefined || amount === null) return null;
 
     // Check if this is a margin % row
-    const isMargin = line.id.endsWith("_margin");
+    const isMargin = line.id.endsWith("_pct");
     if (isMargin) {
       const pct = amount * 100;
       return (
@@ -86,7 +86,7 @@ export function StatementTable({
   const lastPeriodKey = periods[periods.length - 1]?.key ?? "";
 
   function renderYoYCells(line: LineItem) {
-    const isMargin = line.id.endsWith("_margin");
+    const isMargin = line.id.endsWith("_pct");
     const pyAmount = line.priorYearAmounts?.[lastPeriodKey];
     const currentAmount = line.amounts[lastPeriodKey];
 
@@ -220,7 +220,7 @@ export function StatementTable({
             // If this is a pure computed-line section (no title, no lines, just subtotalLine)
             if (!hasTitle && !hasLines && section.subtotalLine) {
               const line = section.subtotalLine;
-              const isMargin = line.id.endsWith("_margin");
+              const isMargin = line.id.endsWith("_pct");
               const rowClass = line.isGrandTotal
                 ? "stmt-grand-total"
                 : line.isTotal

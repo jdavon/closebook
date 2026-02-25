@@ -618,11 +618,11 @@ function buildStatement(
               : "Net Income Margin %";
 
         finalSections.push({
-          id: `${comp.id}_margin`,
+          id: `${comp.id}_pct`,
           title: "",
           lines: [],
           subtotalLine: {
-            id: `${comp.id}_margin`,
+            id: `${comp.id}_pct`,
             label: marginLabel,
             amounts: marginAmounts,
             priorYearAmounts: pyMarginAmounts,

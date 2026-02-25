@@ -88,7 +88,7 @@ export async function GET(request: Request) {
 
         if (section.subtotalLine) {
           const line = section.subtotalLine;
-          const isMargin = line.id.endsWith("_margin");
+          const isMargin = line.id.endsWith("_pct");
           const row: (string | number | null)[] = [
             isMargin ? `  ${line.label}` : line.label,
           ];

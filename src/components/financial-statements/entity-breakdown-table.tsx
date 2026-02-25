@@ -46,7 +46,7 @@ export function EntityBreakdownTable({
     const amount = line.amounts[columnKey];
     if (amount === undefined || amount === null) return null;
 
-    const isMargin = line.id.endsWith("_margin");
+    const isMargin = line.id.endsWith("_pct");
     if (isMargin) {
       const pct = amount * 100;
       return (
@@ -68,7 +68,7 @@ export function EntityBreakdownTable({
       entityAmt === undefined ||
       totalAmt === undefined ||
       totalAmt === 0 ||
-      line.id.endsWith("_margin")
+      line.id.endsWith("_pct")
     )
       return null;
 
@@ -154,7 +154,7 @@ export function EntityBreakdownTable({
             // Computed-only section (no title, no lines, just subtotalLine)
             if (!hasTitle && !hasLines && section.subtotalLine) {
               const line = section.subtotalLine;
-              const isMargin = line.id.endsWith("_margin");
+              const isMargin = line.id.endsWith("_pct");
               const rowClass = line.isGrandTotal
                 ? "stmt-grand-total"
                 : line.isTotal
