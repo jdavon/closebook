@@ -11,6 +11,7 @@ import type { Granularity } from "./types";
 
 interface EntityBreakdownTabProps {
   organizationId: string | null;
+  reportingEntityId?: string | null;
   startYear: number;
   startMonth: number;
   endYear: number;
@@ -21,6 +22,7 @@ interface EntityBreakdownTabProps {
 
 export function EntityBreakdownTab({
   organizationId,
+  reportingEntityId,
   startYear,
   startMonth,
   endYear,
@@ -36,6 +38,7 @@ export function EntityBreakdownTab({
   const { data, loading, error } = useEntityBreakdown(
     {
       organizationId: organizationId ?? undefined,
+      reportingEntityId: reportingEntityId ?? undefined,
       startYear,
       startMonth,
       endYear,

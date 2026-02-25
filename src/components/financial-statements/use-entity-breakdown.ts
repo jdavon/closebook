@@ -5,6 +5,7 @@ import type { EntityBreakdownResponse } from "./types";
 
 interface UseEntityBreakdownConfig {
   organizationId?: string;
+  reportingEntityId?: string;
   startYear: number;
   startMonth: number;
   endYear: number;
@@ -43,6 +44,9 @@ export function useEntityBreakdown(
       includeProForma: String(config.includeProForma),
     });
 
+    if (config.reportingEntityId)
+      params.set("reportingEntityId", config.reportingEntityId);
+
     try {
       const response = await fetch(
         `/api/financial-statements/entity-breakdown?${params.toString()}`
@@ -65,6 +69,7 @@ export function useEntityBreakdown(
   }, [
     enabled,
     config.organizationId,
+    config.reportingEntityId,
     config.startYear,
     config.startMonth,
     config.endYear,

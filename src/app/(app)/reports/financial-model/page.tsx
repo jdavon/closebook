@@ -31,6 +31,12 @@ interface Entity {
   code: string;
 }
 
+interface ReportingEntityOption {
+  id: string;
+  name: string;
+  code: string;
+}
+
 export default function FinancialModelPage() {
   const supabase = createClient();
   const currentPeriod = getCurrentPeriod();
@@ -38,8 +44,14 @@ export default function FinancialModelPage() {
   // Organization / entity state
   const [organizationId, setOrganizationId] = useState<string | null>(null);
   const [entities, setEntities] = useState<Entity[]>([]);
+  const [reportingEntities, setReportingEntities] = useState<
+    ReportingEntityOption[]
+  >([]);
   const [scope, setScope] = useState<Scope>("organization");
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
+  const [selectedReportingEntityId, setSelectedReportingEntityId] = useState<
+    string | null
+  >(null);
 
   // Config state
   const [startYear, setStartYear] = useState(currentPeriod.year);
@@ -77,6 +89,23 @@ export default function FinancialModelPage() {
 
       setEntities(ents ?? []);
 
+      // Load reporting entities
+      const reRes = await fetch(
+        `/api/reporting-entities?organizationId=${membership.organization_id}`
+      );
+      if (reRes.ok) {
+        const reData = await reRes.json();
+        setReportingEntities(
+          (reData.reportingEntities ?? []).map(
+            (re: { id: string; name: string; code: string }) => ({
+              id: re.id,
+              name: re.name,
+              code: re.code,
+            })
+          )
+        );
+      }
+
       // Auto-enable pro forma toggle when active adjustments exist
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { count } = await (supabase as any)
@@ -99,7 +128,11 @@ export default function FinancialModelPage() {
     scope,
     entityId: scope === "entity" ? (selectedEntityId ?? undefined) : undefined,
     organizationId:
-      scope === "organization" ? (organizationId ?? undefined) : undefined,
+      scope !== "entity" ? (organizationId ?? undefined) : undefined,
+    reportingEntityId:
+      scope === "reporting_entity"
+        ? (selectedReportingEntityId ?? undefined)
+        : undefined,
     startYear,
     startMonth,
     endYear,
@@ -113,7 +146,8 @@ export default function FinancialModelPage() {
   // Only fetch when we have the IDs we need
   const canFetch =
     (scope === "organization" && organizationId) ||
-    (scope === "entity" && selectedEntityId);
+    (scope === "entity" && selectedEntityId) ||
+    (scope === "reporting_entity" && selectedReportingEntityId);
 
   const { data, loading, error } = useFinancialStatements(config, !!canFetch);
 
@@ -133,8 +167,11 @@ export default function FinancialModelPage() {
     if (scope === "entity" && selectedEntityId) {
       exportParams.set("entityId", selectedEntityId);
     }
-    if (scope === "organization" && organizationId) {
+    if (scope !== "entity" && organizationId) {
       exportParams.set("organizationId", organizationId);
+    }
+    if (scope === "reporting_entity" && selectedReportingEntityId) {
+      exportParams.set("reportingEntityId", selectedReportingEntityId);
     }
     return `/api/financial-statements/export?${exportParams.toString()}`;
   }
@@ -152,9 +189,17 @@ export default function FinancialModelPage() {
   }
 
   const companyName =
-    data?.metadata.organizationName ?? data?.metadata.entityName ?? "";
+    data?.metadata.reportingEntityName ??
+    data?.metadata.organizationName ??
+    data?.metadata.entityName ??
+    "";
 
-  const titlePrefix = scope === "organization" ? "Consolidated " : "";
+  const titlePrefix =
+    scope === "organization"
+      ? "Consolidated "
+      : scope === "reporting_entity"
+        ? `${reportingEntities.find((r) => r.id === selectedReportingEntityId)?.name ?? "Reporting Entity"} `
+        : "";
 
   const sharedCardProps = {
     companyName,
@@ -191,6 +236,11 @@ export default function FinancialModelPage() {
             <SelectContent>
               <SelectItem value="organization">Consolidated</SelectItem>
               <SelectItem value="entity">Single Entity</SelectItem>
+              {reportingEntities.length > 0 && (
+                <SelectItem value="reporting_entity">
+                  Reporting Entity
+                </SelectItem>
+              )}
             </SelectContent>
           </Select>
         </div>
@@ -209,6 +259,29 @@ export default function FinancialModelPage() {
                 {entities.map((e) => (
                   <SelectItem key={e.id} value={e.id}>
                     {e.code} — {e.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+
+        {scope === "reporting_entity" && (
+          <div className="space-y-1">
+            <Label className="text-xs text-muted-foreground">
+              Reporting Entity
+            </Label>
+            <Select
+              value={selectedReportingEntityId ?? ""}
+              onValueChange={setSelectedReportingEntityId}
+            >
+              <SelectTrigger className="w-[220px] h-8 text-xs">
+                <SelectValue placeholder="Select reporting entity..." />
+              </SelectTrigger>
+              <SelectContent>
+                {reportingEntities.map((re) => (
+                  <SelectItem key={re.id} value={re.id}>
+                    {re.code} — {re.name}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -248,7 +321,9 @@ export default function FinancialModelPage() {
             <p className="text-sm text-muted-foreground">
               {scope === "entity"
                 ? "Select an entity to view financial statements."
-                : "Loading organization data..."}
+                : scope === "reporting_entity"
+                  ? "Select a reporting entity to view financial statements."
+                  : "Loading organization data..."}
             </p>
           </CardContent>
         </Card>
@@ -371,6 +446,11 @@ export default function FinancialModelPage() {
           <TabsContent value="entity-breakdown">
             <EntityBreakdownTab
               organizationId={organizationId}
+              reportingEntityId={
+                scope === "reporting_entity"
+                  ? selectedReportingEntityId
+                  : undefined
+              }
               startYear={startYear}
               startMonth={startMonth}
               endYear={endYear}

@@ -1,7 +1,7 @@
 // TypeScript interfaces for the three-statement financial model
 
 export type Granularity = "monthly" | "quarterly" | "yearly";
-export type Scope = "entity" | "organization";
+export type Scope = "entity" | "organization" | "reporting_entity";
 export type StatementTab = "income-statement" | "balance-sheet" | "cash-flow" | "pro-forma" | "entity-breakdown" | "all";
 
 /** A single time period column in the statements */
@@ -57,6 +57,7 @@ export interface FinancialStatementsResponse {
   metadata: {
     entityName?: string;
     organizationName?: string;
+    reportingEntityName?: string;
     generatedAt: string;
     scope: Scope;
     granularity: Granularity;
@@ -70,6 +71,7 @@ export interface FinancialModelConfig {
   scope: Scope;
   entityId?: string;
   organizationId?: string;
+  reportingEntityId?: string;
   startYear: number;
   startMonth: number;
   endYear: number;

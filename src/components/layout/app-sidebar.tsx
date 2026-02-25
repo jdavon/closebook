@@ -23,6 +23,7 @@ import {
   Percent,
   FileText,
   Wallet,
+  Layers,
 } from "lucide-react";
 import {
   Sidebar,
@@ -188,6 +189,11 @@ export function AppSidebar({ user, entityId: entityIdProp }: AppSidebarProps) {
       title: "Master GL",
       url: "/settings/master-gl",
       icon: LibraryBig,
+    },
+    {
+      title: "Reporting Entities",
+      url: "/settings/reporting-entities",
+      icon: Layers,
     },
     {
       title: "Organization",

@@ -1054,6 +1054,361 @@ function buildCashFlowStatement(
 }
 
 // ---------------------------------------------------------------------------
+// Shared consolidation helper: builds three-statement financials for a set of
+// entity IDs within an organization.  Used by both "organization" and
+// "reporting_entity" scopes.
+// ---------------------------------------------------------------------------
+
+interface ConsolidatedStatementsParams {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  admin: any;
+  organizationId: string;
+  entityIds: string[];
+  buckets: PeriodBucket[];
+  allMonths: Array<{ year: number; month: number }>;
+  includeYoY: boolean;
+  includeBudget: boolean;
+  includeProForma: boolean;
+  granularity: Granularity;
+  scope: Scope;
+  startYear: number;
+  startMonth: number;
+  endYear: number;
+  endMonth: number;
+}
+
+async function buildConsolidatedStatements(params: ConsolidatedStatementsParams) {
+  const {
+    admin,
+    organizationId,
+    entityIds,
+    buckets,
+    allMonths,
+    includeYoY,
+    includeBudget,
+    includeProForma,
+    granularity,
+    scope,
+    startYear,
+    startMonth,
+    endYear,
+    endMonth,
+  } = params;
+
+  // Get master accounts
+  const { data: masterAccounts } = await admin
+    .from("master_accounts")
+    .select("*")
+    .eq("organization_id", organizationId)
+    .eq("is_active", true)
+    .order("display_order")
+    .order("account_number");
+
+  if (!masterAccounts || masterAccounts.length === 0) {
+    return {
+      periods: [] as Period[],
+      incomeStatement: { id: "income_statement", title: "Income Statement", sections: [] },
+      balanceSheet: { id: "balance_sheet", title: "Balance Sheet", sections: [] },
+      cashFlowStatement: { id: "cash_flow", title: "Statement of Cash Flows", sections: [] },
+    };
+  }
+
+  // Get mappings
+  const masterAccountIds = masterAccounts.map((ma: { id: string }) => ma.id);
+  const { data: mappings } = await admin
+    .from("master_account_mappings")
+    .select("master_account_id, entity_id, account_id")
+    .in("master_account_id", masterAccountIds)
+    .limit(10000);
+
+  // Build a Set of mapped account IDs for in-memory filtering
+  const mappedAccountIdSet = new Set(
+    (mappings ?? []).map((m: { account_id: string }) => m.account_id)
+  );
+
+  // Get GL balances by entity_id
+  let glBalances: RawGLBalance[] = [];
+
+  if (mappedAccountIdSet.size > 0 && entityIds.length > 0) {
+    const uniqueYears = [...new Set(allMonths.map((m) => m.year))];
+    const uniqueMonthNums = [...new Set(allMonths.map((m) => m.month))];
+
+    const allBalances = await fetchAllGLBalances(admin, {
+      filterColumn: "entity_id",
+      filterValues: entityIds,
+      years: uniqueYears,
+      months: uniqueMonthNums,
+    });
+
+    const monthSet = new Set(
+      allMonths.map(
+        (m) => `${m.year}-${String(m.month).padStart(2, "0")}`
+      )
+    );
+    glBalances = allBalances.filter(
+      (b) =>
+        mappedAccountIdSet.has(b.account_id) &&
+        monthSet.has(
+          `${b.period_year}-${String(b.period_month).padStart(2, "0")}`
+        )
+    );
+  }
+
+  // Build mapping: master account ID -> list of entity account_ids
+  const masterToEntityAccounts = new Map<string, string[]>();
+  for (const m of mappings ?? []) {
+    const existing = masterToEntityAccounts.get(m.master_account_id) ?? [];
+    existing.push(m.account_id);
+    masterToEntityAccounts.set(m.master_account_id, existing);
+  }
+
+  // Consolidate: For each master account, sum the GL balances of all mapped entity accounts
+  const consolidatedAccounts: AccountInfo[] = masterAccounts.map(
+    (ma: { id: string; name: string; account_number: string | null; classification: string; account_type: string }) => ({
+      id: ma.id,
+      name: ma.name,
+      accountNumber: ma.account_number,
+      classification: ma.classification,
+      accountType: ma.account_type,
+    })
+  );
+
+  const consolidatedBalances: RawGLBalance[] = [];
+
+  for (const ma of masterAccounts) {
+    const entityAccountIds = masterToEntityAccounts.get(ma.id) ?? [];
+    const entityBalances = glBalances.filter((b) =>
+      entityAccountIds.includes(b.account_id)
+    );
+
+    const periodMap = new Map<
+      string,
+      { beginning: number; ending: number; netChange: number }
+    >();
+
+    for (const b of entityBalances) {
+      const key = `${b.period_year}-${b.period_month}`;
+      const existing = periodMap.get(key) ?? {
+        beginning: 0,
+        ending: 0,
+        netChange: 0,
+      };
+      existing.beginning += b.beginning_balance;
+      existing.ending += b.ending_balance;
+      existing.netChange += b.net_change;
+      periodMap.set(key, existing);
+    }
+
+    for (const [key, vals] of periodMap) {
+      const [y, m] = key.split("-").map(Number);
+      consolidatedBalances.push({
+        account_id: ma.id,
+        entity_id: "consolidated",
+        period_year: y,
+        period_month: m,
+        beginning_balance: vals.beginning,
+        ending_balance: vals.ending,
+        net_change: vals.netChange,
+      });
+    }
+  }
+
+  // Pro Forma Adjustments
+  if (includeProForma) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: proFormaRows } = await (admin as any)
+      .from("pro_forma_adjustments")
+      .select("master_account_id, period_year, period_month, amount")
+      .eq("organization_id", organizationId)
+      .eq("is_excluded", false);
+
+    if (proFormaRows && proFormaRows.length > 0) {
+      injectProFormaAdjustments(
+        consolidatedBalances,
+        proFormaRows as RawProFormaAdjustment[],
+        "consolidated"
+      );
+    }
+  }
+
+  // Aggregate into buckets
+  const aggregated = aggregateByBucket(
+    consolidatedAccounts,
+    consolidatedBalances,
+    buckets
+  );
+
+  // Prior year aggregation for YoY
+  let pyAggregated: Map<string, BucketedAmounts> | undefined;
+  if (includeYoY) {
+    const pyBuckets = createPriorYearBuckets(buckets);
+    pyAggregated = aggregateByBucket(consolidatedAccounts, consolidatedBalances, pyBuckets);
+  }
+
+  // Depreciation
+  const depreciationByBucket: Record<string, number> = {};
+  const pyDepreciationByBucket: Record<string, number> = {};
+  for (const bucket of buckets) {
+    depreciationByBucket[bucket.key] = 0;
+    pyDepreciationByBucket[bucket.key] = 0;
+  }
+
+  if (entityIds.length > 0) {
+    const { data: assetIds } = await admin
+      .from("fixed_assets")
+      .select("id")
+      .in("entity_id", entityIds);
+
+    const ids = (assetIds ?? []).map((a: { id: string }) => a.id);
+    if (ids.length > 0) {
+      const uniqueYears = [
+        ...new Set(buckets.flatMap((b) => b.months.map((m) => m.year))),
+      ];
+      const allDepYears = includeYoY
+        ? [...new Set([...uniqueYears, ...uniqueYears.map((y) => y - 1)])]
+        : uniqueYears;
+
+      const { data: depRows } = await admin
+        .from("fixed_asset_depreciation")
+        .select("period_year, period_month, book_depreciation")
+        .in("fixed_asset_id", ids)
+        .in("period_year", allDepYears);
+
+      for (const bucket of buckets) {
+        const mSet = new Set(
+          bucket.months.map((m) => `${m.year}-${m.month}`)
+        );
+        for (const row of depRows ?? []) {
+          if (mSet.has(`${row.period_year}-${row.period_month}`)) {
+            depreciationByBucket[bucket.key] += Number(row.book_depreciation);
+          }
+        }
+      }
+
+      if (includeYoY) {
+        const pyBuckets = createPriorYearBuckets(buckets);
+        for (const bucket of pyBuckets) {
+          const mSet = new Set(
+            bucket.months.map((m) => `${m.year}-${m.month}`)
+          );
+          for (const row of depRows ?? []) {
+            if (mSet.has(`${row.period_year}-${row.period_month}`)) {
+              pyDepreciationByBucket[bucket.key] += Number(row.book_depreciation);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Budget data
+  let consolidatedBudgetByAccount: Map<string, Record<string, number>> | undefined;
+
+  if (includeBudget && entityIds.length > 0) {
+    const budgetYears = [
+      ...new Set(buckets.flatMap((b) => b.months.map((m) => m.year))),
+    ];
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: activeVersions } = await (admin as any)
+      .from("budget_versions")
+      .select("id, fiscal_year, entity_id")
+      .in("entity_id", entityIds)
+      .eq("is_active", true)
+      .in("fiscal_year", budgetYears);
+
+    const versionIds = (activeVersions ?? []).map(
+      (v: { id: string }) => v.id
+    );
+
+    if (versionIds.length > 0) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: budgetRows } = await (admin as any)
+        .from("budget_amounts")
+        .select("account_id, period_year, period_month, amount")
+        .in("budget_version_id", versionIds);
+
+      const entityToMaster = new Map<string, string>();
+      for (const m of mappings ?? []) {
+        entityToMaster.set(m.account_id, m.master_account_id);
+      }
+
+      consolidatedBudgetByAccount = aggregateBudgetByBucket(
+        (budgetRows ?? []) as RawBudgetAmount[],
+        buckets,
+        entityToMaster
+      );
+    }
+  }
+
+  // Build statements
+  const incomeStatement = buildStatement(
+    "income_statement",
+    "Income Statement",
+    INCOME_STATEMENT_SECTIONS,
+    INCOME_STATEMENT_COMPUTED,
+    consolidatedAccounts,
+    aggregated,
+    buckets,
+    true,
+    consolidatedBudgetByAccount,
+    pyAggregated
+  );
+
+  const netIncomeByBucket: Record<string, number> = {};
+  const pyNetIncomeByBucket: Record<string, number> = {};
+  const netIncomeSection = incomeStatement.sections.find(
+    (s) => s.id === "net_income"
+  );
+  for (const bucket of buckets) {
+    netIncomeByBucket[bucket.key] =
+      netIncomeSection?.subtotalLine?.amounts[bucket.key] ?? 0;
+    pyNetIncomeByBucket[bucket.key] =
+      netIncomeSection?.subtotalLine?.priorYearAmounts?.[bucket.key] ?? 0;
+  }
+
+  const balanceSheet = buildStatement(
+    "balance_sheet",
+    "Balance Sheet",
+    BALANCE_SHEET_SECTIONS,
+    BALANCE_SHEET_COMPUTED,
+    consolidatedAccounts,
+    aggregated,
+    buckets,
+    false,
+    undefined,
+    pyAggregated
+  );
+
+  const cashFlowStatement = buildCashFlowStatement(
+    consolidatedAccounts,
+    aggregated,
+    buckets,
+    depreciationByBucket,
+    netIncomeByBucket,
+    includeYoY ? pyAggregated : undefined,
+    includeYoY ? pyDepreciationByBucket : undefined,
+    includeYoY ? pyNetIncomeByBucket : undefined
+  );
+
+  const periods: Period[] = buckets.map((b) => ({
+    key: b.key,
+    label: b.label,
+    year: b.year,
+    startMonth: b.startMonth,
+    endMonth: b.endMonth,
+    endYear: b.endYear,
+  }));
+
+  return {
+    periods,
+    incomeStatement,
+    balanceSheet,
+    cashFlowStatement,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // GET handler
 // ---------------------------------------------------------------------------
 
@@ -1071,6 +1426,7 @@ export async function GET(request: Request) {
   const scope = (searchParams.get("scope") ?? "entity") as Scope;
   const entityId = searchParams.get("entityId");
   const organizationId = searchParams.get("organizationId");
+  const reportingEntityId = searchParams.get("reportingEntityId");
   const startYear = parseInt(searchParams.get("startYear") ?? "2025");
   const startMonth = parseInt(searchParams.get("startMonth") ?? "1");
   const endYear = parseInt(searchParams.get("endYear") ?? "2025");
@@ -1083,6 +1439,13 @@ export async function GET(request: Request) {
   if (scope === "entity" && !entityId) {
     return NextResponse.json(
       { error: "entityId is required for entity scope" },
+      { status: 400 }
+    );
+  }
+
+  if (scope === "reporting_entity" && !reportingEntityId) {
+    return NextResponse.json(
+      { error: "reportingEntityId is required for reporting_entity scope" },
       { status: 400 }
     );
   }
@@ -1502,23 +1865,100 @@ export async function GET(request: Request) {
       .eq("id", organizationId)
       .single();
 
-    // Get master accounts
-    const { data: masterAccounts } = await admin
-      .from("master_accounts")
-      .select("*")
+    // Get all active entities for this org
+    const { data: orgEntities } = await admin
+      .from("entities")
+      .select("id")
       .eq("organization_id", organizationId)
-      .eq("is_active", true)
-      .order("display_order")
-      .order("account_number");
+      .eq("is_active", true);
+    const orgEntityIds = (orgEntities ?? []).map((e: { id: string }) => e.id);
 
-    if (!masterAccounts || masterAccounts.length === 0) {
+    const result = await buildConsolidatedStatements({
+      admin,
+      organizationId,
+      entityIds: orgEntityIds,
+      buckets,
+      allMonths,
+      includeYoY,
+      includeBudget,
+      includeProForma,
+      granularity,
+      scope,
+      startYear,
+      startMonth,
+      endYear,
+      endMonth,
+    });
+
+    return NextResponse.json({
+      ...result,
+      metadata: {
+        organizationName: org?.name ?? undefined,
+        generatedAt: new Date().toISOString(),
+        scope,
+        granularity,
+        startPeriod: `${startYear}-${startMonth}`,
+        endPeriod: `${endYear}-${endMonth}`,
+      },
+    });
+  }
+
+  // --- REPORTING ENTITY SCOPE ---
+  if (scope === "reporting_entity") {
+    // Fetch the reporting entity and its organization
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: reportingEntity } = await (admin as any)
+      .from("reporting_entities")
+      .select("id, name, code, organization_id")
+      .eq("id", reportingEntityId!)
+      .single();
+
+    if (!reportingEntity) {
+      return NextResponse.json(
+        { error: "Reporting entity not found" },
+        { status: 404 }
+      );
+    }
+
+    // Verify membership
+    const { data: membership } = await supabase
+      .from("organization_members")
+      .select("organization_id")
+      .eq("user_id", user.id)
+      .eq("organization_id", reportingEntity.organization_id)
+      .single();
+
+    if (!membership) {
+      return NextResponse.json({ error: "Access denied" }, { status: 403 });
+    }
+
+    // Get org info
+    const { data: org } = await admin
+      .from("organizations")
+      .select("name")
+      .eq("id", reportingEntity.organization_id)
+      .single();
+
+    // Fetch member entity IDs
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: memberRows } = await (admin as any)
+      .from("reporting_entity_members")
+      .select("entity_id")
+      .eq("reporting_entity_id", reportingEntityId!);
+
+    const memberEntityIds = (memberRows ?? []).map(
+      (r: { entity_id: string }) => r.entity_id
+    );
+
+    if (memberEntityIds.length === 0) {
       return NextResponse.json({
         periods: [],
         incomeStatement: { id: "income_statement", title: "Income Statement", sections: [] },
         balanceSheet: { id: "balance_sheet", title: "Balance Sheet", sections: [] },
         cashFlowStatement: { id: "cash_flow", title: "Statement of Cash Flows", sections: [] },
         metadata: {
-          organizationName: org?.name,
+          reportingEntityName: reportingEntity.name,
+          organizationName: org?.name ?? undefined,
           generatedAt: new Date().toISOString(),
           scope,
           granularity,
@@ -1528,361 +1968,27 @@ export async function GET(request: Request) {
       });
     }
 
-    // Get mappings
-    const masterAccountIds = masterAccounts.map((ma) => ma.id);
-    const { data: mappings } = await admin
-      .from("master_account_mappings")
-      .select("master_account_id, entity_id, account_id")
-      .in("master_account_id", masterAccountIds)
-      .limit(10000);
-
-    // Get all active entities for this org (small set, used for GL query)
-    const { data: orgEntities } = await admin
-      .from("entities")
-      .select("id")
-      .eq("organization_id", organizationId)
-      .eq("is_active", true);
-    const orgEntityIds = (orgEntities ?? []).map((e) => e.id);
-
-    // Build a Set of mapped account IDs for in-memory filtering
-    const mappedAccountIdSet = new Set(
-      (mappings ?? []).map((m) => m.account_id)
-    );
-
-    // Get GL balances by entity_id (small set of ~6 IDs) instead of
-    // account_id (1000+ IDs that exceed HTTP URL length limits).
-    // Paginated to avoid PostgREST PGRST_DB_MAX_ROWS truncation.
-    let glBalances: RawGLBalance[] = [];
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const _debug: any = {
+    const result = await buildConsolidatedStatements({
+      admin,
+      organizationId: reportingEntity.organization_id,
+      entityIds: memberEntityIds,
+      buckets,
       allMonths,
-      orgEntityIds,
-      mappedAccountCount: mappedAccountIdSet.size,
-      masterAccountCount: masterAccounts.length,
-      mappingCount: (mappings ?? []).length,
-    };
+      includeYoY,
+      includeBudget,
+      includeProForma,
+      granularity,
+      scope,
+      startYear,
+      startMonth,
+      endYear,
+      endMonth,
+    });
 
-    if (mappedAccountIdSet.size > 0 && orgEntityIds.length > 0) {
-      const uniqueYears = [...new Set(allMonths.map((m) => m.year))];
-      const uniqueMonthNums = [...new Set(allMonths.map((m) => m.month))];
-      _debug.queryFilters = { uniqueYears, uniqueMonthNums };
-
-      // Paginated fetch to avoid PostgREST PGRST_DB_MAX_ROWS truncation
-      const allBalances = await fetchAllGLBalances(admin, {
-        filterColumn: "entity_id",
-        filterValues: orgEntityIds,
-        years: uniqueYears,
-        months: uniqueMonthNums,
-      });
-
-      _debug.rawRowCount = allBalances.length;
-
-      const monthSet = new Set(
-        allMonths.map(
-          (m) => `${m.year}-${String(m.month).padStart(2, "0")}`
-        )
-      );
-      // Filter to mapped accounts and exact months
-      glBalances = allBalances.filter(
-        (b) =>
-          mappedAccountIdSet.has(b.account_id) &&
-          monthSet.has(
-            `${b.period_year}-${String(b.period_month).padStart(2, "0")}`
-          )
-      );
-
-      _debug.filteredRowCount = glBalances.length;
-
-      // Debug: count GL rows per entity for Jan 2026
-      const entityRowCounts: Record<string, number> = {};
-      const entityNetChangeSums: Record<string, number> = {};
-      for (const b of glBalances) {
-        if (b.period_year === 2026 && b.period_month === 1) {
-          entityRowCounts[b.entity_id] = (entityRowCounts[b.entity_id] ?? 0) + 1;
-          entityNetChangeSums[b.entity_id] = (entityNetChangeSums[b.entity_id] ?? 0) + b.net_change;
-        }
-      }
-      _debug.jan2026PerEntity = { rowCounts: entityRowCounts, netChangeSums: entityNetChangeSums };
-    }
-
-    // Build mapping: master account ID -> list of entity account_ids
-    const masterToEntityAccounts = new Map<string, string[]>();
-    for (const m of mappings ?? []) {
-      const existing = masterToEntityAccounts.get(m.master_account_id) ?? [];
-      existing.push(m.account_id);
-      masterToEntityAccounts.set(m.master_account_id, existing);
-    }
-
-    // Consolidate: For each master account, sum the GL balances of all mapped entity accounts
-    // Treat each master account as a single "account" for statement building
-    const consolidatedAccounts: AccountInfo[] = masterAccounts.map((ma) => ({
-      id: ma.id,
-      name: ma.name,
-      accountNumber: ma.account_number,
-      classification: ma.classification,
-      accountType: ma.account_type,
-    }));
-
-    // Build consolidated GL balances: for each master account and each period,
-    // sum up all the mapped entity account balances
-    const consolidatedBalances: RawGLBalance[] = [];
-
-    // Debug: track revenue master accounts consolidation
-    const _revenueDebug: Record<string, { mappedAccountIds: string[]; balanceCount: number; netChange: number }> = {};
-
-    for (const ma of masterAccounts) {
-      const entityAccountIds = masterToEntityAccounts.get(ma.id) ?? [];
-      const entityBalances = glBalances.filter((b) =>
-        entityAccountIds.includes(b.account_id)
-      );
-
-      // Debug: capture revenue account details
-      if (ma.classification === "Revenue") {
-        const jan2026Balances = entityBalances.filter(
-          (b) => b.period_year === 2026 && b.period_month === 1
-        );
-        _revenueDebug[ma.name] = {
-          mappedAccountIds: entityAccountIds,
-          balanceCount: jan2026Balances.length,
-          netChange: jan2026Balances.reduce((s, b) => s + b.net_change, 0),
-        };
-      }
-
-      // Group by period
-      const periodMap = new Map<
-        string,
-        { beginning: number; ending: number; netChange: number }
-      >();
-
-      for (const b of entityBalances) {
-        const key = `${b.period_year}-${b.period_month}`;
-        const existing = periodMap.get(key) ?? {
-          beginning: 0,
-          ending: 0,
-          netChange: 0,
-        };
-        existing.beginning += b.beginning_balance;
-        existing.ending += b.ending_balance;
-        existing.netChange += b.net_change;
-        periodMap.set(key, existing);
-      }
-
-      for (const [key, vals] of periodMap) {
-        const [y, m] = key.split("-").map(Number);
-        consolidatedBalances.push({
-          account_id: ma.id, // use master account ID
-          entity_id: "consolidated",
-          period_year: y,
-          period_month: m,
-          beginning_balance: vals.beginning,
-          ending_balance: vals.ending,
-          net_change: vals.netChange,
-        });
-      }
-    }
-
-    _debug.revenueConsolidation = _revenueDebug;
-
-    // --- Pro Forma Adjustments (organization scope) ---
-    if (includeProForma) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- pro_forma_adjustments not in generated types
-      const { data: proFormaRows } = await (admin as any)
-        .from("pro_forma_adjustments")
-        .select("master_account_id, period_year, period_month, amount")
-        .eq("organization_id", organizationId!)
-        .eq("is_excluded", false);
-
-      if (proFormaRows && proFormaRows.length > 0) {
-        injectProFormaAdjustments(
-          consolidatedBalances,
-          proFormaRows as RawProFormaAdjustment[],
-          "consolidated"
-        );
-      }
-    }
-
-    // Aggregate into buckets
-    const aggregated = aggregateByBucket(
-      consolidatedAccounts,
-      consolidatedBalances,
-      buckets
-    );
-
-    // Prior year aggregation for YoY
-    let pyAggregated: Map<string, BucketedAmounts> | undefined;
-    if (includeYoY) {
-      const pyBuckets = createPriorYearBuckets(buckets);
-      pyAggregated = aggregateByBucket(consolidatedAccounts, consolidatedBalances, pyBuckets);
-    }
-
-    // Reuse entity IDs fetched earlier for GL balance query
-    const entityIds = orgEntityIds;
-    const depreciationByBucket: Record<string, number> = {};
-    const pyDepreciationByBucket: Record<string, number> = {};
-    for (const bucket of buckets) {
-      depreciationByBucket[bucket.key] = 0;
-      pyDepreciationByBucket[bucket.key] = 0;
-    }
-
-    if (entityIds.length > 0) {
-      const { data: assetIds } = await admin
-        .from("fixed_assets")
-        .select("id")
-        .in("entity_id", entityIds);
-
-      const ids = (assetIds ?? []).map((a) => a.id);
-      if (ids.length > 0) {
-        const uniqueYears = [
-          ...new Set(buckets.flatMap((b) => b.months.map((m) => m.year))),
-        ];
-        // Include prior years for YoY depreciation
-        const allDepYears = includeYoY
-          ? [...new Set([...uniqueYears, ...uniqueYears.map((y) => y - 1)])]
-          : uniqueYears;
-
-        const { data: depRows } = await admin
-          .from("fixed_asset_depreciation")
-          .select("period_year, period_month, book_depreciation")
-          .in("fixed_asset_id", ids)
-          .in("period_year", allDepYears);
-
-        for (const bucket of buckets) {
-          const monthSet = new Set(
-            bucket.months.map((m) => `${m.year}-${m.month}`)
-          );
-          for (const row of depRows ?? []) {
-            if (monthSet.has(`${row.period_year}-${row.period_month}`)) {
-              depreciationByBucket[bucket.key] += Number(row.book_depreciation);
-            }
-          }
-        }
-
-        // Prior year depreciation
-        if (includeYoY) {
-          const pyBuckets = createPriorYearBuckets(buckets);
-          for (const bucket of pyBuckets) {
-            const monthSet = new Set(
-              bucket.months.map((m) => `${m.year}-${m.month}`)
-            );
-            for (const row of depRows ?? []) {
-              if (monthSet.has(`${row.period_year}-${row.period_month}`)) {
-                pyDepreciationByBucket[bucket.key] += Number(row.book_depreciation);
-              }
-            }
-          }
-        }
-      }
-    }
-
-    // --------------- Budget data (organization scope) ---------------
-    let orgBudgetByAccount: Map<string, Record<string, number>> | undefined;
-
-    if (includeBudget && entityIds.length > 0) {
-      const budgetYears = [
-        ...new Set(buckets.flatMap((b) => b.months.map((m) => m.year))),
-      ];
-
-      // Find active budget versions across ALL entities in the org
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- budget tables not yet in generated types
-      const { data: activeVersions } = await (admin as any)
-        .from("budget_versions")
-        .select("id, fiscal_year, entity_id")
-        .in("entity_id", entityIds)
-        .eq("is_active", true)
-        .in("fiscal_year", budgetYears);
-
-      const versionIds = (activeVersions ?? []).map(
-        (v: { id: string }) => v.id
-      );
-
-      if (versionIds.length > 0) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- budget tables not yet in generated types
-        const { data: budgetRows } = await (admin as any)
-          .from("budget_amounts")
-          .select("account_id, period_year, period_month, amount")
-          .in("budget_version_id", versionIds);
-
-        // Build reverse mapping: entity account_id -> master_account_id
-        const entityToMaster = new Map<string, string>();
-        for (const m of mappings ?? []) {
-          entityToMaster.set(m.account_id, m.master_account_id);
-        }
-
-        orgBudgetByAccount = aggregateBudgetByBucket(
-          (budgetRows ?? []) as RawBudgetAmount[],
-          buckets,
-          entityToMaster
-        );
-      }
-    }
-
-    // Build statements
-    const incomeStatement = buildStatement(
-      "income_statement",
-      "Consolidated Income Statement",
-      INCOME_STATEMENT_SECTIONS,
-      INCOME_STATEMENT_COMPUTED,
-      consolidatedAccounts,
-      aggregated,
-      buckets,
-      true,
-      orgBudgetByAccount,
-      pyAggregated
-    );
-
-    const netIncomeByBucket: Record<string, number> = {};
-    const pyNetIncomeByBucket: Record<string, number> = {};
-    const netIncomeSection = incomeStatement.sections.find(
-      (s) => s.id === "net_income"
-    );
-    for (const bucket of buckets) {
-      netIncomeByBucket[bucket.key] =
-        netIncomeSection?.subtotalLine?.amounts[bucket.key] ?? 0;
-      pyNetIncomeByBucket[bucket.key] =
-        netIncomeSection?.subtotalLine?.priorYearAmounts?.[bucket.key] ?? 0;
-    }
-
-    // Balance Sheet (no budget — P&L only)
-    const balanceSheet = buildStatement(
-      "balance_sheet",
-      "Consolidated Balance Sheet",
-      BALANCE_SHEET_SECTIONS,
-      BALANCE_SHEET_COMPUTED,
-      consolidatedAccounts,
-      aggregated,
-      buckets,
-      false,
-      undefined, // no budget for BS
-      pyAggregated
-    );
-
-    const cashFlowStatement = buildCashFlowStatement(
-      consolidatedAccounts,
-      aggregated,
-      buckets,
-      depreciationByBucket,
-      netIncomeByBucket,
-      includeYoY ? pyAggregated : undefined,
-      includeYoY ? pyDepreciationByBucket : undefined,
-      includeYoY ? pyNetIncomeByBucket : undefined
-    );
-
-    const periods: Period[] = buckets.map((b) => ({
-      key: b.key,
-      label: b.label,
-      year: b.year,
-      startMonth: b.startMonth,
-      endMonth: b.endMonth,
-      endYear: b.endYear,
-    }));
-
-    const response = {
-      periods,
-      incomeStatement,
-      balanceSheet,
-      cashFlowStatement,
+    return NextResponse.json({
+      ...result,
       metadata: {
+        reportingEntityName: reportingEntity.name,
         organizationName: org?.name ?? undefined,
         generatedAt: new Date().toISOString(),
         scope,
@@ -1890,10 +1996,7 @@ export async function GET(request: Request) {
         startPeriod: `${startYear}-${startMonth}`,
         endPeriod: `${endYear}-${endMonth}`,
       },
-      _debug,
-    };
-
-    return NextResponse.json(response);
+    });
   }
 
   return NextResponse.json({ error: "Invalid scope" }, { status: 400 });

@@ -41,6 +41,8 @@ export function useFinancialStatements(
     if (config.entityId) params.set("entityId", config.entityId);
     if (config.organizationId)
       params.set("organizationId", config.organizationId);
+    if (config.reportingEntityId)
+      params.set("reportingEntityId", config.reportingEntityId);
 
     try {
       const response = await fetch(
@@ -66,6 +68,7 @@ export function useFinancialStatements(
     config.scope,
     config.entityId,
     config.organizationId,
+    config.reportingEntityId,
     config.startYear,
     config.startMonth,
     config.endYear,

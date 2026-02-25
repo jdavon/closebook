@@ -53,6 +53,55 @@ function parseGLBalance(row: any): RawGLBalance {
 }
 
 // ---------------------------------------------------------------------------
+// Paginated GL balance fetcher.
+// Supabase PostgREST caps responses via PGRST_DB_MAX_ROWS (often 1000).
+// Page size must not exceed this limit so pagination detects when more
+// rows remain.
+// ---------------------------------------------------------------------------
+
+const GL_PAGE_SIZE = 1000;
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function fetchAllGLBalances(
+  admin: any,
+  entityIds: string[],
+  years: number[],
+  months: number[]
+): Promise<RawGLBalance[]> {
+  const allRows: RawGLBalance[] = [];
+  let offset = 0;
+  let hasMore = true;
+
+  while (hasMore) {
+    const { data, error } = await admin
+      .from("gl_balances")
+      .select(
+        "account_id, entity_id, period_year, period_month, beginning_balance, ending_balance, net_change"
+      )
+      .in("entity_id", entityIds)
+      .in("period_year", years)
+      .in("period_month", months)
+      .range(offset, offset + GL_PAGE_SIZE - 1);
+
+    if (error) {
+      console.error("GL balance pagination error:", error);
+      break;
+    }
+
+    const rows = (data ?? []).map(parseGLBalance);
+    allRows.push(...rows);
+
+    if (rows.length < GL_PAGE_SIZE) {
+      hasMore = false;
+    } else {
+      offset += GL_PAGE_SIZE;
+    }
+  }
+
+  return allRows;
+}
+
+// ---------------------------------------------------------------------------
 // Build statement with entity columns
 // ---------------------------------------------------------------------------
 
@@ -231,6 +280,7 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
 
   const organizationId = searchParams.get("organizationId");
+  const reportingEntityId = searchParams.get("reportingEntityId");
   const startYear = parseInt(searchParams.get("startYear") ?? "0");
   const startMonth = parseInt(searchParams.get("startMonth") ?? "0");
   const endYear = parseInt(searchParams.get("endYear") ?? "0");
@@ -282,15 +332,53 @@ export async function GET(request: Request) {
     .eq("id", organizationId)
     .single();
 
-  // Get entities
-  const { data: orgEntities } = await admin
-    .from("entities")
-    .select("id, name, code")
-    .eq("organization_id", organizationId)
-    .eq("is_active", true)
-    .order("name");
+  // Get entities — when a reporting entity is specified, filter to its members
+  let reportingEntityName: string | undefined;
 
-  const entities = orgEntities ?? [];
+  let entities: Array<{ id: string; name: string; code: string }> = [];
+
+  if (reportingEntityId) {
+    // Fetch reporting entity info
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: re } = await (admin as any)
+      .from("reporting_entities")
+      .select("name")
+      .eq("id", reportingEntityId)
+      .single();
+
+    reportingEntityName = re?.name;
+
+    // Fetch member entity IDs
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: memberRows } = await (admin as any)
+      .from("reporting_entity_members")
+      .select("entity_id")
+      .eq("reporting_entity_id", reportingEntityId);
+
+    const memberIds = (memberRows ?? []).map(
+      (r: { entity_id: string }) => r.entity_id
+    );
+
+    if (memberIds.length > 0) {
+      const { data: memberEntities } = await admin
+        .from("entities")
+        .select("id, name, code")
+        .in("id", memberIds)
+        .eq("is_active", true)
+        .order("name");
+
+      entities = memberEntities ?? [];
+    }
+  } else {
+    const { data: orgEntities } = await admin
+      .from("entities")
+      .select("id, name, code")
+      .eq("organization_id", organizationId)
+      .eq("is_active", true)
+      .order("name");
+
+    entities = orgEntities ?? [];
+  }
 
   if (entities.length === 0) {
     return NextResponse.json({
@@ -392,15 +480,13 @@ export async function GET(request: Request) {
   if (mappedAccountIdSet.size > 0 && entityIds.length > 0) {
     const uniqueYears = [...new Set(allMonths.map((m) => m.year))];
     const uniqueMonthNums = [...new Set(allMonths.map((m) => m.month))];
-    const { data: balances } = await admin
-      .from("gl_balances")
-      .select(
-        "account_id, entity_id, period_year, period_month, beginning_balance, ending_balance, net_change"
-      )
-      .in("entity_id", entityIds)
-      .in("period_year", uniqueYears)
-      .in("period_month", uniqueMonthNums)
-      .limit(100000);
+
+    const allBalances = await fetchAllGLBalances(
+      admin,
+      entityIds,
+      uniqueYears,
+      uniqueMonthNums
+    );
 
     const monthSet = new Set(
       allMonths.map(
@@ -408,15 +494,13 @@ export async function GET(request: Request) {
       )
     );
     // Filter to mapped accounts and exact months
-    glBalances = (balances ?? [])
-      .map(parseGLBalance)
-      .filter(
-        (b) =>
-          mappedAccountIdSet.has(b.account_id) &&
-          monthSet.has(
-            `${b.period_year}-${String(b.period_month).padStart(2, "0")}`
-          )
-      );
+    glBalances = allBalances.filter(
+      (b) =>
+        mappedAccountIdSet.has(b.account_id) &&
+        monthSet.has(
+          `${b.period_year}-${String(b.period_month).padStart(2, "0")}`
+        )
+    );
   }
 
   // Index GL balances: (entity_id, account_id) -> balances sorted by period
@@ -567,8 +651,8 @@ export async function GET(request: Request) {
     })),
     {
       key: "consolidated",
-      label: "Consolidated",
-      fullName: org?.name ?? "Consolidated",
+      label: reportingEntityName ? reportingEntityName : "Consolidated",
+      fullName: reportingEntityName ?? org?.name ?? "Consolidated",
     },
   ];
 
