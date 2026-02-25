@@ -24,6 +24,7 @@ const TAB_LABELS: Record<StatementTab, string> = {
   "balance-sheet": "Balance Sheet",
   "cash-flow": "Cash Flow",
   "pro-forma": "Pro Forma Adjustments",
+  "entity-breakdown": "Entity Breakdown",
   all: "All Statements",
 };
 

@@ -17,6 +17,7 @@ import { StatementCard } from "@/components/financial-statements/statement-card"
 import { ConfigToolbar } from "@/components/financial-statements/config-toolbar";
 import { useFinancialStatements } from "@/components/financial-statements/use-financial-statements";
 import { ProFormaTab } from "@/components/financial-statements/pro-forma-tab";
+import { EntityBreakdownTab } from "@/components/financial-statements/entity-breakdown-tab";
 import type {
   Granularity,
   Scope,
@@ -270,6 +271,7 @@ export default function FinancialModelPage() {
             <TabsTrigger value="balance-sheet">Balance Sheet</TabsTrigger>
             <TabsTrigger value="cash-flow">Cash Flow</TabsTrigger>
             <TabsTrigger value="pro-forma">Pro Forma Adjustments</TabsTrigger>
+            <TabsTrigger value="entity-breakdown">Entity Breakdown</TabsTrigger>
           </TabsList>
 
           {/* All Statements */}
@@ -349,6 +351,19 @@ export default function FinancialModelPage() {
               startMonth={startMonth}
               endYear={endYear}
               endMonth={endMonth}
+            />
+          </TabsContent>
+
+          {/* Entity Breakdown */}
+          <TabsContent value="entity-breakdown">
+            <EntityBreakdownTab
+              organizationId={organizationId}
+              startYear={startYear}
+              startMonth={startMonth}
+              endYear={endYear}
+              endMonth={endMonth}
+              granularity={granularity}
+              includeProForma={includeProForma}
             />
           </TabsContent>
         </Tabs>

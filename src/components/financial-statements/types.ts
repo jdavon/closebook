@@ -2,7 +2,7 @@
 
 export type Granularity = "monthly" | "quarterly" | "yearly";
 export type Scope = "entity" | "organization";
-export type StatementTab = "income-statement" | "balance-sheet" | "cash-flow" | "pro-forma" | "all";
+export type StatementTab = "income-statement" | "balance-sheet" | "cash-flow" | "pro-forma" | "entity-breakdown" | "all";
 
 /** A single time period column in the statements */
 export interface Period {
@@ -100,4 +100,24 @@ export interface ProFormaAdjustment {
   entity_code?: string;
   master_account_name?: string;
   master_account_number?: string;
+}
+
+/** A column in the entity-breakdown view */
+export interface EntityColumn {
+  key: string;       // entity ID or "consolidated"
+  label: string;     // entity code or "Consolidated"
+  fullName: string;  // entity full name
+}
+
+/** Response from the entity-breakdown API */
+export interface EntityBreakdownResponse {
+  columns: EntityColumn[];
+  incomeStatement: StatementData;
+  balanceSheet: StatementData;
+  metadata: {
+    organizationName?: string;
+    generatedAt: string;
+    startPeriod: string;
+    endPeriod: string;
+  };
 }
