@@ -1417,9 +1417,12 @@ async function buildConsolidatedStatements(params: ConsolidatedStatementsParams)
 
     if (allocRows && allocRows.length > 0) {
       const expanded = expandAllocationAdjustments(allocRows as RawAllocationAdjustment[]);
-      // At consolidated level these net to zero, but we inject both sides
-      // so entity-level views within the consolidation are correct
-      injectAllocationAdjustments(consolidatedBalances, expanded, "consolidated");
+      // Filter to entries belonging to entities in scope.
+      // For org scope this keeps both sides (net zero at consolidated).
+      // For reporting_entity scope this shows the net effect of cross-RE allocations.
+      const entityIdSet = new Set(entityIds);
+      const filtered = expanded.filter((e) => entityIdSet.has(e.entity_id));
+      injectAllocationAdjustments(consolidatedBalances, filtered, "consolidated");
     }
   }
 
