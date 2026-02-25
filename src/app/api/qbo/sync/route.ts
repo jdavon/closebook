@@ -590,7 +590,7 @@ export async function POST(request: Request) {
           });
 
           const plResponse = await fetch(
-            `${apiBaseUrl}/v3/company/${connection.realm_id}/reports/ProfitAndLoss?start_date=${startDate}&end_date=${endDate}&summarize_column_by=Class`,
+            `${apiBaseUrl}/v3/company/${connection.realm_id}/reports/ProfitAndLoss?start_date=${startDate}&end_date=${endDate}&summarize_column_by=Classes`,
             {
               headers: {
                 Authorization: `Bearer ${accessToken}`,
