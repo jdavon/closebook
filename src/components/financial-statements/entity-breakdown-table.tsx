@@ -146,26 +146,26 @@ export function EntityBreakdownTable({
               )}
             </tr>
           </thead>
-          <tbody>
-            {data.sections.map((section) => {
-              const isCollapsed = collapsedSections.has(section.id);
-              const hasLines = section.lines.length > 0;
-              const hasTitle = section.title.length > 0;
+          {data.sections.map((section) => {
+            const isCollapsed = collapsedSections.has(section.id);
+            const hasLines = section.lines.length > 0;
+            const hasTitle = section.title.length > 0;
 
-              // Computed-only section (no title, no lines, just subtotalLine)
-              if (!hasTitle && !hasLines && section.subtotalLine) {
-                const line = section.subtotalLine;
-                const isMargin = line.id.endsWith("_margin");
-                const rowClass = line.isGrandTotal
-                  ? "stmt-grand-total"
-                  : line.isTotal
-                    ? "stmt-subtotal"
-                    : isMargin
-                      ? "stmt-margin-row"
-                      : "";
+            // Computed-only section (no title, no lines, just subtotalLine)
+            if (!hasTitle && !hasLines && section.subtotalLine) {
+              const line = section.subtotalLine;
+              const isMargin = line.id.endsWith("_margin");
+              const rowClass = line.isGrandTotal
+                ? "stmt-grand-total"
+                : line.isTotal
+                  ? "stmt-subtotal"
+                  : isMargin
+                    ? "stmt-margin-row"
+                    : "";
 
-                return (
-                  <tr key={section.id} className={rowClass}>
+              return (
+                <tbody key={section.id}>
+                  <tr className={rowClass}>
                     <td
                       style={{
                         paddingLeft: isMargin ? "2rem" : undefined,
@@ -188,133 +188,133 @@ export function EntityBreakdownTable({
                       </td>
                     )}
                   </tr>
-                );
-              }
+                </tbody>
+              );
+            }
 
-              // Headerless section with lines
-              if (!hasTitle && hasLines) {
-                return (
-                  <tbody key={section.id}>
-                    {section.lines.map((line) => {
-                      const isStriped = stripeIndex % 2 === 0;
-                      stripeIndex++;
-                      return (
-                        <tr
-                          key={line.id}
-                          className={`stmt-line-item ${isStriped ? "stmt-row-striped" : ""}`}
-                        >
-                          <td style={{ paddingLeft: "2rem" }}>{line.label}</td>
-                          {renderEntityCells(line)}
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                );
-              }
-
-              // Standard section with title and lines
+            // Headerless section with lines
+            if (!hasTitle && hasLines) {
               return (
                 <tbody key={section.id}>
-                  {hasTitle && (
-                    <tr className="stmt-section-header">
-                      <td colSpan={totalCols}>
-                        {hasLines ? (
-                          <button
-                            onClick={() => toggleSection(section.id)}
-                            className="flex items-center gap-1 hover:text-primary transition-colors w-full text-left font-bold"
-                          >
-                            {isCollapsed ? (
-                              <ChevronRight className="h-3.5 w-3.5 shrink-0" />
-                            ) : (
-                              <ChevronDown className="h-3.5 w-3.5 shrink-0" />
-                            )}
-                            {section.title}
-                          </button>
-                        ) : (
-                          section.title
-                        )}
-                      </td>
-                    </tr>
-                  )}
+                  {section.lines.map((line) => {
+                    const isStriped = stripeIndex % 2 === 0;
+                    stripeIndex++;
+                    return (
+                      <tr
+                        key={line.id}
+                        className={`stmt-line-item ${isStriped ? "stmt-row-striped" : ""}`}
+                      >
+                        <td style={{ paddingLeft: "2rem" }}>{line.label}</td>
+                        {renderEntityCells(line)}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              );
+            }
 
-                  {hasTitle && (
-                    <tr className="stmt-separator">
-                      <td colSpan={totalCols}></td>
-                    </tr>
-                  )}
-
-                  {!isCollapsed &&
-                    section.lines.map((line) => {
-                      if (line.isHeader) {
-                        return (
-                          <tr key={line.id} className="stmt-section-header">
-                            <td
-                              colSpan={totalCols}
-                              style={{
-                                paddingLeft: "2rem",
-                                fontSize: "0.8125rem",
-                              }}
-                            >
-                              <em>{line.label}</em>
-                            </td>
-                          </tr>
-                        );
-                      }
-
-                      if (line.isSeparator) {
-                        return (
-                          <tr key={line.id} className="stmt-separator">
-                            <td colSpan={totalCols}></td>
-                          </tr>
-                        );
-                      }
-
-                      const isStriped = stripeIndex % 2 === 0;
-                      stripeIndex++;
-
-                      return (
-                        <tr
-                          key={line.id}
-                          className={`stmt-line-item ${isStriped ? "stmt-row-striped" : ""}`}
+            // Standard section with title and lines
+            return (
+              <tbody key={section.id}>
+                {hasTitle && (
+                  <tr className="stmt-section-header">
+                    <td colSpan={totalCols}>
+                      {hasLines ? (
+                        <button
+                          onClick={() => toggleSection(section.id)}
+                          className="flex items-center gap-1 hover:text-primary transition-colors w-full text-left font-bold"
                         >
-                          <td>{line.label}</td>
-                          {renderEntityCells(line)}
-                        </tr>
-                      );
-                    })}
-
-                  {section.subtotalLine && (
-                    <tr
-                      className={
-                        section.subtotalLine.isGrandTotal
-                          ? "stmt-grand-total"
-                          : "stmt-subtotal"
-                      }
-                    >
-                      <td>{section.subtotalLine.label}</td>
-                      {entityColumns.map((col) => (
-                        <td key={col.key}>
-                          {renderAmount(section.subtotalLine!, col.key)}
-                        </td>
-                      ))}
-                      {consolidatedColumn && (
-                        <td className="font-semibold border-l border-border/50">
-                          {renderAmount(
-                            section.subtotalLine,
-                            "consolidated"
+                          {isCollapsed ? (
+                            <ChevronRight className="h-3.5 w-3.5 shrink-0" />
+                          ) : (
+                            <ChevronDown className="h-3.5 w-3.5 shrink-0" />
                           )}
-                        </td>
+                          {section.title}
+                        </button>
+                      ) : (
+                        section.title
                       )}
-                    </tr>
-                  )}
+                    </td>
+                  </tr>
+                )}
 
+                {hasTitle && (
                   <tr className="stmt-separator">
                     <td colSpan={totalCols}></td>
                   </tr>
-                </tbody>
-              );
-            })}
-          </tbody>
+                )}
+
+                {!isCollapsed &&
+                  section.lines.map((line) => {
+                    if (line.isHeader) {
+                      return (
+                        <tr key={line.id} className="stmt-section-header">
+                          <td
+                            colSpan={totalCols}
+                            style={{
+                              paddingLeft: "2rem",
+                              fontSize: "0.8125rem",
+                            }}
+                          >
+                            <em>{line.label}</em>
+                          </td>
+                        </tr>
+                      );
+                    }
+
+                    if (line.isSeparator) {
+                      return (
+                        <tr key={line.id} className="stmt-separator">
+                          <td colSpan={totalCols}></td>
+                        </tr>
+                      );
+                    }
+
+                    const isStriped = stripeIndex % 2 === 0;
+                    stripeIndex++;
+
+                    return (
+                      <tr
+                        key={line.id}
+                        className={`stmt-line-item ${isStriped ? "stmt-row-striped" : ""}`}
+                      >
+                        <td>{line.label}</td>
+                        {renderEntityCells(line)}
+                      </tr>
+                    );
+                  })}
+
+                {section.subtotalLine && (
+                  <tr
+                    className={
+                      section.subtotalLine.isGrandTotal
+                        ? "stmt-grand-total"
+                        : "stmt-subtotal"
+                    }
+                  >
+                    <td>{section.subtotalLine.label}</td>
+                    {entityColumns.map((col) => (
+                      <td key={col.key}>
+                        {renderAmount(section.subtotalLine!, col.key)}
+                      </td>
+                    ))}
+                    {consolidatedColumn && (
+                      <td className="font-semibold border-l border-border/50">
+                        {renderAmount(
+                          section.subtotalLine,
+                          "consolidated"
+                        )}
+                      </td>
+                    )}
+                  </tr>
+                )}
+
+                <tr className="stmt-separator">
+                  <td colSpan={totalCols}></td>
+                </tr>
+              </tbody>
+            );
+          })}
         </table>
       </div>
     </TooltipProvider>
