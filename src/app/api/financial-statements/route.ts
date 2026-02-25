@@ -1355,32 +1355,19 @@ async function buildConsolidatedStatements(params: ConsolidatedStatementsParams)
 
   // Budget data
   let consolidatedBudgetByAccount: Map<string, Record<string, number>> | undefined;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const _budgetDebug: any = { includeBudget, entityCount: entityIds.length };
 
   if (includeBudget && entityIds.length > 0) {
     const budgetYears = [
       ...new Set(buckets.flatMap((b) => b.months.map((m) => m.year))),
     ];
-    _budgetDebug.budgetYears = budgetYears;
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data: activeVersions, error: versionsError } = await (admin as any)
+    const { data: activeVersions } = await (admin as any)
       .from("budget_versions")
       .select("id, fiscal_year, entity_id")
       .in("entity_id", entityIds)
       .eq("is_active", true)
       .in("fiscal_year", budgetYears);
-
-    _budgetDebug.activeVersionCount = (activeVersions ?? []).length;
-    _budgetDebug.activeVersions = (activeVersions ?? []).map(
-      (v: { id: string; fiscal_year: number; entity_id: string }) => ({
-        id: v.id,
-        fiscal_year: v.fiscal_year,
-        entity_id: v.entity_id,
-      })
-    );
-    if (versionsError) _budgetDebug.versionsError = versionsError.message;
 
     const versionIds = (activeVersions ?? []).map(
       (v: { id: string }) => v.id
@@ -1388,9 +1375,6 @@ async function buildConsolidatedStatements(params: ConsolidatedStatementsParams)
 
     if (versionIds.length > 0) {
       const budgetResult = await fetchBudgetAmounts(admin, versionIds);
-      _budgetDebug.budgetColumn = budgetResult.column;
-      _budgetDebug.budgetRowCount = budgetResult.rows.length;
-      if (budgetResult.error) _budgetDebug.budgetQueryError = budgetResult.error;
 
       if (budgetResult.rows.length > 0) {
         // Build entityToMaster mapping (needed if column is account_id)
@@ -1405,7 +1389,6 @@ async function buildConsolidatedStatements(params: ConsolidatedStatementsParams)
           budgetResult.column,
           entityToMaster
         );
-        _budgetDebug.aggregatedAccountCount = consolidatedBudgetByAccount.size;
       }
     }
   }
@@ -1474,7 +1457,6 @@ async function buildConsolidatedStatements(params: ConsolidatedStatementsParams)
     incomeStatement,
     balanceSheet,
     cashFlowStatement,
-    _budgetDebug,
   };
 }
 
@@ -1776,28 +1758,21 @@ export async function GET(request: Request) {
 
     // --------------- Budget data (entity scope) ---------------
     let budgetByAccount: Map<string, Record<string, number>> | undefined;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const _entityBudgetDebug: any = { includeBudget };
 
     if (includeBudget) {
       // Determine which fiscal years we need budgets for
       const budgetYears = [
         ...new Set(buckets.flatMap((b) => b.months.map((m) => m.year))),
       ];
-      _entityBudgetDebug.budgetYears = budgetYears;
 
       // Find active budget versions for this entity in those years
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- budget tables not yet in generated types
-      const { data: activeVersions, error: versionsError } = await (admin as any)
+      const { data: activeVersions } = await (admin as any)
         .from("budget_versions")
         .select("id, fiscal_year")
         .eq("entity_id", entityId!)
         .eq("is_active", true)
         .in("fiscal_year", budgetYears);
-
-      _entityBudgetDebug.activeVersionCount = (activeVersions ?? []).length;
-      _entityBudgetDebug.activeVersions = activeVersions ?? [];
-      if (versionsError) _entityBudgetDebug.versionsError = versionsError.message;
 
       const versionIds = (activeVersions ?? []).map(
         (v: { id: string }) => v.id
@@ -1805,9 +1780,6 @@ export async function GET(request: Request) {
 
       if (versionIds.length > 0) {
         const budgetResult = await fetchBudgetAmounts(admin, versionIds);
-        _entityBudgetDebug.budgetColumn = budgetResult.column;
-        _entityBudgetDebug.budgetRowCount = budgetResult.rows.length;
-        if (budgetResult.error) _entityBudgetDebug.budgetQueryError = budgetResult.error;
 
         if (budgetResult.rows.length > 0) {
           // Build entityToMaster mapping (needed if column is account_id)
@@ -1822,7 +1794,6 @@ export async function GET(request: Request) {
             budgetResult.column,
             entityToMaster
           );
-          _entityBudgetDebug.aggregatedAccountCount = budgetByAccount.size;
         }
       }
     }
@@ -1902,7 +1873,6 @@ export async function GET(request: Request) {
       incomeStatement,
       balanceSheet,
       cashFlowStatement,
-      _budgetDebug: _entityBudgetDebug,
       metadata: {
         entityName: entity.name,
         organizationName: org?.name ?? undefined,
