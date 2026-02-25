@@ -2,7 +2,7 @@
 
 export type Granularity = "monthly" | "quarterly" | "yearly";
 export type Scope = "entity" | "organization" | "reporting_entity";
-export type StatementTab = "income-statement" | "balance-sheet" | "cash-flow" | "pro-forma" | "entity-breakdown" | "re-breakdown" | "all";
+export type StatementTab = "income-statement" | "balance-sheet" | "cash-flow" | "pro-forma" | "allocations" | "entity-breakdown" | "re-breakdown" | "all";
 
 /** A single time period column in the statements */
 export interface Period {
@@ -31,6 +31,7 @@ export interface LineItem {
   isHeader: boolean;        // Section header (bold, no amounts)
   isSeparator: boolean;     // Blank separator row
   showDollarSign: boolean;  // Show $ on this row
+  varianceInvertColor?: boolean;  // When true, positive variance is unfavorable (expense items)
 }
 
 /** A group of line items under a section header */
@@ -80,6 +81,7 @@ export interface FinancialModelConfig {
   includeBudget: boolean;
   includeYoY: boolean;
   includeProForma: boolean;
+  includeAllocations: boolean;
 }
 
 /** A pro forma adjustment row from the database */
@@ -100,6 +102,36 @@ export interface ProFormaAdjustment {
   // Joined fields for display
   entity_name?: string;
   entity_code?: string;
+  master_account_name?: string;
+  master_account_number?: string;
+}
+
+/** An allocation adjustment row from the database */
+export interface AllocationAdjustment {
+  id: string;
+  organization_id: string;
+  source_entity_id: string;
+  destination_entity_id: string;
+  master_account_id: string;
+  amount: number;
+  description: string;
+  notes: string | null;
+  is_excluded: boolean;
+  schedule_type: "single_month" | "monthly_spread";
+  period_year: number | null;
+  period_month: number | null;
+  start_year: number | null;
+  start_month: number | null;
+  end_year: number | null;
+  end_month: number | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+  // Joined fields for display
+  source_entity_name?: string;
+  source_entity_code?: string;
+  destination_entity_name?: string;
+  destination_entity_code?: string;
   master_account_name?: string;
   master_account_number?: string;
 }

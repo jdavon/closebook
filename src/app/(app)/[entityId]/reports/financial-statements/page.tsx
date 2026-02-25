@@ -8,6 +8,7 @@ import { getCurrentPeriod } from "@/lib/utils/dates";
 import { StatementCard } from "@/components/financial-statements/statement-card";
 import { ConfigToolbar } from "@/components/financial-statements/config-toolbar";
 import { useFinancialStatements } from "@/components/financial-statements/use-financial-statements";
+import { filterForEbitdaOnly } from "@/components/financial-statements/format-utils";
 import type {
   Granularity,
   StatementTab,
@@ -28,6 +29,7 @@ export default function FinancialStatementsPage() {
   const [granularity, setGranularity] = useState<Granularity>("monthly");
   const [includeBudget, setIncludeBudget] = useState(false);
   const [includeYoY, setIncludeYoY] = useState(false);
+  const [ebitdaOnly, setEbitdaOnly] = useState(false);
   const [activeTab, setActiveTab] = useState<StatementTab>("all");
 
   const config: FinancialModelConfig = {
@@ -41,6 +43,7 @@ export default function FinancialStatementsPage() {
     includeBudget,
     includeYoY,
     includeProForma: false,
+    includeAllocations: false,
   };
 
   const { data, loading, error } = useFinancialStatements(config);
@@ -76,6 +79,12 @@ export default function FinancialStatementsPage() {
   const companyName =
     data?.metadata.entityName ?? data?.metadata.organizationName ?? "";
 
+  const incomeStatementData = data
+    ? ebitdaOnly
+      ? filterForEbitdaOnly(data.incomeStatement)
+      : data.incomeStatement
+    : undefined;
+
   const sharedCardProps = {
     companyName,
     startYear,
@@ -106,6 +115,7 @@ export default function FinancialStatementsPage() {
         granularity={granularity}
         includeBudget={includeBudget}
         includeYoY={includeYoY}
+        ebitdaOnly={ebitdaOnly}
         onStartYearChange={setStartYear}
         onStartMonthChange={setStartMonth}
         onEndYearChange={setEndYear}
@@ -113,6 +123,7 @@ export default function FinancialStatementsPage() {
         onGranularityChange={setGranularity}
         onIncludeBudgetChange={setIncludeBudget}
         onIncludeYoYChange={setIncludeYoY}
+        onEbitdaOnlyChange={setEbitdaOnly}
         onExport={handleExport}
         onExportAll={handleExportAll}
         onPrint={handlePrint}
@@ -170,7 +181,7 @@ export default function FinancialStatementsPage() {
             <StatementCard
               {...sharedCardProps}
               statementTitle="Income Statement"
-              statementData={data.incomeStatement}
+              statementData={incomeStatementData!}
               periods={data.periods}
               showBudget={includeBudget}
               showYoY={includeYoY}
@@ -200,7 +211,7 @@ export default function FinancialStatementsPage() {
             <StatementCard
               {...sharedCardProps}
               statementTitle="Income Statement"
-              statementData={data.incomeStatement}
+              statementData={incomeStatementData!}
               periods={data.periods}
               showBudget={includeBudget}
               showYoY={includeYoY}

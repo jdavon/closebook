@@ -16,7 +16,9 @@ import { getCurrentPeriod } from "@/lib/utils/dates";
 import { StatementCard } from "@/components/financial-statements/statement-card";
 import { ConfigToolbar } from "@/components/financial-statements/config-toolbar";
 import { useFinancialStatements } from "@/components/financial-statements/use-financial-statements";
+import { filterForEbitdaOnly } from "@/components/financial-statements/format-utils";
 import { ProFormaTab } from "@/components/financial-statements/pro-forma-tab";
+import { AllocationTab } from "@/components/financial-statements/allocation-tab";
 import { EntityBreakdownTab } from "@/components/financial-statements/entity-breakdown-tab";
 import { ReportingEntityBreakdownTab } from "@/components/financial-statements/reporting-entity-breakdown-tab";
 import type {
@@ -63,6 +65,8 @@ export default function FinancialModelPage() {
   const [includeBudget, setIncludeBudget] = useState(false);
   const [includeYoY, setIncludeYoY] = useState(false);
   const [includeProForma, setIncludeProForma] = useState(false);
+  const [includeAllocations, setIncludeAllocations] = useState(false);
+  const [ebitdaOnly, setEbitdaOnly] = useState(false);
   const [activeTab, setActiveTab] = useState<StatementTab>("all");
 
   // Load organization
@@ -118,6 +122,18 @@ export default function FinancialModelPage() {
       if (count && count > 0) {
         setIncludeProForma(true);
       }
+
+      // Auto-enable allocations toggle when active allocations exist
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { count: allocCount } = await (supabase as any)
+        .from("allocation_adjustments")
+        .select("id", { count: "exact", head: true })
+        .eq("organization_id", membership.organization_id)
+        .eq("is_excluded", false);
+
+      if (allocCount && allocCount > 0) {
+        setIncludeAllocations(true);
+      }
     }
   }, [supabase]);
 
@@ -142,6 +158,7 @@ export default function FinancialModelPage() {
     includeBudget,
     includeYoY,
     includeProForma,
+    includeAllocations,
   };
 
   // Only fetch when we have the IDs we need
@@ -163,6 +180,7 @@ export default function FinancialModelPage() {
       includeBudget: String(includeBudget),
       includeYoY: String(includeYoY),
       includeProForma: String(includeProForma),
+      includeAllocations: String(includeAllocations),
       statements,
     });
     if (scope === "entity" && selectedEntityId) {
@@ -201,6 +219,12 @@ export default function FinancialModelPage() {
       : scope === "reporting_entity"
         ? `${reportingEntities.find((r) => r.id === selectedReportingEntityId)?.name ?? "Reporting Entity"} `
         : "";
+
+  const incomeStatementData = data
+    ? ebitdaOnly
+      ? filterForEbitdaOnly(data.incomeStatement)
+      : data.incomeStatement
+    : undefined;
 
   const sharedCardProps = {
     companyName,
@@ -301,6 +325,8 @@ export default function FinancialModelPage() {
         includeBudget={includeBudget}
         includeYoY={includeYoY}
         includeProForma={includeProForma}
+        includeAllocations={includeAllocations}
+        ebitdaOnly={ebitdaOnly}
         onStartYearChange={setStartYear}
         onStartMonthChange={setStartMonth}
         onEndYearChange={setEndYear}
@@ -309,6 +335,8 @@ export default function FinancialModelPage() {
         onIncludeBudgetChange={setIncludeBudget}
         onIncludeYoYChange={setIncludeYoY}
         onIncludeProFormaChange={setIncludeProForma}
+        onIncludeAllocationsChange={setIncludeAllocations}
+        onEbitdaOnlyChange={setEbitdaOnly}
         onExport={handleExport}
         onExportAll={handleExportAll}
         onPrint={handlePrint}
@@ -359,6 +387,7 @@ export default function FinancialModelPage() {
             <TabsTrigger value="balance-sheet">Balance Sheet</TabsTrigger>
             <TabsTrigger value="cash-flow">Cash Flow</TabsTrigger>
             <TabsTrigger value="pro-forma">Pro Forma Adjustments</TabsTrigger>
+            <TabsTrigger value="allocations">Allocations</TabsTrigger>
             <TabsTrigger value="entity-breakdown">Entity Breakdown</TabsTrigger>
             {scope === "organization" && reportingEntities.length > 0 && (
               <TabsTrigger value="re-breakdown">RE Breakdown</TabsTrigger>
@@ -370,7 +399,7 @@ export default function FinancialModelPage() {
             <StatementCard
               {...sharedCardProps}
               statementTitle={`${titlePrefix}Income Statement`}
-              statementData={data.incomeStatement}
+              statementData={incomeStatementData!}
               periods={data.periods}
               showBudget={includeBudget}
               showYoY={includeYoY}
@@ -400,7 +429,7 @@ export default function FinancialModelPage() {
             <StatementCard
               {...sharedCardProps}
               statementTitle={`${titlePrefix}Income Statement`}
-              statementData={data.incomeStatement}
+              statementData={incomeStatementData!}
               periods={data.periods}
               showBudget={includeBudget}
               showYoY={includeYoY}
@@ -446,6 +475,21 @@ export default function FinancialModelPage() {
             />
           </TabsContent>
 
+          {/* Allocation Adjustments */}
+          <TabsContent value="allocations">
+            <AllocationTab
+              organizationId={organizationId}
+              entities={entities}
+              scope={scope}
+              selectedEntityId={selectedEntityId}
+              startYear={startYear}
+              startMonth={startMonth}
+              endYear={endYear}
+              endMonth={endMonth}
+              onAllocationActivated={() => setIncludeAllocations(true)}
+            />
+          </TabsContent>
+
           {/* Entity Breakdown */}
           <TabsContent value="entity-breakdown">
             <EntityBreakdownTab
@@ -461,6 +505,8 @@ export default function FinancialModelPage() {
               endMonth={endMonth}
               granularity={granularity}
               includeProForma={includeProForma}
+              includeAllocations={includeAllocations}
+              ebitdaOnly={ebitdaOnly}
             />
           </TabsContent>
 
@@ -475,6 +521,8 @@ export default function FinancialModelPage() {
                 endMonth={endMonth}
                 granularity={granularity}
                 includeProForma={includeProForma}
+                includeAllocations={includeAllocations}
+                ebitdaOnly={ebitdaOnly}
               />
             </TabsContent>
           )}

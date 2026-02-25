@@ -36,6 +36,7 @@ export function useFinancialStatements(
       includeBudget: String(config.includeBudget),
       includeYoY: String(config.includeYoY),
       includeProForma: String(config.includeProForma),
+      includeAllocations: String(config.includeAllocations),
     });
 
     if (config.entityId) params.set("entityId", config.entityId);
@@ -77,6 +78,7 @@ export function useFinancialStatements(
     config.includeBudget,
     config.includeYoY,
     config.includeProForma,
+    config.includeAllocations,
   ]);
 
   useEffect(() => {

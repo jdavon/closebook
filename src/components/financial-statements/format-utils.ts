@@ -1,4 +1,4 @@
-import type { Period, Granularity } from "./types";
+import type { Period, Granularity, StatementData } from "./types";
 
 /**
  * Format a number for 10-K style financial statements.
@@ -118,6 +118,22 @@ export function getPeriodColumnHeader(
   granularity: Granularity
 ): string {
   return period.label;
+}
+
+/**
+ * Filter an income statement to show only sections through Operating Margin %
+ * (EBITDA-only view). Removes Other Expense, Other Income, Net Income, and
+ * Net Income Margin % sections.
+ */
+export function filterForEbitdaOnly(statement: StatementData): StatementData {
+  const cutoffIndex = statement.sections.findIndex(
+    (s) => s.id === "operating_margin_pct"
+  );
+  if (cutoffIndex === -1) return statement;
+  return {
+    ...statement,
+    sections: statement.sections.slice(0, cutoffIndex + 1),
+  };
 }
 
 const MONTH_NAMES_SHORT = [

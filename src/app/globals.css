@@ -257,6 +257,35 @@
   .stmt-no-print {
     display: none !important;
   }
+
+  /* Hide sidebar, header, and chrome — show only statement content */
+  [data-sidebar="sidebar"],
+  [data-sidebar="rail"],
+  [data-sidebar="trigger"],
+  header {
+    display: none !important;
+  }
+
+  /* Make main content fill the full page width */
+  [data-slot="sidebar-inset"] {
+    margin-left: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  /* Remove Card borders/shadows for clean printing */
+  .rounded-xl {
+    border: none !important;
+    box-shadow: none !important;
+    border-radius: 0 !important;
+  }
+
+  /* Remove body/main padding for maximum print area */
+  main.flex-1 {
+    padding: 0 !important;
+    overflow: visible !important;
+  }
+
   .stmt-table {
     font-size: 9pt;
   }
@@ -265,6 +294,18 @@
   }
   .stmt-row-striped {
     background-color: #e8f0f8 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* Keep variance coloring in print */
+  .text-green-600 {
+    color: #16a34a !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .text-red-600 {
+    color: #dc2626 !important;
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
   }

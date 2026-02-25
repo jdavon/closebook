@@ -11,6 +11,7 @@ interface UseREBreakdownConfig {
   endMonth: number;
   granularity: string;
   includeProForma: boolean;
+  includeAllocations?: boolean;
 }
 
 interface UseREBreakdownReturn {
@@ -41,6 +42,7 @@ export function useReportingEntityBreakdown(
       endMonth: String(config.endMonth),
       granularity: config.granularity,
       includeProForma: String(config.includeProForma),
+      includeAllocations: String(config.includeAllocations ?? false),
     });
 
     try {
@@ -71,6 +73,7 @@ export function useReportingEntityBreakdown(
     config.endMonth,
     config.granularity,
     config.includeProForma,
+    config.includeAllocations,
   ]);
 
   useEffect(() => {

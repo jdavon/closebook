@@ -339,6 +339,108 @@ function injectProFormaAdjustments(
 }
 
 // ---------------------------------------------------------------------------
+// Helper: expand allocation adjustments into pro-forma-style entries
+// ---------------------------------------------------------------------------
+
+interface RawAllocationAdjustment {
+  source_entity_id: string;
+  destination_entity_id: string;
+  master_account_id: string;
+  amount: number;
+  schedule_type: string;
+  period_year: number | null;
+  period_month: number | null;
+  start_year: number | null;
+  start_month: number | null;
+  end_year: number | null;
+  end_month: number | null;
+}
+
+/**
+ * Expand allocation adjustments into paired +/- entries per entity per period.
+ * For single_month: one pair.
+ * For monthly_spread: one pair per month in the range (amount divided equally).
+ */
+function expandAllocationAdjustments(
+  allocations: RawAllocationAdjustment[]
+): Array<{ entity_id: string; master_account_id: string; period_year: number; period_month: number; amount: number }> {
+  const entries: Array<{ entity_id: string; master_account_id: string; period_year: number; period_month: number; amount: number }> = [];
+
+  for (const alloc of allocations) {
+    if (alloc.schedule_type === "single_month") {
+      if (alloc.period_year == null || alloc.period_month == null) continue;
+      // Source loses the amount
+      entries.push({
+        entity_id: alloc.source_entity_id,
+        master_account_id: alloc.master_account_id,
+        period_year: alloc.period_year,
+        period_month: alloc.period_month,
+        amount: -Number(alloc.amount),
+      });
+      // Destination gains the amount
+      entries.push({
+        entity_id: alloc.destination_entity_id,
+        master_account_id: alloc.master_account_id,
+        period_year: alloc.period_year,
+        period_month: alloc.period_month,
+        amount: Number(alloc.amount),
+      });
+    } else if (alloc.schedule_type === "monthly_spread") {
+      if (
+        alloc.start_year == null || alloc.start_month == null ||
+        alloc.end_year == null || alloc.end_month == null
+      ) continue;
+
+      // Count months in range
+      const totalMonths =
+        (alloc.end_year - alloc.start_year) * 12 +
+        (alloc.end_month - alloc.start_month) + 1;
+      if (totalMonths < 1) continue;
+
+      const monthlyAmount = Number(alloc.amount) / totalMonths;
+
+      let y = alloc.start_year;
+      let m = alloc.start_month;
+      for (let i = 0; i < totalMonths; i++) {
+        entries.push({
+          entity_id: alloc.source_entity_id,
+          master_account_id: alloc.master_account_id,
+          period_year: y,
+          period_month: m,
+          amount: -monthlyAmount,
+        });
+        entries.push({
+          entity_id: alloc.destination_entity_id,
+          master_account_id: alloc.master_account_id,
+          period_year: y,
+          period_month: m,
+          amount: monthlyAmount,
+        });
+        // Advance to next month
+        m++;
+        if (m > 12) { m = 1; y++; }
+      }
+    }
+  }
+
+  return entries;
+}
+
+/**
+ * Inject allocation adjustments into consolidatedBalances.
+ * Works identically to injectProFormaAdjustments but with the expanded
+ * allocation entries (which already include entity_id per entry).
+ */
+function injectAllocationAdjustments(
+  consolidatedBalances: RawGLBalance[],
+  entries: Array<{ master_account_id: string; period_year: number; period_month: number; amount: number }>,
+  entityId: string
+): void {
+  // Re-use the same injection logic as pro forma
+  injectProFormaAdjustments(consolidatedBalances, entries, entityId);
+}
+
+// ---------------------------------------------------------------------------
 // Helper: aggregate balances into buckets
 // ---------------------------------------------------------------------------
 
@@ -466,6 +568,9 @@ function buildStatement(
   const hasPY = !!pyAggregated;
 
   for (const config of sectionConfigs) {
+    // Expense-classified sections: positive variance is unfavorable (over-budget)
+    const isExpenseSection = config.classification === "Expense";
+
     const sectionAccounts = accounts.filter(
       (a) =>
         a.classification === config.classification &&
@@ -545,6 +650,7 @@ function buildStatement(
         isHeader: false,
         isSeparator: false,
         showDollarSign: lineIndex === 0,
+        varianceInvertColor: isExpenseSection,
       });
       lineIndex++;
     }
@@ -566,6 +672,7 @@ function buildStatement(
       isHeader: false,
       isSeparator: false,
       showDollarSign: true,
+      varianceInvertColor: isExpenseSection,
     };
 
     sections.push({
@@ -1122,6 +1229,7 @@ interface ConsolidatedStatementsParams {
   includeYoY: boolean;
   includeBudget: boolean;
   includeProForma: boolean;
+  includeAllocations: boolean;
   granularity: Granularity;
   scope: Scope;
   startYear: number;
@@ -1140,6 +1248,7 @@ async function buildConsolidatedStatements(params: ConsolidatedStatementsParams)
     includeYoY,
     includeBudget,
     includeProForma,
+    includeAllocations,
     granularity,
     scope,
     startYear,
@@ -1277,6 +1386,23 @@ async function buildConsolidatedStatements(params: ConsolidatedStatementsParams)
         proFormaRows as RawProFormaAdjustment[],
         "consolidated"
       );
+    }
+  }
+
+  // Allocation Adjustments (org/RE scope — net zero at consolidated level)
+  if (includeAllocations) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: allocRows } = await (admin as any)
+      .from("allocation_adjustments")
+      .select("source_entity_id, destination_entity_id, master_account_id, amount, schedule_type, period_year, period_month, start_year, start_month, end_year, end_month")
+      .eq("organization_id", organizationId)
+      .eq("is_excluded", false);
+
+    if (allocRows && allocRows.length > 0) {
+      const expanded = expandAllocationAdjustments(allocRows as RawAllocationAdjustment[]);
+      // At consolidated level these net to zero, but we inject both sides
+      // so entity-level views within the consolidation are correct
+      injectAllocationAdjustments(consolidatedBalances, expanded, "consolidated");
     }
   }
 
@@ -1484,6 +1610,7 @@ export async function GET(request: Request) {
   const includeBudget = searchParams.get("includeBudget") === "true";
   const includeYoY = searchParams.get("includeYoY") === "true";
   const includeProForma = searchParams.get("includeProForma") === "true";
+  const includeAllocations = searchParams.get("includeAllocations") === "true";
 
   if (scope === "entity" && !entityId) {
     return NextResponse.json(
@@ -1677,6 +1804,26 @@ export async function GET(request: Request) {
           proFormaRows as RawProFormaAdjustment[],
           entityId!
         );
+      }
+    }
+
+    // --- Allocation Adjustments (entity scope) ---
+    if (includeAllocations) {
+      // Fetch allocations where this entity is source or destination
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: allocRows } = await (admin as any)
+        .from("allocation_adjustments")
+        .select("source_entity_id, destination_entity_id, master_account_id, amount, schedule_type, period_year, period_month, start_year, start_month, end_year, end_month")
+        .or(`source_entity_id.eq.${entityId!},destination_entity_id.eq.${entityId!}`)
+        .eq("is_excluded", false);
+
+      if (allocRows && allocRows.length > 0) {
+        const expanded = expandAllocationAdjustments(allocRows as RawAllocationAdjustment[]);
+        // Only inject entries that belong to this entity
+        const entityEntries = expanded.filter((e) => e.entity_id === entityId!);
+        if (entityEntries.length > 0) {
+          injectAllocationAdjustments(consolidatedBalances, entityEntries, entityId!);
+        }
       }
     }
 
@@ -1929,6 +2076,7 @@ export async function GET(request: Request) {
       includeYoY,
       includeBudget,
       includeProForma,
+      includeAllocations,
       granularity,
       scope,
       startYear,
@@ -2024,6 +2172,7 @@ export async function GET(request: Request) {
       includeYoY,
       includeBudget,
       includeProForma,
+      includeAllocations,
       granularity,
       scope,
       startYear,

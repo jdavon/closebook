@@ -103,6 +103,83 @@ async function fetchAllGLBalances(
 }
 
 // ---------------------------------------------------------------------------
+// Helper: expand allocation adjustments into per-entity, per-period entries
+// ---------------------------------------------------------------------------
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function expandAllocationEntries(allocRows: any[]): Array<{
+  entity_id: string;
+  master_account_id: string;
+  period_year: number;
+  period_month: number;
+  amount: number;
+}> {
+  const entries: Array<{
+    entity_id: string;
+    master_account_id: string;
+    period_year: number;
+    period_month: number;
+    amount: number;
+  }> = [];
+
+  for (const alloc of allocRows) {
+    const totalAmount = Number(alloc.amount);
+
+    if (alloc.schedule_type === "single_month") {
+      if (alloc.period_year == null || alloc.period_month == null) continue;
+      entries.push({
+        entity_id: alloc.source_entity_id,
+        master_account_id: alloc.master_account_id,
+        period_year: alloc.period_year,
+        period_month: alloc.period_month,
+        amount: -totalAmount,
+      });
+      entries.push({
+        entity_id: alloc.destination_entity_id,
+        master_account_id: alloc.master_account_id,
+        period_year: alloc.period_year,
+        period_month: alloc.period_month,
+        amount: totalAmount,
+      });
+    } else if (alloc.schedule_type === "monthly_spread") {
+      if (
+        alloc.start_year == null || alloc.start_month == null ||
+        alloc.end_year == null || alloc.end_month == null
+      ) continue;
+
+      const totalMonths =
+        (alloc.end_year - alloc.start_year) * 12 +
+        (alloc.end_month - alloc.start_month) + 1;
+      if (totalMonths < 1) continue;
+
+      const monthlyAmount = totalAmount / totalMonths;
+      let y = alloc.start_year;
+      let m = alloc.start_month;
+      for (let i = 0; i < totalMonths; i++) {
+        entries.push({
+          entity_id: alloc.source_entity_id,
+          master_account_id: alloc.master_account_id,
+          period_year: y,
+          period_month: m,
+          amount: -monthlyAmount,
+        });
+        entries.push({
+          entity_id: alloc.destination_entity_id,
+          master_account_id: alloc.master_account_id,
+          period_year: y,
+          period_month: m,
+          amount: monthlyAmount,
+        });
+        m++;
+        if (m > 12) { m = 1; y++; }
+      }
+    }
+  }
+
+  return entries;
+}
+
+// ---------------------------------------------------------------------------
 // Build statement with entity columns
 // ---------------------------------------------------------------------------
 
@@ -289,6 +366,7 @@ export async function GET(request: Request) {
   const granularity =
     (searchParams.get("granularity") as Granularity) ?? "monthly";
   const includeProForma = searchParams.get("includeProForma") === "true";
+  const includeAllocations = searchParams.get("includeAllocations") === "true";
 
   if (!organizationId) {
     return NextResponse.json(
@@ -591,6 +669,47 @@ export async function GET(request: Request) {
         if (adjMonthKey === lastMonthKey) {
           ea.endingBalance[adj.entity_id] =
             (ea.endingBalance[adj.entity_id] ?? 0) + amount;
+        }
+
+        // Add to consolidated
+        ea.netChange["consolidated"] =
+          (ea.netChange["consolidated"] ?? 0) + amount;
+        if (adjMonthKey === lastMonthKey) {
+          ea.endingBalance["consolidated"] =
+            (ea.endingBalance["consolidated"] ?? 0) + amount;
+        }
+      }
+    }
+  }
+
+  // Allocation adjustments (add to individual entity columns + consolidated)
+  if (includeAllocations) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: allocRows } = await (admin as any)
+      .from("allocation_adjustments")
+      .select("source_entity_id, destination_entity_id, master_account_id, amount, schedule_type, period_year, period_month, start_year, start_month, end_year, end_month")
+      .eq("organization_id", organizationId)
+      .eq("is_excluded", false);
+
+    if (allocRows && allocRows.length > 0) {
+      // Expand into per-entity, per-period entries
+      const expanded = expandAllocationEntries(allocRows);
+
+      for (const entry of expanded) {
+        const adjMonthKey = `${entry.period_year}-${String(entry.period_month).padStart(2, "0")}`;
+        if (!allMonthsSet.has(adjMonthKey)) continue;
+
+        const ea = entityAmounts.get(entry.master_account_id);
+        if (!ea) continue;
+
+        const amount = entry.amount;
+
+        // Add to the specific entity's column
+        ea.netChange[entry.entity_id] =
+          (ea.netChange[entry.entity_id] ?? 0) + amount;
+        if (adjMonthKey === lastMonthKey) {
+          ea.endingBalance[entry.entity_id] =
+            (ea.endingBalance[entry.entity_id] ?? 0) + amount;
         }
 
         // Add to consolidated

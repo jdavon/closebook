@@ -73,8 +73,10 @@ export function StatementTable({
     if (variance === 0) return "\u2014";
 
     const formatted = formatStatementAmount(variance, false);
-    // Green if favorable (positive for revenue, negative for expense)
-    const favorable = variance >= 0;
+    // For expense items, positive variance (over-budget) is unfavorable
+    const favorable = line.varianceInvertColor
+      ? variance <= 0
+      : variance >= 0;
     return (
       <span className={favorable ? "text-green-600" : "text-red-600"}>
         {formatted}
@@ -118,9 +120,12 @@ export function StatementTable({
         changeCell = "\u2014";
       } else {
         const formatted = formatStatementAmount(change, false);
-        const positive = change >= 0;
+        // For expense items, cost increase YoY is unfavorable
+        const favorable = line.varianceInvertColor
+          ? change <= 0
+          : change >= 0;
         changeCell = (
-          <span className={positive ? "text-green-600" : "text-red-600"}>
+          <span className={favorable ? "text-green-600" : "text-red-600"}>
             {formatted}
           </span>
         );

@@ -24,6 +24,7 @@ const TAB_LABELS: Record<StatementTab, string> = {
   "balance-sheet": "Balance Sheet",
   "cash-flow": "Cash Flow",
   "pro-forma": "Pro Forma Adjustments",
+  allocations: "Allocations",
   "entity-breakdown": "Entity Breakdown",
   "re-breakdown": "RE Breakdown",
   all: "All Statements",
@@ -38,6 +39,8 @@ interface ConfigToolbarProps {
   includeBudget: boolean;
   includeYoY: boolean;
   includeProForma?: boolean;
+  includeAllocations?: boolean;
+  ebitdaOnly?: boolean;
   onStartYearChange: (year: number) => void;
   onStartMonthChange: (month: number) => void;
   onEndYearChange: (year: number) => void;
@@ -46,6 +49,8 @@ interface ConfigToolbarProps {
   onIncludeBudgetChange: (val: boolean) => void;
   onIncludeYoYChange: (val: boolean) => void;
   onIncludeProFormaChange?: (val: boolean) => void;
+  onIncludeAllocationsChange?: (val: boolean) => void;
+  onEbitdaOnlyChange?: (val: boolean) => void;
   onExport: () => void;
   onExportAll?: () => void;
   onPrint: () => void;
@@ -69,6 +74,8 @@ export function ConfigToolbar({
   includeBudget,
   includeYoY,
   includeProForma,
+  includeAllocations,
+  ebitdaOnly,
   onStartYearChange,
   onStartMonthChange,
   onEndYearChange,
@@ -77,6 +84,8 @@ export function ConfigToolbar({
   onIncludeBudgetChange,
   onIncludeYoYChange,
   onIncludeProFormaChange,
+  onIncludeAllocationsChange,
+  onEbitdaOnlyChange,
   onExport,
   onExportAll,
   onPrint,
@@ -209,6 +218,28 @@ export function ConfigToolbar({
               }
             />
             Pro Forma
+          </label>
+        )}
+        {onIncludeAllocationsChange && (
+          <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+            <Checkbox
+              checked={includeAllocations ?? false}
+              onCheckedChange={(checked) =>
+                onIncludeAllocationsChange(checked === true)
+              }
+            />
+            Allocations
+          </label>
+        )}
+        {onEbitdaOnlyChange && (
+          <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+            <Checkbox
+              checked={ebitdaOnly ?? false}
+              onCheckedChange={(checked) =>
+                onEbitdaOnlyChange(checked === true)
+              }
+            />
+            EBITDA Only
           </label>
         )}
       </div>

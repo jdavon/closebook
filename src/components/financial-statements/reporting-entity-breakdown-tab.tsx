@@ -7,6 +7,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { StatementHeader } from "./statement-header";
 import { EntityBreakdownTable } from "./entity-breakdown-table";
 import { useReportingEntityBreakdown } from "./use-reporting-entity-breakdown";
+import { filterForEbitdaOnly } from "./format-utils";
 import type { Granularity } from "./types";
 
 interface ReportingEntityBreakdownTabProps {
@@ -17,6 +18,8 @@ interface ReportingEntityBreakdownTabProps {
   endMonth: number;
   granularity: Granularity;
   includeProForma: boolean;
+  includeAllocations?: boolean;
+  ebitdaOnly?: boolean;
 }
 
 export function ReportingEntityBreakdownTab({
@@ -27,6 +30,8 @@ export function ReportingEntityBreakdownTab({
   endMonth,
   granularity,
   includeProForma,
+  includeAllocations = false,
+  ebitdaOnly = false,
 }: ReportingEntityBreakdownTabProps) {
   const [activeStatement, setActiveStatement] = useState<
     "income-statement" | "balance-sheet"
@@ -42,6 +47,7 @@ export function ReportingEntityBreakdownTab({
       endMonth,
       granularity,
       includeProForma,
+      includeAllocations,
     },
     !!organizationId
   );
@@ -139,7 +145,9 @@ export function ReportingEntityBreakdownTab({
           <EntityBreakdownTable
             data={
               activeStatement === "income-statement"
-                ? data.incomeStatement
+                ? ebitdaOnly
+                  ? filterForEbitdaOnly(data.incomeStatement)
+                  : data.incomeStatement
                 : data.balanceSheet
             }
             columns={data.columns}
