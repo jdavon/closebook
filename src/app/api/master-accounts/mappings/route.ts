@@ -39,46 +39,58 @@ export async function GET(request: Request) {
   // Access is already verified above via organization membership.
   const adminClient = createAdminClient();
 
-  const { data: mappings, error } = await adminClient
-    .from("master_account_mappings")
-    .select(
-      `
-      id,
-      master_account_id,
-      entity_id,
-      account_id,
-      created_by,
-      created_at,
-      master_accounts!inner (
-        id,
-        organization_id,
-        account_number,
-        name,
-        classification
-      ),
-      accounts (
-        id,
-        name,
-        account_number,
-        classification,
-        account_type,
-        current_balance
-      ),
-      entities (
-        id,
-        name,
-        code
-      )
-    `
-    )
-    .eq("master_accounts.organization_id", organizationId)
-    .limit(10000);
+  // Paginate to avoid the PostgREST default max-rows cap (1000).
+  const PAGE_SIZE = 1000;
+  let allMappings: unknown[] = [];
+  let from = 0;
 
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  while (true) {
+    const { data, error } = await adminClient
+      .from("master_account_mappings")
+      .select(
+        `
+        id,
+        master_account_id,
+        entity_id,
+        account_id,
+        created_by,
+        created_at,
+        master_accounts!inner (
+          id,
+          organization_id,
+          account_number,
+          name,
+          classification
+        ),
+        accounts (
+          id,
+          name,
+          account_number,
+          classification,
+          account_type,
+          current_balance
+        ),
+        entities (
+          id,
+          name,
+          code
+        )
+      `
+      )
+      .eq("master_accounts.organization_id", organizationId)
+      .range(from, from + PAGE_SIZE - 1);
+
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+
+    allMappings = allMappings.concat(data ?? []);
+
+    if (!data || data.length < PAGE_SIZE) break;
+    from += PAGE_SIZE;
   }
 
-  return NextResponse.json({ mappings });
+  return NextResponse.json({ mappings: allMappings });
 }
 
 export async function POST(request: Request) {
