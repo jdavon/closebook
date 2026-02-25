@@ -165,27 +165,43 @@ export async function POST(request: Request) {
             progress: 15,
           });
 
-          const accountsResponse = await fetch(
-            `${apiBaseUrl}/v3/company/${connection.realm_id}/query?query=${encodeURIComponent(
-              "SELECT * FROM Account MAXRESULTS 1000"
-            )}`,
-            {
-              headers: {
-                Authorization: `Bearer ${accessToken}`,
-                Accept: "application/json",
-              },
-            }
-          );
+          // Paginate through ALL QBO accounts (1000 per page)
+          const PAGE_SIZE = 1000;
+          let startPosition = 1;
+          let hasMore = true;
+          let fetchFailed = false;
 
-          if (accountsResponse.ok) {
+          while (hasMore) {
+            const accountsResponse = await fetch(
+              `${apiBaseUrl}/v3/company/${connection.realm_id}/query?query=${encodeURIComponent(
+                `SELECT * FROM Account STARTPOSITION ${startPosition} MAXRESULTS ${PAGE_SIZE}`
+              )}`,
+              {
+                headers: {
+                  Authorization: `Bearer ${accessToken}`,
+                  Accept: "application/json",
+                },
+              }
+            );
+
+            if (!accountsResponse.ok) {
+              send({
+                step: "accounts",
+                detail: `Failed to fetch accounts (HTTP ${accountsResponse.status})`,
+                progress: 30,
+              });
+              fetchFailed = true;
+              break;
+            }
+
             const accountsData = await accountsResponse.json();
             const qboAccounts =
               accountsData.QueryResponse?.Account ?? [];
 
             send({
               step: "accounts",
-              detail: `Saving ${qboAccounts.length} accounts to database...`,
-              progress: 25,
+              detail: `Saving page of ${qboAccounts.length} accounts (starting at ${startPosition})...`,
+              progress: 15 + Math.min(15, Math.round((startPosition / 2000) * 15)),
             });
 
             for (const qboAccount of qboAccounts) {
@@ -210,15 +226,18 @@ export async function POST(request: Request) {
               recordsSynced++;
             }
 
+            // If we got fewer than PAGE_SIZE results, we've reached the end
+            if (qboAccounts.length < PAGE_SIZE) {
+              hasMore = false;
+            } else {
+              startPosition += PAGE_SIZE;
+            }
+          }
+
+          if (!fetchFailed) {
             send({
               step: "accounts",
               detail: `${accountsSynced} accounts saved`,
-              progress: 30,
-            });
-          } else {
-            send({
-              step: "accounts",
-              detail: `Failed to fetch accounts (HTTP ${accountsResponse.status})`,
               progress: 30,
             });
           }
