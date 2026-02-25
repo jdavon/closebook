@@ -212,6 +212,9 @@ export default function MasterGLPage() {
   const [unmappedLoading, setUnmappedLoading] = useState(false);
   const [unmappedEntityFilter, setUnmappedEntityFilter] =
     useState("all");
+  const [collapsedEntities, setCollapsedEntities] = useState<
+    Record<string, boolean>
+  >({});
 
   const loadOrganization = useCallback(async () => {
     const {
@@ -1249,74 +1252,172 @@ export default function MasterGLPage() {
               );
             }
 
+            // Group unmapped accounts by entity
+            const groupedByEntity: Record<
+              string,
+              {
+                entityId: string;
+                entityName: string;
+                entityCode: string;
+                accounts: UnmappedAccountMonthly[];
+              }
+            > = {};
+            for (const account of filteredUnmapped) {
+              if (!groupedByEntity[account.entityId]) {
+                groupedByEntity[account.entityId] = {
+                  entityId: account.entityId,
+                  entityName: account.entityName,
+                  entityCode: account.entityCode,
+                  accounts: [],
+                };
+              }
+              groupedByEntity[account.entityId].accounts.push(account);
+            }
+
+            // Sort entity groups by entity name
+            const entityGroups = Object.values(groupedByEntity).sort(
+              (a, b) => a.entityName.localeCompare(b.entityName)
+            );
+
             return (
-              <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead className="sticky left-0 bg-background z-10 min-w-[60px]">
-                        Entity
-                      </TableHead>
-                      <TableHead className="sticky left-[60px] bg-background z-10 min-w-[80px]">
-                        Number
-                      </TableHead>
-                      <TableHead className="sticky left-[140px] bg-background z-10 min-w-[180px]">
-                        Account Name
-                      </TableHead>
-                      {MONTH_LABELS.map((m) => (
-                        <TableHead
-                          key={m}
-                          className="text-right min-w-[100px]"
+              <div className="space-y-3">
+                {entityGroups.map((group) => {
+                  const isEntityCollapsed =
+                    collapsedEntities[group.entityId] ?? false;
+
+                  // Calculate monthly subtotals for this entity
+                  const monthlySubtotals: Record<number, number> = {};
+                  for (const account of group.accounts) {
+                    for (let m = 1; m <= 12; m++) {
+                      const bal = account.monthlyBalances[m];
+                      if (bal != null) {
+                        monthlySubtotals[m] =
+                          (monthlySubtotals[m] ?? 0) + bal;
+                      }
+                    }
+                  }
+
+                  return (
+                    <div key={group.entityId}>
+                      <button
+                        onClick={() =>
+                          setCollapsedEntities((prev) => ({
+                            ...prev,
+                            [group.entityId]: !prev[group.entityId],
+                          }))
+                        }
+                        className="flex items-center gap-2 w-full py-2 px-1 hover:bg-muted/50 rounded-md transition-colors"
+                      >
+                        {isEntityCollapsed ? (
+                          <ChevronRight className="h-4 w-4" />
+                        ) : (
+                          <ChevronDown className="h-4 w-4" />
+                        )}
+                        <Badge
+                          variant="outline"
+                          className="bg-amber-100 text-amber-800"
                         >
-                          {m}
-                        </TableHead>
-                      ))}
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {filteredUnmapped.map((account) => (
-                      <TableRow key={account.id} className="bg-amber-50/50">
-                        <TableCell className="sticky left-0 bg-amber-50/80 z-10">
-                          <Badge variant="outline" className="text-xs">
-                            {account.entityCode}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="sticky left-[60px] bg-amber-50/80 z-10 font-mono text-sm">
-                          {account.accountNumber ?? "—"}
-                        </TableCell>
-                        <TableCell className="sticky left-[140px] bg-amber-50/80 z-10">
-                          <div>
-                            <span className="text-sm">{account.name}</span>
-                            <Badge
-                              variant="outline"
-                              className={`ml-2 text-xs ${
-                                CLASSIFICATION_COLORS[
-                                  account.classification as AccountClassification
-                                ] ?? ""
-                              }`}
-                            >
-                              {account.classification}
-                            </Badge>
-                          </div>
-                        </TableCell>
-                        {MONTH_LABELS.map((_, i) => {
-                          const balance =
-                            account.monthlyBalances[i + 1];
-                          return (
-                            <TableCell
-                              key={i}
-                              className="text-right tabular-nums text-sm"
-                            >
-                              {balance != null && balance !== 0
-                                ? formatCurrency(balance)
-                                : "—"}
-                            </TableCell>
-                          );
-                        })}
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                          {group.entityCode}
+                        </Badge>
+                        <span className="font-medium text-sm">
+                          {group.entityName}
+                        </span>
+                        <span className="text-sm text-muted-foreground">
+                          {group.accounts.length} unmapped account
+                          {group.accounts.length !== 1 ? "s" : ""}
+                        </span>
+                      </button>
+
+                      {!isEntityCollapsed && (
+                        <div className="overflow-x-auto">
+                          <Table>
+                            <TableHeader>
+                              <TableRow>
+                                <TableHead className="sticky left-0 bg-background z-10 min-w-[80px]">
+                                  Number
+                                </TableHead>
+                                <TableHead className="sticky left-[80px] bg-background z-10 min-w-[200px]">
+                                  Account Name
+                                </TableHead>
+                                {MONTH_LABELS.map((m) => (
+                                  <TableHead
+                                    key={m}
+                                    className="text-right min-w-[100px]"
+                                  >
+                                    {m}
+                                  </TableHead>
+                                ))}
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {group.accounts.map((account) => (
+                                <TableRow
+                                  key={account.id}
+                                  className="bg-amber-50/50"
+                                >
+                                  <TableCell className="sticky left-0 bg-amber-50/80 z-10 font-mono text-sm">
+                                    {account.accountNumber ?? "—"}
+                                  </TableCell>
+                                  <TableCell className="sticky left-[80px] bg-amber-50/80 z-10">
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-sm">
+                                        {account.name}
+                                      </span>
+                                      <Badge
+                                        variant="outline"
+                                        className={`text-xs ${
+                                          CLASSIFICATION_COLORS[
+                                            account.classification as AccountClassification
+                                          ] ?? ""
+                                        }`}
+                                      >
+                                        {account.classification}
+                                      </Badge>
+                                    </div>
+                                  </TableCell>
+                                  {MONTH_LABELS.map((_, i) => {
+                                    const balance =
+                                      account.monthlyBalances[i + 1];
+                                    return (
+                                      <TableCell
+                                        key={i}
+                                        className="text-right tabular-nums text-sm"
+                                      >
+                                        {balance != null && balance !== 0
+                                          ? formatCurrency(balance)
+                                          : "—"}
+                                      </TableCell>
+                                    );
+                                  })}
+                                </TableRow>
+                              ))}
+                              {/* Entity subtotal row */}
+                              <TableRow className="bg-amber-100/60 font-semibold">
+                                <TableCell className="sticky left-0 bg-amber-100/80 z-10" />
+                                <TableCell className="sticky left-[80px] bg-amber-100/80 z-10 text-sm">
+                                  Subtotal
+                                </TableCell>
+                                {MONTH_LABELS.map((_, i) => {
+                                  const subtotal = monthlySubtotals[i + 1];
+                                  return (
+                                    <TableCell
+                                      key={i}
+                                      className="text-right tabular-nums text-sm"
+                                    >
+                                      {subtotal != null && subtotal !== 0
+                                        ? formatCurrency(subtotal)
+                                        : "—"}
+                                    </TableCell>
+                                  );
+                                })}
+                              </TableRow>
+                            </TableBody>
+                          </Table>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             );
           })()}
