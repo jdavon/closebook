@@ -233,7 +233,8 @@ export default function MasterGLPage() {
       .select("id, name, code")
       .eq("organization_id", organizationId)
       .eq("is_active", true)
-      .order("name");
+      .order("name")
+      .limit(5000);
 
     if (data) {
       setEntities(data);
@@ -249,7 +250,8 @@ export default function MasterGLPage() {
           .eq("is_active", true)
           .order("classification")
           .order("account_number")
-          .order("name");
+          .order("name")
+          .limit(5000);
         accountsByEntity[entity.id] = (accounts as EntityAccount[]) ?? [];
       }
       setEntityAccounts(accountsByEntity);

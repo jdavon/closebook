@@ -46,7 +46,8 @@ export async function GET(request: Request) {
     .eq("is_active", true)
     .order("classification")
     .order("display_order")
-    .order("account_number");
+    .order("account_number")
+    .limit(5000);
 
   if (maError) {
     return NextResponse.json({ error: maError.message }, { status: 500 });
@@ -79,7 +80,8 @@ export async function GET(request: Request) {
       account_id
     `
     )
-    .in("master_account_id", masterAccountIds);
+    .in("master_account_id", masterAccountIds)
+    .limit(10000);
 
   if (mapError) {
     return NextResponse.json({ error: mapError.message }, { status: 500 });
@@ -106,7 +108,8 @@ export async function GET(request: Request) {
       )
       .in("account_id", accountIds)
       .eq("period_year", parseInt(periodYear))
-      .eq("period_month", parseInt(periodMonth));
+      .eq("period_month", parseInt(periodMonth))
+      .limit(10000);
 
     if (balError) {
       return NextResponse.json({ error: balError.message }, { status: 500 });
@@ -129,7 +132,8 @@ export async function GET(request: Request) {
     .from("entities")
     .select("id, name, code")
     .eq("organization_id", organizationId)
-    .eq("is_active", true);
+    .eq("is_active", true)
+    .limit(5000);
 
   // Build consolidated data: for each master account, sum the balances
   // of all mapped entity accounts
@@ -290,7 +294,8 @@ export async function GET(request: Request) {
       .from("accounts")
       .select("id, entity_id, name, account_number, classification, current_balance")
       .in("entity_id", entityIds)
-      .eq("is_active", true);
+      .eq("is_active", true)
+      .limit(10000);
 
     unmappedAccounts = (allAccounts ?? [])
       .filter((a) => !allMappedAccountIds.has(a.id))

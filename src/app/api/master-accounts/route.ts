@@ -31,7 +31,8 @@ export async function GET() {
     .eq("organization_id", membership.organization_id)
     .order("classification")
     .order("display_order")
-    .order("account_number");
+    .order("account_number")
+    .limit(5000);
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
