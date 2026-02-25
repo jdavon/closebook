@@ -50,6 +50,7 @@ const ASSETS: MasterAccountTemplate[] = [
       { accountNumber: "1172" },
       { nameContains: "Silverco Deposit" },
       { accountNumber: "1499" }, // Undeposited Funds
+      { accountType: "Bank" }, // Catch-all: any Bank account not matched above
     ],
   },
   {
@@ -66,6 +67,7 @@ const ASSETS: MasterAccountTemplate[] = [
       { accountNumber: "1290" },
       { accountNumber: "1251" },
       { accountNumber: "1260" },
+      { accountType: "Accounts Receivable" }, // Catch-all: any AR account not matched above
     ],
   },
   {
@@ -150,6 +152,17 @@ const ASSETS: MasterAccountTemplate[] = [
     mappingRules: [{ accountNumber: "1356" }],
   },
   {
+    accountNumber: "M1399",
+    name: "Other Current Assets (Other)",
+    classification: "Asset",
+    accountType: "Other Current Asset",
+    normalBalance: "debit",
+    displayOrder: 399,
+    mappingRules: [
+      { accountType: "Other Current Asset" }, // Catch-all: any OCA not matched above
+    ],
+  },
+  {
     accountNumber: "M1700",
     name: "Vehicles (Net)",
     classification: "Asset",
@@ -174,6 +187,17 @@ const ASSETS: MasterAccountTemplate[] = [
       { accountNumber: "1835" },
       { accountNumber: "1840" },
       { accountNumber: "1841" },
+    ],
+  },
+  {
+    accountNumber: "M1899",
+    name: "Other Fixed Assets",
+    classification: "Asset",
+    accountType: "Fixed Asset",
+    normalBalance: "debit",
+    displayOrder: 599,
+    mappingRules: [
+      { accountType: "Fixed Asset" }, // Catch-all: any fixed asset not matched above
     ],
   },
   {
@@ -203,6 +227,17 @@ const ASSETS: MasterAccountTemplate[] = [
       { accountNumber: "1991" },
     ],
   },
+  {
+    accountNumber: "M1999",
+    name: "Other Non-Current Assets",
+    classification: "Asset",
+    accountType: "Other Asset",
+    normalBalance: "debit",
+    displayOrder: 699,
+    mappingRules: [
+      { accountType: "Other Asset" }, // Catch-all: any Other Asset not matched above
+    ],
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -217,7 +252,10 @@ const LIABILITIES: MasterAccountTemplate[] = [
     accountType: "Accounts Payable",
     normalBalance: "credit",
     displayOrder: 700,
-    mappingRules: [{ accountNumber: "2000" }],
+    mappingRules: [
+      { accountNumber: "2000" },
+      { accountType: "Accounts Payable" }, // Catch-all: any AP account not matched above
+    ],
   },
   {
     accountNumber: "M2050",
@@ -229,6 +267,7 @@ const LIABILITIES: MasterAccountTemplate[] = [
     mappingRules: [
       { accountNumber: "2006" },
       { nameContains: "Credit Card (1001)" },
+      { accountType: "Credit Card" }, // Catch-all: any CC account not matched above
     ],
   },
   {
@@ -323,6 +362,17 @@ const LIABILITIES: MasterAccountTemplate[] = [
     mappingRules: [{ accountNumber: "2560" }],
   },
   {
+    accountNumber: "M2399",
+    name: "Other Current Liabilities (Other)",
+    classification: "Liability",
+    accountType: "Other Current Liability",
+    normalBalance: "credit",
+    displayOrder: 899,
+    mappingRules: [
+      { accountType: "Other Current Liability" }, // Catch-all: any OCL not matched above
+    ],
+  },
+  {
     accountNumber: "M2500",
     name: "Right of Use Lease Liabilities",
     classification: "Liability",
@@ -341,7 +391,10 @@ const LIABILITIES: MasterAccountTemplate[] = [
     accountType: "Long Term Liability",
     normalBalance: "credit",
     displayOrder: 910,
-    mappingRules: [{ accountNumber: "2670" }],
+    mappingRules: [
+      { accountNumber: "2670" },
+      { accountType: "Long Term Liability" }, // Catch-all: any LTL not matched above
+    ],
   },
 ];
 
@@ -379,6 +432,17 @@ const EQUITY: MasterAccountTemplate[] = [
     normalBalance: "credit",
     displayOrder: 1020,
     mappingRules: [{ nameExact: "Net Income" }],
+  },
+  {
+    accountNumber: "M3900",
+    name: "Other Equity",
+    classification: "Equity",
+    accountType: "Equity",
+    normalBalance: "credit",
+    displayOrder: 1090,
+    mappingRules: [
+      { accountType: "Equity" }, // Catch-all: any Equity account not matched above
+    ],
   },
 ];
 

@@ -69,6 +69,59 @@ function parseGLBalance(row: any): RawGLBalance {
 }
 
 // ---------------------------------------------------------------------------
+// Helper: paginated GL balance fetcher.
+// Supabase PostgREST may cap responses via PGRST_DB_MAX_ROWS (often 1000).
+// We paginate with .range() to ensure we retrieve ALL matching rows.
+// ---------------------------------------------------------------------------
+
+const GL_PAGE_SIZE = 5000;
+
+interface GLQueryFilters {
+  filterColumn: "entity_id" | "account_id";
+  filterValues: string[];
+  years: number[];
+  months: number[];
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function fetchAllGLBalances(admin: any, filters: GLQueryFilters): Promise<RawGLBalance[]> {
+  const allRows: RawGLBalance[] = [];
+  let offset = 0;
+  let hasMore = true;
+
+  while (hasMore) {
+    const query = admin
+      .from("gl_balances")
+      .select(
+        "account_id, entity_id, period_year, period_month, beginning_balance, ending_balance, net_change"
+      )
+      .in(filters.filterColumn, filters.filterValues)
+      .in("period_year", filters.years)
+      .in("period_month", filters.months)
+      .range(offset, offset + GL_PAGE_SIZE - 1);
+
+    const { data, error } = await query;
+
+    if (error) {
+      console.error("GL balance pagination error:", error);
+      break;
+    }
+
+    const rows = (data ?? []).map(parseGLBalance);
+    allRows.push(...rows);
+
+    // If we got fewer rows than page size, we've fetched everything
+    if (rows.length < GL_PAGE_SIZE) {
+      hasMore = false;
+    } else {
+      offset += GL_PAGE_SIZE;
+    }
+  }
+
+  return allRows;
+}
+
+// ---------------------------------------------------------------------------
 // Helper: build all individual (year, month) tuples we need to query
 // ---------------------------------------------------------------------------
 
@@ -290,7 +343,15 @@ function aggregateByBucket(
           netChange += bal.net_change;
           endingBal = bal.ending_balance; // last one wins
           if (!foundFirst) {
-            beginningBal = bal.beginning_balance;
+            // Derive beginning balance from the PRIOR month's ending balance.
+            // The DB's beginning_balance may be 0 if the sync didn't populate it.
+            // collectAllMonths() already fetches prior-month data for this purpose.
+            const priorMonth = m.month === 1 ? 12 : m.month - 1;
+            const priorYear = m.month === 1 ? m.year - 1 : m.year;
+            const priorBal = accountBalances?.get(`${priorYear}-${priorMonth}`);
+            beginningBal = priorBal
+              ? priorBal.ending_balance
+              : bal.beginning_balance; // fallback to DB value
             foundFirst = true;
           }
         }
@@ -1102,28 +1163,28 @@ export async function GET(request: Request) {
       .eq("entity_id", entityId!)
       .limit(10000);
 
-    // Get GL balances for mapped accounts
+    // Get GL balances for mapped accounts (paginated to avoid row limit truncation)
     const mappedAccountIds = (mappings ?? []).map((m) => m.account_id);
     let glBalances: RawGLBalance[] = [];
 
     if (mappedAccountIds.length > 0) {
       const uniqueYears = [...new Set(allMonths.map((m) => m.year))];
-      const { data: balances } = await admin
-        .from("gl_balances")
-        .select(
-          "account_id, entity_id, period_year, period_month, beginning_balance, ending_balance, net_change"
-        )
-        .in("account_id", mappedAccountIds)
-        .in("period_year", uniqueYears)
-        .limit(10000);
+      const uniqueMonthNums = [...new Set(allMonths.map((m) => m.month))];
+
+      const allBalances = await fetchAllGLBalances(admin, {
+        filterColumn: "account_id",
+        filterValues: mappedAccountIds,
+        years: uniqueYears,
+        months: uniqueMonthNums,
+      });
 
       const monthSet = new Set(
         allMonths.map(
           (m) => `${m.year}-${String(m.month).padStart(2, "0")}`
         )
       );
-      // Coerce numeric fields from Supabase strings to JS numbers
-      glBalances = (balances ?? []).map(parseGLBalance).filter((b) =>
+      // Filter to exact (year,month) pairs needed
+      glBalances = allBalances.filter((b) =>
         monthSet.has(
           `${b.period_year}-${String(b.period_month).padStart(2, "0")}`
         )
@@ -1491,33 +1552,56 @@ export async function GET(request: Request) {
     // account_id (1000+ IDs that exceed HTTP URL length limits)
     let glBalances: RawGLBalance[] = [];
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const _debug: any = {
+      allMonths,
+      orgEntityIds,
+      mappedAccountCount: mappedAccountIdSet.size,
+      masterAccountCount: masterAccounts.length,
+      mappingCount: (mappings ?? []).length,
+    };
+
     if (mappedAccountIdSet.size > 0 && orgEntityIds.length > 0) {
       const uniqueYears = [...new Set(allMonths.map((m) => m.year))];
-      const { data: balances } = await admin
-        .from("gl_balances")
-        .select(
-          "account_id, entity_id, period_year, period_month, beginning_balance, ending_balance, net_change"
-        )
-        .in("entity_id", orgEntityIds)
-        .in("period_year", uniqueYears)
-        .limit(10000);
+      const uniqueMonthNums = [...new Set(allMonths.map((m) => m.month))];
+      _debug.queryFilters = { uniqueYears, uniqueMonthNums };
+
+      // Paginated fetch to avoid PostgREST PGRST_DB_MAX_ROWS truncation
+      const allBalances = await fetchAllGLBalances(admin, {
+        filterColumn: "entity_id",
+        filterValues: orgEntityIds,
+        years: uniqueYears,
+        months: uniqueMonthNums,
+      });
+
+      _debug.rawRowCount = allBalances.length;
 
       const monthSet = new Set(
         allMonths.map(
           (m) => `${m.year}-${String(m.month).padStart(2, "0")}`
         )
       );
-      // Coerce numeric fields from Supabase strings to JS numbers
-      // Filter to only mapped accounts and matching months
-      glBalances = (balances ?? [])
-        .map(parseGLBalance)
-        .filter(
-          (b) =>
-            mappedAccountIdSet.has(b.account_id) &&
-            monthSet.has(
-              `${b.period_year}-${String(b.period_month).padStart(2, "0")}`
-            )
-        );
+      // Filter to mapped accounts and exact months
+      glBalances = allBalances.filter(
+        (b) =>
+          mappedAccountIdSet.has(b.account_id) &&
+          monthSet.has(
+            `${b.period_year}-${String(b.period_month).padStart(2, "0")}`
+          )
+      );
+
+      _debug.filteredRowCount = glBalances.length;
+
+      // Debug: count GL rows per entity for Jan 2026
+      const entityRowCounts: Record<string, number> = {};
+      const entityNetChangeSums: Record<string, number> = {};
+      for (const b of glBalances) {
+        if (b.period_year === 2026 && b.period_month === 1) {
+          entityRowCounts[b.entity_id] = (entityRowCounts[b.entity_id] ?? 0) + 1;
+          entityNetChangeSums[b.entity_id] = (entityNetChangeSums[b.entity_id] ?? 0) + b.net_change;
+        }
+      }
+      _debug.jan2026PerEntity = { rowCounts: entityRowCounts, netChangeSums: entityNetChangeSums };
     }
 
     // Build mapping: master account ID -> list of entity account_ids
@@ -1542,11 +1626,26 @@ export async function GET(request: Request) {
     // sum up all the mapped entity account balances
     const consolidatedBalances: RawGLBalance[] = [];
 
+    // Debug: track revenue master accounts consolidation
+    const _revenueDebug: Record<string, { mappedAccountIds: string[]; balanceCount: number; netChange: number }> = {};
+
     for (const ma of masterAccounts) {
       const entityAccountIds = masterToEntityAccounts.get(ma.id) ?? [];
       const entityBalances = glBalances.filter((b) =>
         entityAccountIds.includes(b.account_id)
       );
+
+      // Debug: capture revenue account details
+      if (ma.classification === "Revenue") {
+        const jan2026Balances = entityBalances.filter(
+          (b) => b.period_year === 2026 && b.period_month === 1
+        );
+        _revenueDebug[ma.name] = {
+          mappedAccountIds: entityAccountIds,
+          balanceCount: jan2026Balances.length,
+          netChange: jan2026Balances.reduce((s, b) => s + b.net_change, 0),
+        };
+      }
 
       // Group by period
       const periodMap = new Map<
@@ -1580,6 +1679,8 @@ export async function GET(request: Request) {
         });
       }
     }
+
+    _debug.revenueConsolidation = _revenueDebug;
 
     // --- Pro Forma Adjustments (organization scope) ---
     if (includeProForma) {
@@ -1774,7 +1875,7 @@ export async function GET(request: Request) {
       endYear: b.endYear,
     }));
 
-    const response: FinancialStatementsResponse = {
+    const response = {
       periods,
       incomeStatement,
       balanceSheet,
@@ -1787,6 +1888,7 @@ export async function GET(request: Request) {
         startPeriod: `${startYear}-${startMonth}`,
         endPeriod: `${endYear}-${endMonth}`,
       },
+      _debug,
     };
 
     return NextResponse.json(response);

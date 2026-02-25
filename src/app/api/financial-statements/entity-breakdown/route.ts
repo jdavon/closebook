@@ -391,6 +391,7 @@ export async function GET(request: Request) {
 
   if (mappedAccountIdSet.size > 0 && entityIds.length > 0) {
     const uniqueYears = [...new Set(allMonths.map((m) => m.year))];
+    const uniqueMonthNums = [...new Set(allMonths.map((m) => m.month))];
     const { data: balances } = await admin
       .from("gl_balances")
       .select(
@@ -398,14 +399,15 @@ export async function GET(request: Request) {
       )
       .in("entity_id", entityIds)
       .in("period_year", uniqueYears)
-      .limit(10000);
+      .in("period_month", uniqueMonthNums)
+      .limit(100000);
 
     const monthSet = new Set(
       allMonths.map(
         (m) => `${m.year}-${String(m.month).padStart(2, "0")}`
       )
     );
-
+    // Filter to mapped accounts and exact months
     glBalances = (balances ?? [])
       .map(parseGLBalance)
       .filter(

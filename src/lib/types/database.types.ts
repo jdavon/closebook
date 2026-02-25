@@ -1946,6 +1946,107 @@ export type Database = {
           },
         ]
       }
+      budget_versions: {
+        Row: {
+          id: string
+          entity_id: string
+          name: string
+          fiscal_year: number
+          status: string
+          is_active: boolean
+          notes: string | null
+          created_by: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          entity_id: string
+          name: string
+          fiscal_year: number
+          status?: string
+          is_active?: boolean
+          notes?: string | null
+          created_by?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          entity_id?: string
+          name?: string
+          fiscal_year?: number
+          status?: string
+          is_active?: boolean
+          notes?: string | null
+          created_by?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "budget_versions_entity_id_fkey"
+            columns: ["entity_id"]
+            referencedRelation: "entities"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      budget_amounts: {
+        Row: {
+          id: string
+          entity_id: string
+          master_account_id: string
+          budget_version_id: string
+          period_year: number
+          period_month: number
+          amount: number
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          entity_id: string
+          master_account_id: string
+          budget_version_id: string
+          period_year: number
+          period_month: number
+          amount?: number
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          entity_id?: string
+          master_account_id?: string
+          budget_version_id?: string
+          period_year?: number
+          period_month?: number
+          amount?: number
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "budget_amounts_entity_id_fkey"
+            columns: ["entity_id"]
+            referencedRelation: "entities"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "budget_amounts_master_account_id_fkey"
+            columns: ["master_account_id"]
+            referencedRelation: "master_accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "budget_amounts_budget_version_id_fkey"
+            columns: ["budget_version_id"]
+            referencedRelation: "budget_versions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       gl_class_balances: {
         Row: {
           id: string

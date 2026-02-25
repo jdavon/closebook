@@ -62,7 +62,7 @@ interface BudgetVersion {
 interface PreviewRow {
   accountNumber: string;
   accountName: string;
-  accountId: string | null;
+  masterAccountId: string | null;
   months: Record<string, number>;
   status: "matched" | "unmatched" | "error";
   message?: string;
@@ -227,12 +227,17 @@ export default function BudgetPage({
           notes: newNotes.trim() || null,
         }),
       });
+      const data = await res.json();
       if (res.ok) {
         setShowNewDialog(false);
         setNewName("");
         setNewNotes("");
         fetchVersions();
+      } else {
+        alert(data.error ?? `Failed to create budget (${res.status})`);
       }
+    } catch (err) {
+      alert(`Network error: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setCreating(false);
     }
