@@ -403,5 +403,78 @@ export async function POST(request: Request) {
     return NextResponse.json({ success: true });
   }
 
+  // ── Diagnose Class Data ────────────────────────────────────────────
+  if (action === "diagnose_class_data") {
+    const { entityId, periodYear, periodMonth } = body;
+
+    if (!entityId || !periodYear || !periodMonth) {
+      return NextResponse.json(
+        { error: "entityId, periodYear, and periodMonth are required" },
+        { status: 400 }
+      );
+    }
+
+    // 1. Check qbo_classes for this entity
+    const { data: classes, error: classErr } = await adminClient
+      .from("qbo_classes")
+      .select("id, name, fully_qualified_name, is_active")
+      .eq("entity_id", entityId);
+
+    // 2. Check gl_class_balances for this entity/period
+    const { data: classBalances, error: cbErr } = await adminClient
+      .from("gl_class_balances")
+      .select("id, account_id, qbo_class_id, net_change")
+      .eq("entity_id", entityId)
+      .eq("period_year", periodYear)
+      .eq("period_month", periodMonth)
+      .limit(20);
+
+    // 3. Check gl_class_balances for ANY period (to see if data exists at all)
+    const { data: anyClassBalances } = await adminClient
+      .from("gl_class_balances")
+      .select("period_year, period_month")
+      .eq("entity_id", entityId)
+      .limit(5);
+
+    // 4. Check commission assignments with class filters
+    const { data: profiles } = await adminClient
+      .from("commission_profiles")
+      .select("id, name")
+      .eq("entity_id", entityId);
+
+    const profileIds = (profiles ?? []).map((p: { id: string }) => p.id);
+    let classFilterAssignments: unknown[] = [];
+    if (profileIds.length > 0) {
+      const { data: assignments } = await adminClient
+        .from("commission_account_assignments")
+        .select("id, account_id, class_filter_mode, qbo_class_ids")
+        .in("commission_profile_id", profileIds)
+        .neq("class_filter_mode", "all");
+      classFilterAssignments = assignments ?? [];
+    }
+
+    return NextResponse.json({
+      qbo_classes: {
+        count: classes?.length ?? 0,
+        error: classErr?.message ?? null,
+        items: (classes ?? []).map((c: { id: string; name: string; fully_qualified_name: string | null; is_active: boolean }) => ({
+          id: c.id,
+          name: c.name,
+          fqn: c.fully_qualified_name,
+          active: c.is_active,
+        })),
+      },
+      gl_class_balances_for_period: {
+        count: classBalances?.length ?? 0,
+        error: cbErr?.message ?? null,
+        sample: (classBalances ?? []).slice(0, 5),
+      },
+      gl_class_balances_any_period: {
+        periods: (anyClassBalances ?? []).map((r: { period_year: number; period_month: number }) => `${r.period_year}-${String(r.period_month).padStart(2, "0")}`),
+      },
+      class_filter_assignments: classFilterAssignments,
+    });
+  }
+
   return NextResponse.json({ error: "Unknown action" }, { status: 400 });
 }
