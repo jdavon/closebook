@@ -585,7 +585,7 @@ export async function POST(request: Request) {
         if (entityClasses && entityClasses.length > 0) {
           send({
             step: "pl_by_class",
-            detail: "Fetching P&L by Class report...",
+            detail: `Fetching P&L by Class report (${entityClasses.length} classes in DB)...`,
             progress: 91,
           });
 
@@ -604,52 +604,100 @@ export async function POST(request: Request) {
 
             // Parse columns to build class index map
             const columns = plData?.Columns?.Column ?? [];
+
+            // Diagnostic: report raw column structure
+            const columnDiag = columns.map((col: Record<string, unknown>, idx: number) => {
+              const title = col.ColTitle as string | undefined;
+              const colType = col.ColType as string | undefined;
+              const meta = (col.MetaData as Array<{ Name: string; Value: string }>) ?? [];
+              const metaStr = meta.map((m: { Name: string; Value: string }) => `${m.Name}=${m.Value}`).join(", ");
+              return `[${idx}] title="${title ?? ""}" type="${colType ?? ""}" meta={${metaStr}}`;
+            });
+
+            send({
+              step: "pl_by_class",
+              detail: `P&L report has ${columns.length} columns: ${columnDiag.join(" | ")}`,
+              progress: 91,
+            });
+
             const classColumns: Array<{
               index: number;
               classDbId: string | null;
+              title: string;
             }> = [];
 
             // Build lookup from class name/FQN to DB record
             // Map both short name and fully_qualified_name so we match
             // regardless of how QBO formats the P&L report column titles
+            // Also use case-insensitive matching as a fallback
             const classNameMap = new Map<string, string>();
+            const classNameMapLower = new Map<string, string>();
             for (const c of entityClasses as Array<{
               id: string;
               name: string;
               fully_qualified_name?: string | null;
             }>) {
               classNameMap.set(c.name, c.id);
+              classNameMapLower.set(c.name.toLowerCase(), c.id);
               if (c.fully_qualified_name) {
                 classNameMap.set(c.fully_qualified_name, c.id);
+                classNameMapLower.set(c.fully_qualified_name.toLowerCase(), c.id);
               }
             }
 
-            let unmatchedClassColumns: string[] = [];
+            send({
+              step: "pl_by_class",
+              detail: `Class name map has ${classNameMap.size} entries: ${Array.from(classNameMap.keys()).join(", ")}`,
+              progress: 91,
+            });
 
-            for (let i = 1; i < columns.length; i++) {
+            const unmatchedClassColumns: string[] = [];
+            const skippedColumns: string[] = [];
+
+            for (let i = 0; i < columns.length; i++) {
               const col = columns[i];
-              const colTitle =
-                col.ColTitle ??
-                (col.MetaData ?? []).find(
-                  (m: { Name: string }) => m.Name === "ColTitle"
-                )?.Value;
+              // Skip the account name column (first column, usually ColType "Account")
+              const colType = (col.ColType as string) ?? "";
+              if (i === 0 && colType.toLowerCase() === "account") continue;
+              // Also skip if it's clearly the account column by other means
+              if (colType.toLowerCase() === "account") continue;
 
-              if (colTitle && colTitle !== "TOTAL" && colTitle !== "Total") {
-                const matchedId = classNameMap.get(colTitle) ?? null;
-                if (!matchedId) {
-                  unmatchedClassColumns.push(colTitle);
-                }
-                classColumns.push({
-                  index: i,
-                  classDbId: matchedId,
-                });
+              // Extract column title from ColTitle, or MetaData
+              const colTitle: string =
+                (col.ColTitle as string) ??
+                ((col.MetaData ?? []) as Array<{ Name: string; Value: string }>).find(
+                  (m: { Name: string }) => m.Name === "ColTitle"
+                )?.Value ??
+                "";
+
+              // Skip total/empty columns
+              if (!colTitle || colTitle === "TOTAL" || colTitle === "Total") {
+                skippedColumns.push(`[${i}]="${colTitle || "(empty)"}"`);
+                continue;
               }
+
+              // Try exact match first, then case-insensitive
+              const matchedId = classNameMap.get(colTitle) ?? classNameMapLower.get(colTitle.toLowerCase()) ?? null;
+              if (!matchedId) {
+                unmatchedClassColumns.push(colTitle);
+              }
+              classColumns.push({
+                index: i,
+                classDbId: matchedId,
+                title: colTitle,
+              });
             }
 
-            if (unmatchedClassColumns.length > 0) {
+            send({
+              step: "pl_by_class",
+              detail: `Found ${classColumns.length} class columns (${classColumns.filter(c => c.classDbId).length} matched to DB). Skipped: ${skippedColumns.join(", ") || "none"}. Unmatched: ${unmatchedClassColumns.join(", ") || "none"}`,
+              progress: 92,
+            });
+
+            if (classColumns.length === 0) {
               send({
                 step: "pl_by_class",
-                detail: `Warning: ${unmatchedClassColumns.length} P&L class column(s) not matched to DB: ${unmatchedClassColumns.join(", ")}`,
+                detail: `WARNING: No class columns found in P&L report! Column structure may be unexpected. Raw Columns JSON: ${JSON.stringify(plData?.Columns).substring(0, 500)}`,
                 progress: 92,
               });
             }
@@ -690,8 +738,9 @@ export async function POST(request: Request) {
                   continue;
                 }
 
-                // Skip Summary rows
-                if (row.Summary !== undefined || row.group !== undefined) continue;
+                // Skip Summary rows (but NOT rows with just a "group" property,
+                // since QBO data rows can have a group field)
+                if (row.Summary !== undefined) continue;
 
                 const colData = row.ColData as
                   | Array<{ value?: string; id?: string }>
@@ -700,12 +749,12 @@ export async function POST(request: Request) {
                   const accountName = colData[0]?.value ?? "";
                   const qboId = colData[0]?.id ?? null;
                   if (accountName) {
-                    const values = colData
-                      .slice(1)
-                      .map((c) => {
-                        const v = parseFloat(c.value ?? "");
-                        return isNaN(v) ? null : v;
-                      });
+                    // Keep ALL values (including index 0 for account name) and
+                    // let the classColumns index handle the offset correctly
+                    const values = colData.map((c) => {
+                      const v = parseFloat(c.value ?? "");
+                      return isNaN(v) ? null : v;
+                    });
                     result.push({ accountName, qboId, values, section });
                   }
                 }
@@ -715,8 +764,30 @@ export async function POST(request: Request) {
 
             const plRows = plData?.Rows?.Row ?? [];
             const plAccountRows = extractPLRows(plRows, "");
+
+            send({
+              step: "pl_by_class",
+              detail: `Extracted ${plAccountRows.length} P&L account rows. Sections: ${[...new Set(plAccountRows.map(r => r.section))].join(", ") || "none"}`,
+              progress: 92,
+            });
+
+            // Log first few rows for diagnosis
+            if (plAccountRows.length > 0) {
+              const sampleRows = plAccountRows.slice(0, 3).map(r =>
+                `"${r.accountName}" (qboId=${r.qboId}, section=${r.section}, ${r.values.length} values: [${r.values.join(",")}])`
+              );
+              send({
+                step: "pl_by_class",
+                detail: `Sample P&L rows: ${sampleRows.join(" | ")}`,
+                progress: 92,
+              });
+            }
+
             const matchedClassBalanceIds: string[] = [];
             let classBalancesUpserted = 0;
+            let classBalanceErrors = 0;
+            let accountsNotMatched = 0;
+            let valuesSkippedNull = 0;
 
             for (const row of plAccountRows) {
               // Match account using 3-tier strategy
@@ -749,7 +820,10 @@ export async function POST(request: Request) {
                   .maybeSingle();
                 account = nameMatch;
               }
-              if (!account) continue;
+              if (!account) {
+                accountsNotMatched++;
+                continue;
+              }
 
               // Determine if this is an income section (needs sign flip to match GL convention)
               const isIncomeSection =
@@ -759,14 +833,18 @@ export async function POST(request: Request) {
               for (const classCol of classColumns) {
                 if (!classCol.classDbId) continue;
 
-                const rawValue = row.values[classCol.index - 1];
-                if (rawValue === null || rawValue === undefined) continue;
+                // Use the column index directly into the full values array
+                const rawValue = row.values[classCol.index];
+                if (rawValue === null || rawValue === undefined) {
+                  valuesSkippedNull++;
+                  continue;
+                }
 
                 // P&L shows income as positive. GL stores revenue as negative (credit convention).
                 // Negate income rows to match gl_balances sign convention.
                 const netChange = isIncomeSection ? rawValue * -1 : rawValue;
 
-                const { data: upsertedRow } = await adminClient
+                const { data: upsertedRow, error: upsertError } = await adminClient
                   .from("gl_class_balances")
                   .upsert(
                     {
@@ -786,12 +864,28 @@ export async function POST(request: Request) {
                   .select("id")
                   .maybeSingle();
 
-                if (upsertedRow) {
+                if (upsertError) {
+                  classBalanceErrors++;
+                  // Report first few errors
+                  if (classBalanceErrors <= 3) {
+                    send({
+                      step: "pl_by_class",
+                      detail: `Upsert error for "${row.accountName}" class "${classCol.title}": ${upsertError.message}`,
+                      progress: 93,
+                    });
+                  }
+                } else if (upsertedRow) {
                   matchedClassBalanceIds.push(upsertedRow.id);
+                  classBalancesUpserted++;
                 }
-                classBalancesUpserted++;
               }
             }
+
+            send({
+              step: "pl_by_class",
+              detail: `Class balance results: ${classBalancesUpserted} upserted, ${classBalanceErrors} errors, ${accountsNotMatched} accounts unmatched, ${valuesSkippedNull} null values skipped`,
+              progress: 93,
+            });
 
             // Clean up stale class balance rows
             if (matchedClassBalanceIds.length > 0) {
@@ -815,6 +909,12 @@ export async function POST(request: Request) {
                     "id",
                     staleClassRows.map((r: { id: string }) => r.id)
                   );
+
+                send({
+                  step: "pl_by_class",
+                  detail: `Removed ${staleClassRows.length} stale class balance rows`,
+                  progress: 93,
+                });
               }
             }
 
@@ -822,13 +922,16 @@ export async function POST(request: Request) {
 
             send({
               step: "pl_by_class",
-              detail: `${classBalancesUpserted} class-level balances saved`,
+              detail: classBalancesUpserted > 0
+                ? `${classBalancesUpserted} class-level balances saved`
+                : `WARNING: 0 class-level balances saved (${plAccountRows.length} P&L rows, ${classColumns.length} class cols, ${classBalanceErrors} errors)`,
               progress: 94,
             });
           } else {
+            const plErrBody = await plResponse.text().catch(() => "");
             send({
               step: "pl_by_class",
-              detail: `P&L by Class fetch failed (HTTP ${plResponse.status})`,
+              detail: `P&L by Class fetch failed (HTTP ${plResponse.status}): ${plErrBody.substring(0, 200)}`,
               progress: 94,
             });
           }
