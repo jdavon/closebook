@@ -578,7 +578,7 @@ export async function POST(request: Request) {
         // Step 4d: Fetch P&L by Class (only if entity has classes)
         const { data: entityClasses } = await adminClient
           .from("qbo_classes")
-          .select("id, qbo_id, name")
+          .select("id, qbo_id, name, fully_qualified_name")
           .eq("entity_id", entityId)
           .eq("is_active", true);
 
@@ -609,10 +609,22 @@ export async function POST(request: Request) {
               classDbId: string | null;
             }> = [];
 
-            // Build lookup from class name to DB record
-            const classNameMap = new Map(
-              entityClasses.map((c: { id: string; name: string }) => [c.name, c.id])
-            );
+            // Build lookup from class name/FQN to DB record
+            // Map both short name and fully_qualified_name so we match
+            // regardless of how QBO formats the P&L report column titles
+            const classNameMap = new Map<string, string>();
+            for (const c of entityClasses as Array<{
+              id: string;
+              name: string;
+              fully_qualified_name?: string | null;
+            }>) {
+              classNameMap.set(c.name, c.id);
+              if (c.fully_qualified_name) {
+                classNameMap.set(c.fully_qualified_name, c.id);
+              }
+            }
+
+            let unmatchedClassColumns: string[] = [];
 
             for (let i = 1; i < columns.length; i++) {
               const col = columns[i];
@@ -623,11 +635,23 @@ export async function POST(request: Request) {
                 )?.Value;
 
               if (colTitle && colTitle !== "TOTAL" && colTitle !== "Total") {
+                const matchedId = classNameMap.get(colTitle) ?? null;
+                if (!matchedId) {
+                  unmatchedClassColumns.push(colTitle);
+                }
                 classColumns.push({
                   index: i,
-                  classDbId: classNameMap.get(colTitle) ?? null,
+                  classDbId: matchedId,
                 });
               }
+            }
+
+            if (unmatchedClassColumns.length > 0) {
+              send({
+                step: "pl_by_class",
+                detail: `Warning: ${unmatchedClassColumns.length} P&L class column(s) not matched to DB: ${unmatchedClassColumns.join(", ")}`,
+                progress: 92,
+              });
             }
 
             // Recursively extract P&L account rows with section tracking
