@@ -2,6 +2,76 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 
+// ---------------------------------------------------------------------------
+// Paginated GL balance fetcher.
+// Supabase PostgREST caps responses via PGRST_DB_MAX_ROWS (often 1000).
+// Page size must not exceed this limit so pagination detects when more
+// rows remain.
+// ---------------------------------------------------------------------------
+
+const GL_PAGE_SIZE = 1000;
+
+interface ConsolidatedGLBalance {
+  account_id: string;
+  entity_id: string;
+  ending_balance: number;
+  debit_total: number;
+  credit_total: number;
+  net_change: number;
+  beginning_balance: number;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function fetchAllConsolidatedGL(
+  admin: any,
+  accountIds: string[],
+  periodYear: number,
+  periodMonth: number
+): Promise<ConsolidatedGLBalance[]> {
+  const allRows: ConsolidatedGLBalance[] = [];
+  let offset = 0;
+  let hasMore = true;
+
+  while (hasMore) {
+    const { data, error } = await admin
+      .from("gl_balances")
+      .select(
+        "account_id, entity_id, ending_balance, debit_total, credit_total, net_change, beginning_balance"
+      )
+      .in("account_id", accountIds)
+      .eq("period_year", periodYear)
+      .eq("period_month", periodMonth)
+      .range(offset, offset + GL_PAGE_SIZE - 1);
+
+    if (error) {
+      console.error("GL balance pagination error:", error);
+      break;
+    }
+
+    const rows = (data ?? []).map(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (b: any): ConsolidatedGLBalance => ({
+        account_id: b.account_id,
+        entity_id: b.entity_id,
+        ending_balance: Number(b.ending_balance),
+        debit_total: Number(b.debit_total),
+        credit_total: Number(b.credit_total),
+        net_change: Number(b.net_change),
+        beginning_balance: Number(b.beginning_balance),
+      })
+    );
+    allRows.push(...rows);
+
+    if (rows.length < GL_PAGE_SIZE) {
+      hasMore = false;
+    } else {
+      offset += GL_PAGE_SIZE;
+    }
+  }
+
+  return allRows;
+}
+
 export async function GET(request: Request) {
   const supabase = await createClient();
   const {
@@ -87,44 +157,18 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: mapError.message }, { status: 500 });
   }
 
-  // Get GL balances for the mapped accounts in the specified period
+  // Get GL balances for the mapped accounts in the specified period (paginated)
   const accountIds = (mappings ?? []).map((m) => m.account_id);
 
-  let glBalances: Array<{
-    account_id: string;
-    entity_id: string;
-    ending_balance: number;
-    debit_total: number;
-    credit_total: number;
-    net_change: number;
-    beginning_balance: number;
-  }> = [];
+  let glBalances: ConsolidatedGLBalance[] = [];
 
   if (accountIds.length > 0) {
-    const { data: balances, error: balError } = await adminClient
-      .from("gl_balances")
-      .select(
-        "account_id, entity_id, ending_balance, debit_total, credit_total, net_change, beginning_balance"
-      )
-      .in("account_id", accountIds)
-      .eq("period_year", parseInt(periodYear))
-      .eq("period_month", parseInt(periodMonth))
-      .limit(10000);
-
-    if (balError) {
-      return NextResponse.json({ error: balError.message }, { status: 500 });
-    }
-
-    // Coerce numeric fields from Supabase strings to JS numbers
-    glBalances = (balances ?? []).map((b) => ({
-      account_id: b.account_id,
-      entity_id: b.entity_id,
-      ending_balance: Number(b.ending_balance),
-      debit_total: Number(b.debit_total),
-      credit_total: Number(b.credit_total),
-      net_change: Number(b.net_change),
-      beginning_balance: Number(b.beginning_balance),
-    }));
+    glBalances = await fetchAllConsolidatedGL(
+      adminClient,
+      accountIds,
+      parseInt(periodYear),
+      parseInt(periodMonth)
+    );
   }
 
   // Get entities for entity names
@@ -179,7 +223,7 @@ export async function GET(request: Request) {
   }
 
   // Build entity balance breakdowns for each master account
-  const glBalancesByKey = new Map<string, typeof glBalances[0]>();
+  const glBalancesByKey = new Map<string, ConsolidatedGLBalance>();
   for (const bal of glBalances) {
     glBalancesByKey.set(`${bal.account_id}:${bal.entity_id}`, bal);
   }

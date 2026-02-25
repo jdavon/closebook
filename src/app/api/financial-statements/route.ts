@@ -70,11 +70,12 @@ function parseGLBalance(row: any): RawGLBalance {
 
 // ---------------------------------------------------------------------------
 // Helper: paginated GL balance fetcher.
-// Supabase PostgREST may cap responses via PGRST_DB_MAX_ROWS (often 1000).
-// We paginate with .range() to ensure we retrieve ALL matching rows.
+// Supabase PostgREST caps responses via PGRST_DB_MAX_ROWS (often 1000).
+// Page size must not exceed this limit so pagination detects when more
+// rows remain.
 // ---------------------------------------------------------------------------
 
-const GL_PAGE_SIZE = 5000;
+const GL_PAGE_SIZE = 1000;
 
 interface GLQueryFilters {
   filterColumn: "entity_id" | "account_id";
@@ -1549,7 +1550,8 @@ export async function GET(request: Request) {
     );
 
     // Get GL balances by entity_id (small set of ~6 IDs) instead of
-    // account_id (1000+ IDs that exceed HTTP URL length limits)
+    // account_id (1000+ IDs that exceed HTTP URL length limits).
+    // Paginated to avoid PostgREST PGRST_DB_MAX_ROWS truncation.
     let glBalances: RawGLBalance[] = [];
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
