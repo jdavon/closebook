@@ -404,24 +404,28 @@ export default function FinancialModelPage() {
               showBudget={includeBudget}
               showYoY={includeYoY}
             />
-            <StatementCard
-              {...sharedCardProps}
-              statementTitle={`${titlePrefix}Balance Sheet`}
-              statementData={data.balanceSheet}
-              periods={data.periods}
-              showBudget={includeBudget}
-              showYoY={includeYoY}
-              pageBreak
-            />
-            <StatementCard
-              {...sharedCardProps}
-              statementTitle={`${titlePrefix}Statement of Cash Flows`}
-              statementData={data.cashFlowStatement}
-              periods={data.periods}
-              showBudget={false}
-              showYoY={includeYoY}
-              pageBreak
-            />
+            {!ebitdaOnly && (
+              <>
+                <StatementCard
+                  {...sharedCardProps}
+                  statementTitle={`${titlePrefix}Balance Sheet`}
+                  statementData={data.balanceSheet}
+                  periods={data.periods}
+                  showBudget={includeBudget}
+                  showYoY={includeYoY}
+                  pageBreak
+                />
+                <StatementCard
+                  {...sharedCardProps}
+                  statementTitle={`${titlePrefix}Statement of Cash Flows`}
+                  statementData={data.cashFlowStatement}
+                  periods={data.periods}
+                  showBudget={false}
+                  showYoY={includeYoY}
+                  pageBreak
+                />
+              </>
+            )}
           </TabsContent>
 
           {/* Income Statement */}
