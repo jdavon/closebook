@@ -212,7 +212,6 @@ export function StatementTable({
             )}
           </tr>
         </thead>
-        <tbody>
           {data.sections.map((section) => {
             const isCollapsed = collapsedSections.has(section.id);
             const hasLines = section.lines.length > 0;
@@ -231,31 +230,33 @@ export function StatementTable({
                     : "";
 
               return (
-                <tr key={section.id} className={rowClass}>
-                  <td
-                    style={{
-                      paddingLeft: isMargin ? "2rem" : undefined,
-                    }}
-                  >
-                    {line.label}
-                  </td>
-                  {!isMargin
-                    ? renderPeriodCells(line, "computed")
-                    : periods.map((period) => (
-                        <>
-                          <td key={period.key}>
-                            {renderAmount(line, period.key)}
-                          </td>
-                          {showBudget && (
-                            <>
-                              <td key={`${period.key}-budget`}></td>
-                              <td key={`${period.key}-var`}></td>
-                            </>
-                          )}
-                        </>
-                      ))}
-                  {showYoY && renderYoYCells(line)}
-                </tr>
+                <tbody key={section.id}>
+                  <tr className={rowClass}>
+                    <td
+                      style={{
+                        paddingLeft: isMargin ? "2rem" : undefined,
+                      }}
+                    >
+                      {line.label}
+                    </td>
+                    {!isMargin
+                      ? renderPeriodCells(line, "computed")
+                      : periods.map((period) => (
+                          <>
+                            <td key={period.key}>
+                              {renderAmount(line, period.key)}
+                            </td>
+                            {showBudget && (
+                              <>
+                                <td key={`${period.key}-budget`}></td>
+                                <td key={`${period.key}-var`}></td>
+                              </>
+                            )}
+                          </>
+                        ))}
+                    {showYoY && renderYoYCells(line)}
+                  </tr>
+                </tbody>
               );
             }
 
@@ -378,7 +379,6 @@ export function StatementTable({
               </tbody>
             );
           })}
-        </tbody>
       </table>
     </div>
   );

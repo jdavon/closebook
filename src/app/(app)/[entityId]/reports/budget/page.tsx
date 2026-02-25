@@ -607,7 +607,6 @@ export default function BudgetPage({
                       <th className="min-w-[100px]">Total</th>
                     </tr>
                   </thead>
-                  <tbody>
                     {viewData.sections.map((section) => {
                       const computedAfter = getComputedLinesAfter(section.id);
 
@@ -693,7 +692,6 @@ export default function BudgetPage({
                         </tbody>
                       );
                     })}
-                  </tbody>
                 </table>
               </div>
             ) : null}
