@@ -236,7 +236,7 @@ export default function FinancialModelPage() {
   };
 
   return (
-    <div className="space-y-4">
+    <div className={`space-y-4${ebitdaOnly ? " stmt-print-compact" : ""}`}>
       {/* Page header */}
       <div className="stmt-no-print">
         <h1 className="text-2xl font-semibold tracking-tight">

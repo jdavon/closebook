@@ -256,7 +256,7 @@
 @media print {
   /* Page margins */
   @page {
-    margin: 0.5in 0.4in;
+    margin: 0.5in 0.6in 0.5in 0.4in;
   }
 
   /* Force light-mode palette regardless of current theme */
@@ -418,5 +418,44 @@
   /* Fixed tables fill page width in print */
   .stmt-table-fixed {
     min-width: 100% !important;
+  }
+
+  /* ---- EBITDA-only compact mode: fit to one page ---- */
+  .stmt-print-compact .stmt-table {
+    font-size: 8pt;
+  }
+  .stmt-print-compact .stmt-table td {
+    padding-top: 0.125rem;
+    padding-bottom: 0.125rem;
+  }
+  .stmt-print-compact .stmt-table thead th {
+    padding-top: 0.25rem;
+    padding-bottom: 0.25rem;
+    font-size: 7.5pt;
+  }
+  .stmt-print-compact .stmt-section-header td {
+    padding-top: 0.4rem;
+    padding-bottom: 0.125rem;
+    font-size: 8pt;
+  }
+  .stmt-print-compact .stmt-subtotal td,
+  .stmt-print-compact .stmt-grand-total td {
+    padding-top: 0.2rem;
+    padding-bottom: 0.2rem;
+  }
+  .stmt-print-compact .stmt-separator td {
+    height: 0.2rem !important;
+  }
+  .stmt-print-compact .stmt-margin-row td {
+    padding-bottom: 0.25rem;
+  }
+  /* Tighter statement header */
+  .stmt-print-compact .text-center.py-4 {
+    padding-top: 0.25rem !important;
+    padding-bottom: 0.25rem !important;
+  }
+  /* Disable page breaks between statements */
+  .stmt-print-compact .stmt-page-break {
+    page-break-before: auto;
   }
 }
