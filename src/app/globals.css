@@ -285,6 +285,7 @@
   [data-sidebar="sidebar"],
   [data-sidebar="rail"],
   [data-sidebar="trigger"],
+  [data-slot="sidebar"],
   header {
     display: none !important;
   }
