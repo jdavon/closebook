@@ -187,7 +187,7 @@ function createPriorYearBuckets(buckets: PeriodBucket[]): PeriodBucket[] {
 // ---------------------------------------------------------------------------
 
 interface RawBudgetAmount {
-  account_id: string;
+  master_account_id: string;
   period_month: number;
   period_year: number;
   amount: number;
@@ -195,17 +195,15 @@ interface RawBudgetAmount {
 
 function aggregateBudgetByBucket(
   budgetAmounts: RawBudgetAmount[],
-  buckets: PeriodBucket[],
-  /** Maps entity account_id -> master account_id */
-  entityToMaster: Map<string, string>
+  buckets: PeriodBucket[]
 ): Map<string, Record<string, number>> {
-  // Index budget amounts: entity_account_id -> "year-month" -> amount
+  // Index budget amounts: master_account_id -> "year-month" -> amount
   const budgetIndex = new Map<string, Map<string, number>>();
   for (const ba of budgetAmounts) {
-    let byPeriod = budgetIndex.get(ba.account_id);
+    let byPeriod = budgetIndex.get(ba.master_account_id);
     if (!byPeriod) {
       byPeriod = new Map();
-      budgetIndex.set(ba.account_id, byPeriod);
+      budgetIndex.set(ba.master_account_id, byPeriod);
     }
     const key = `${ba.period_year}-${ba.period_month}`;
     byPeriod.set(key, (byPeriod.get(key) ?? 0) + Number(ba.amount));
@@ -214,10 +212,7 @@ function aggregateBudgetByBucket(
   // Aggregate by master account and bucket
   const result = new Map<string, Record<string, number>>();
 
-  for (const [entityAccountId, periodAmounts] of budgetIndex) {
-    const masterAccountId = entityToMaster.get(entityAccountId);
-    if (!masterAccountId) continue;
-
+  for (const [masterAccountId, periodAmounts] of budgetIndex) {
     let masterBuckets = result.get(masterAccountId);
     if (!masterBuckets) {
       masterBuckets = {};
@@ -1325,18 +1320,12 @@ async function buildConsolidatedStatements(params: ConsolidatedStatementsParams)
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { data: budgetRows } = await (admin as any)
         .from("budget_amounts")
-        .select("account_id, period_year, period_month, amount")
+        .select("master_account_id, period_year, period_month, amount")
         .in("budget_version_id", versionIds);
-
-      const entityToMaster = new Map<string, string>();
-      for (const m of mappings ?? []) {
-        entityToMaster.set(m.account_id, m.master_account_id);
-      }
 
       consolidatedBudgetByAccount = aggregateBudgetByBucket(
         (budgetRows ?? []) as RawBudgetAmount[],
-        buckets,
-        entityToMaster
+        buckets
       );
     }
   }
@@ -1731,19 +1720,12 @@ export async function GET(request: Request) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any -- budget tables not yet in generated types
         const { data: budgetRows } = await (admin as any)
           .from("budget_amounts")
-          .select("account_id, period_year, period_month, amount")
+          .select("master_account_id, period_year, period_month, amount")
           .in("budget_version_id", versionIds);
-
-        // Build reverse mapping: entity account_id -> master_account_id
-        const entityToMaster = new Map<string, string>();
-        for (const m of mappings ?? []) {
-          entityToMaster.set(m.account_id, m.master_account_id);
-        }
 
         budgetByAccount = aggregateBudgetByBucket(
           (budgetRows ?? []) as RawBudgetAmount[],
-          buckets,
-          entityToMaster
+          buckets
         );
       }
     }
