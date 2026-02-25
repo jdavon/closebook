@@ -254,11 +254,34 @@
 
 /* Print styles */
 @media print {
-  .stmt-no-print {
-    display: none !important;
+  /* Page margins */
+  @page {
+    margin: 0.5in 0.4in;
   }
 
-  /* Hide sidebar, header, and chrome — show only statement content */
+  /* Force light-mode palette regardless of current theme */
+  :root,
+  :root.dark,
+  .dark {
+    --background: oklch(1 0 0);
+    --foreground: oklch(0.145 0 0);
+    --card: oklch(1 0 0);
+    --card-foreground: oklch(0.145 0 0);
+    --muted-foreground: oklch(0.45 0 0);
+    --border: oklch(0.75 0 0);
+    --stmt-row-stripe: #eaf1f8;
+    color-scheme: light;
+  }
+
+  body {
+    background: white !important;
+    color: #1a1a1a !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* ---- Hide UI chrome ---- */
+  .stmt-no-print,
   [data-sidebar="sidebar"],
   [data-sidebar="rail"],
   [data-sidebar="trigger"],
@@ -266,47 +289,133 @@
     display: none !important;
   }
 
-  /* Make main content fill the full page width */
+  /* Full-width layout */
   [data-slot="sidebar-inset"] {
     margin-left: 0 !important;
     width: 100% !important;
     max-width: 100% !important;
   }
 
-  /* Remove Card borders/shadows for clean printing */
-  .rounded-xl {
+  /* Remove Card styling for clean print */
+  .rounded-xl,
+  [data-slot="card"] {
     border: none !important;
     box-shadow: none !important;
     border-radius: 0 !important;
+    background: transparent !important;
   }
 
-  /* Remove body/main padding for maximum print area */
+  /* Remove body/main padding */
   main.flex-1 {
     padding: 0 !important;
     overflow: visible !important;
   }
 
+  /* Collapse gap between stacked cards */
+  .space-y-4 > * + *,
+  .space-y-3 > * + * {
+    margin-top: 0 !important;
+  }
+
+  /* Remove overflow wrappers so table can fill width */
+  .overflow-x-auto {
+    overflow: visible !important;
+  }
+
+  /* ---- Statement header ---- */
   .stmt-table {
     font-size: 9pt;
+    width: 100% !important;
   }
-  .stmt-page-break {
-    page-break-before: always;
+
+  /* Force black text on all table cells */
+  .stmt-table td,
+  .stmt-table th {
+    color: #1a1a1a !important;
   }
+
+  /* Muted text (margin % rows, subheaders) stays gray */
+  .stmt-table .stmt-margin-row td,
+  .stmt-table .stmt-margin-row td span,
+  .stmt-table thead .stmt-subheader th {
+    color: #555 !important;
+  }
+
+  /* Column header bottom border */
+  .stmt-table thead th {
+    border-bottom-color: #1a1a1a !important;
+  }
+
+  /* Subtotal top border */
+  .stmt-subtotal td {
+    border-top-color: #1a1a1a !important;
+  }
+
+  /* Grand total borders */
+  .stmt-grand-total td {
+    border-top-color: #1a1a1a !important;
+    border-bottom-color: #1a1a1a !important;
+  }
+
+  /* Alternating row stripe */
   .stmt-row-striped {
-    background-color: #e8f0f8 !important;
+    background-color: #eaf1f8 !important;
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
   }
 
-  /* Keep variance coloring in print */
+  /* Compact separator rows for less wasted space */
+  .stmt-separator td {
+    height: 0.35rem !important;
+  }
+
+  /* ---- Hide interactive elements ---- */
+
+  /* Section header chevron icons */
+  .stmt-section-header svg {
+    display: none !important;
+  }
+  /* Remove gap left by hidden icon */
+  .stmt-section-header button {
+    gap: 0 !important;
+  }
+
+  /* Page break support */
+  .stmt-page-break {
+    page-break-before: always;
+  }
+
+  /* Avoid orphaned section headers at page bottom */
+  .stmt-section-header {
+    page-break-after: avoid;
+  }
+  tbody {
+    page-break-inside: avoid;
+  }
+
+  /* ---- Variance colors ---- */
+  .stmt-positive,
   .text-green-600 {
     color: #16a34a !important;
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
   }
+  .stmt-negative,
   .text-red-600 {
     color: #dc2626 !important;
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
+  }
+
+  /* Entity breakdown consolidated column border */
+  .border-l {
+    border-left-color: #bbb !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* Fixed tables fill page width in print */
+  .stmt-table-fixed {
+    min-width: 100% !important;
   }
 }

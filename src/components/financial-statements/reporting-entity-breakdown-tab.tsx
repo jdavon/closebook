@@ -103,7 +103,7 @@ export function ReportingEntityBreakdownTab({
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between stmt-no-print">
         <Tabs
           value={activeStatement}
           onValueChange={(v) =>
@@ -118,7 +118,7 @@ export function ReportingEntityBreakdownTab({
           </TabsList>
         </Tabs>
 
-        <label className="flex items-center gap-1.5 text-xs cursor-pointer stmt-no-print">
+        <label className="flex items-center gap-1.5 text-xs cursor-pointer">
           <Checkbox
             checked={showPctOfTotal}
             onCheckedChange={(checked) => setShowPctOfTotal(checked === true)}
