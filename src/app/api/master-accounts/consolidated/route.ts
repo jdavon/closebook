@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { fetchAllMappings, fetchAllAccounts } from "@/lib/utils/paginated-fetch";
 
 // ---------------------------------------------------------------------------
 // Paginated GL balance fetcher.
@@ -140,22 +141,12 @@ export async function GET(request: Request) {
     });
   }
 
-  const { data: mappings, error: mapError } = await adminClient
-    .from("master_account_mappings")
-    .select(
-      `
-      id,
-      master_account_id,
-      entity_id,
-      account_id
-    `
-    )
-    .in("master_account_id", masterAccountIds)
-    .limit(10000);
-
-  if (mapError) {
-    return NextResponse.json({ error: mapError.message }, { status: 500 });
-  }
+  // Paginate mappings to avoid PostgREST max_rows (default 1000) truncation
+  const mappings = await fetchAllMappings(
+    adminClient,
+    masterAccountIds,
+    "id, master_account_id, entity_id, account_id"
+  );
 
   // Get GL balances for the mapped accounts in the specified period (paginated)
   const accountIds = (mappings ?? []).map((m) => m.account_id);
@@ -334,12 +325,8 @@ export async function GET(request: Request) {
   }> = [];
 
   if (entityIds.length > 0) {
-    const { data: allAccounts } = await adminClient
-      .from("accounts")
-      .select("id, entity_id, name, account_number, classification, current_balance")
-      .in("entity_id", entityIds)
-      .eq("is_active", true)
-      .limit(10000);
+    // Paginate accounts to avoid PostgREST max_rows truncation
+    const allAccounts = await fetchAllAccounts(adminClient, entityIds);
 
     unmappedAccounts = (allAccounts ?? [])
       .filter((a) => !allMappedAccountIds.has(a.id))
@@ -353,7 +340,7 @@ export async function GET(request: Request) {
           name: a.name,
           accountNumber: a.account_number,
           classification: a.classification,
-          currentBalance: a.current_balance,
+          currentBalance: a.current_balance ?? 0,
         };
       });
   }

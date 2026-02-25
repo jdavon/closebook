@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getPeriodsInRange } from "@/lib/utils/dates";
+import { fetchAllMappings } from "@/lib/utils/paginated-fetch";
 import {
   INCOME_STATEMENT_SECTIONS,
   INCOME_STATEMENT_COMPUTED,
@@ -433,13 +434,9 @@ export async function GET(request: Request) {
     });
   }
 
-  // Get mappings
+  // Get mappings (paginated to avoid PostgREST max_rows truncation)
   const masterAccountIds = masterAccounts.map((ma) => ma.id);
-  const { data: mappings } = await admin
-    .from("master_account_mappings")
-    .select("master_account_id, entity_id, account_id")
-    .in("master_account_id", masterAccountIds)
-    .limit(10000);
+  const mappings = await fetchAllMappings(admin, masterAccountIds);
 
   // Build mapping: (master_account_id, entity_id) -> list of entity account_ids
   const masterEntityToAccounts = new Map<string, string[]>();

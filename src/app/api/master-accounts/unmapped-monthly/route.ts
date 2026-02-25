@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { fetchAllMappings, fetchAllAccounts } from "@/lib/utils/paginated-fetch";
 
 export async function GET(request: Request) {
   const supabase = await createClient();
@@ -64,31 +65,23 @@ export async function GET(request: Request) {
 
   const masterAccountIds = (masterAccounts ?? []).map((ma) => ma.id);
 
-  // Get all mapped account IDs
+  // Get all mapped account IDs (paginated to avoid PostgREST max_rows truncation)
   let mappedAccountIds = new Set<string>();
   if (masterAccountIds.length > 0) {
-    const { data: mappings } = await adminClient
-      .from("master_account_mappings")
-      .select("account_id")
-      .in("master_account_id", masterAccountIds)
-      .limit(10000);
-
-    mappedAccountIds = new Set((mappings ?? []).map((m) => m.account_id));
+    const mappings = await fetchAllMappings(
+      adminClient,
+      masterAccountIds,
+      "account_id, master_account_id, entity_id"
+    );
+    mappedAccountIds = new Set(mappings.map((m) => m.account_id));
   }
 
-  // Get all active entity accounts
-  const { data: allAccounts } = await adminClient
-    .from("accounts")
-    .select(
-      "id, entity_id, name, account_number, classification, account_type"
-    )
-    .in("entity_id", entityIds)
-    .eq("is_active", true)
-    .order("entity_id")
-    .order("classification")
-    .order("account_number")
-    .order("name")
-    .limit(10000);
+  // Get all active entity accounts (paginated)
+  const allAccounts = await fetchAllAccounts(
+    adminClient,
+    entityIds,
+    "id, entity_id, name, account_number, classification, account_type"
+  );
 
   // Filter to unmapped accounts
   const unmapped = (allAccounts ?? []).filter(
