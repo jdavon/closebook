@@ -46,7 +46,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
-import { formatCurrency } from "@/lib/utils/dates";
+import { formatCurrency, getCurrentPeriod } from "@/lib/utils/dates";
 import {
   Plus,
   Trash2,
@@ -58,6 +58,7 @@ import {
   Pencil,
   Upload,
   Wand2,
+  AlertTriangle,
 } from "lucide-react";
 import type { AccountClassification } from "@/lib/types/database";
 import { ImportMappingsDialog } from "./import-mappings-dialog";
@@ -102,6 +103,22 @@ interface Mapping {
   entities: Entity;
   accounts: EntityAccount;
 }
+
+interface UnmappedAccountMonthly {
+  id: string;
+  entityId: string;
+  entityName: string;
+  entityCode: string;
+  name: string;
+  accountNumber: string | null;
+  classification: string;
+  monthlyBalances: Record<number, number>;
+}
+
+const MONTH_LABELS = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
 
 const CLASSIFICATION_COLORS: Record<AccountClassification, string> = {
   Asset: "bg-blue-100 text-blue-800",
@@ -186,6 +203,16 @@ export default function MasterGLPage() {
   // Import wizard state
   const [showImportDialog, setShowImportDialog] = useState(false);
 
+  // Unmapped accounts monthly grid state
+  const currentPeriod = getCurrentPeriod();
+  const [unmappedYear, setUnmappedYear] = useState(currentPeriod.year);
+  const [unmappedAccounts, setUnmappedAccounts] = useState<
+    UnmappedAccountMonthly[]
+  >([]);
+  const [unmappedLoading, setUnmappedLoading] = useState(false);
+  const [unmappedEntityFilter, setUnmappedEntityFilter] =
+    useState("all");
+
   const loadOrganization = useCallback(async () => {
     const {
       data: { user },
@@ -258,6 +285,24 @@ export default function MasterGLPage() {
     }
   }, [supabase, organizationId]);
 
+  const loadUnmappedMonthly = useCallback(async () => {
+    if (!organizationId) return;
+    setUnmappedLoading(true);
+
+    try {
+      const response = await fetch(
+        `/api/master-accounts/unmapped-monthly?organizationId=${organizationId}&year=${unmappedYear}`
+      );
+      const data = await response.json();
+      if (data.unmappedAccounts) {
+        setUnmappedAccounts(data.unmappedAccounts);
+      }
+    } catch {
+      // silently fail — the section will just show empty
+    }
+    setUnmappedLoading(false);
+  }, [organizationId, unmappedYear]);
+
   useEffect(() => {
     loadOrganization();
   }, [loadOrganization]);
@@ -269,6 +314,12 @@ export default function MasterGLPage() {
       );
     }
   }, [organizationId, loadMasterAccounts, loadMappings, loadEntities]);
+
+  useEffect(() => {
+    if (organizationId) {
+      loadUnmappedMonthly();
+    }
+  }, [organizationId, loadUnmappedMonthly]);
 
   function resetForm() {
     setFormData({
@@ -390,6 +441,7 @@ export default function MasterGLPage() {
     toast.success("Master account deleted");
     await loadMasterAccounts();
     await loadMappings();
+    await loadUnmappedMonthly();
   }
 
   function openMappingSheet(account: MasterAccount) {
@@ -425,6 +477,7 @@ export default function MasterGLPage() {
     setSelectedEntityId("");
     setSelectedAccountId("");
     await loadMappings();
+    await loadUnmappedMonthly();
   }
 
   async function handleRemoveMapping(mappingId: string) {
@@ -442,6 +495,7 @@ export default function MasterGLPage() {
 
     toast.success("Mapping removed");
     await loadMappings();
+    await loadUnmappedMonthly();
   }
 
   async function handleBulkSetup() {
@@ -477,7 +531,7 @@ export default function MasterGLPage() {
 
       setShowBulkDialog(false);
       setBulkEntityId("");
-      await Promise.all([loadMasterAccounts(), loadMappings()]);
+      await Promise.all([loadMasterAccounts(), loadMappings(), loadUnmappedMonthly()]);
     } catch {
       toast.error("An error occurred during bulk setup");
     }
@@ -1109,9 +1163,165 @@ export default function MasterGLPage() {
         onOpenChange={setShowImportDialog}
         entities={entities}
         onComplete={() => {
-          Promise.all([loadMasterAccounts(), loadMappings()]);
+          Promise.all([loadMasterAccounts(), loadMappings(), loadUnmappedMonthly()]);
         }}
       />
+
+      {/* Unmapped Accounts Monthly Grid */}
+      <Card className="border-amber-200">
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <CardTitle className="flex items-center gap-2 text-amber-700">
+              <AlertTriangle className="h-5 w-5" />
+              Unmapped Accounts
+              {unmappedAccounts.length > 0 && (
+                <Badge variant="secondary" className="ml-1">
+                  {unmappedAccounts.length}
+                </Badge>
+              )}
+            </CardTitle>
+            <div className="flex items-center gap-2">
+              <Select
+                value={unmappedEntityFilter}
+                onValueChange={setUnmappedEntityFilter}
+              >
+                <SelectTrigger className="w-48">
+                  <SelectValue placeholder="Entity" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Entities</SelectItem>
+                  {entities.map((e) => (
+                    <SelectItem key={e.id} value={e.id}>
+                      {e.code} &mdash; {e.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select
+                value={String(unmappedYear)}
+                onValueChange={(v) => setUnmappedYear(parseInt(v))}
+              >
+                <SelectTrigger className="w-24">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {[
+                    currentPeriod.year - 2,
+                    currentPeriod.year - 1,
+                    currentPeriod.year,
+                    currentPeriod.year + 1,
+                  ].map((year) => (
+                    <SelectItem key={year} value={String(year)}>
+                      {year}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <CardDescription>
+            Entity accounts not yet mapped to any master GL account. Their
+            balances are excluded from the consolidated view.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {unmappedLoading ? (
+            <p className="text-sm text-muted-foreground">
+              Loading unmapped accounts...
+            </p>
+          ) : unmappedAccounts.length === 0 ? (
+            <p className="text-sm text-muted-foreground py-8 text-center">
+              All entity accounts are mapped to master GL accounts.
+            </p>
+          ) : (() => {
+            const filteredUnmapped =
+              unmappedEntityFilter === "all"
+                ? unmappedAccounts
+                : unmappedAccounts.filter(
+                    (a) => a.entityId === unmappedEntityFilter
+                  );
+
+            if (filteredUnmapped.length === 0) {
+              return (
+                <p className="text-sm text-muted-foreground py-8 text-center">
+                  No unmapped accounts for the selected entity.
+                </p>
+              );
+            }
+
+            return (
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="sticky left-0 bg-background z-10 min-w-[60px]">
+                        Entity
+                      </TableHead>
+                      <TableHead className="sticky left-[60px] bg-background z-10 min-w-[80px]">
+                        Number
+                      </TableHead>
+                      <TableHead className="sticky left-[140px] bg-background z-10 min-w-[180px]">
+                        Account Name
+                      </TableHead>
+                      {MONTH_LABELS.map((m) => (
+                        <TableHead
+                          key={m}
+                          className="text-right min-w-[100px]"
+                        >
+                          {m}
+                        </TableHead>
+                      ))}
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {filteredUnmapped.map((account) => (
+                      <TableRow key={account.id} className="bg-amber-50/50">
+                        <TableCell className="sticky left-0 bg-amber-50/80 z-10">
+                          <Badge variant="outline" className="text-xs">
+                            {account.entityCode}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="sticky left-[60px] bg-amber-50/80 z-10 font-mono text-sm">
+                          {account.accountNumber ?? "—"}
+                        </TableCell>
+                        <TableCell className="sticky left-[140px] bg-amber-50/80 z-10">
+                          <div>
+                            <span className="text-sm">{account.name}</span>
+                            <Badge
+                              variant="outline"
+                              className={`ml-2 text-xs ${
+                                CLASSIFICATION_COLORS[
+                                  account.classification as AccountClassification
+                                ] ?? ""
+                              }`}
+                            >
+                              {account.classification}
+                            </Badge>
+                          </div>
+                        </TableCell>
+                        {MONTH_LABELS.map((_, i) => {
+                          const balance =
+                            account.monthlyBalances[i + 1];
+                          return (
+                            <TableCell
+                              key={i}
+                              className="text-right tabular-nums text-sm"
+                            >
+                              {balance != null && balance !== 0
+                                ? formatCurrency(balance)
+                                : "—"}
+                            </TableCell>
+                          );
+                        })}
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            );
+          })()}
+        </CardContent>
+      </Card>
     </div>
   );
 }
