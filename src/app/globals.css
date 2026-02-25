@@ -225,6 +225,17 @@
   height: 1rem;
 }
 
+/* Fixed-layout variant for entity breakdown / multi-column tables */
+.stmt-table-fixed {
+  table-layout: fixed;
+}
+.stmt-table-fixed td,
+.stmt-table-fixed th {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Negative values styling — already handled by parentheses, but
    we optionally color them for variance columns */
 .stmt-negative {

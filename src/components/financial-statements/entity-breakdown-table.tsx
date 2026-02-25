@@ -80,10 +80,13 @@ export function EntityBreakdownTable({
     );
   }
 
-  // Total columns: label + entities + consolidated (+ pct columns if enabled)
-  const colsPerEntity = showPctOfTotal ? 2 : 1;
-  const totalCols =
-    1 + entityColumns.length * colsPerEntity + (consolidatedColumn ? 1 : 0);
+  // Column calculations
+  const totalCols = 1 + entityColumns.length + (consolidatedColumn ? 1 : 0);
+  const numericColCount = entityColumns.length + (consolidatedColumn ? 1 : 0);
+  const labelWidthPct =
+    numericColCount <= 3 ? 35 : numericColCount <= 6 ? 28 : 22;
+  const numericWidthPct = (100 - labelWidthPct) / numericColCount;
+  const tableMinWidth = 280 + numericColCount * 120;
 
   let stripeIndex = 0;
 
@@ -92,14 +95,12 @@ export function EntityBreakdownTable({
       <>
         {entityColumns.map((col) => (
           <td key={col.key}>
-            <span className="inline-flex items-baseline gap-0">
-              {renderAmount(line, col.key)}
-              {showPctOfTotal && renderPctOfTotal(line, col.key)}
-            </span>
+            {renderAmount(line, col.key)}
+            {showPctOfTotal && renderPctOfTotal(line, col.key)}
           </td>
         ))}
         {consolidatedColumn && (
-          <td key="consolidated" className="font-semibold">
+          <td key="consolidated" className="font-semibold border-l border-border/50">
             {renderAmount(line, "consolidated")}
           </td>
         )}
@@ -110,12 +111,24 @@ export function EntityBreakdownTable({
   return (
     <TooltipProvider>
       <div className="overflow-x-auto">
-        <table className="stmt-table">
+        <table
+          className="stmt-table stmt-table-fixed"
+          style={{ minWidth: `${tableMinWidth}px` }}
+        >
+          <colgroup>
+            <col style={{ width: `${labelWidthPct}%` }} />
+            {entityColumns.map((col) => (
+              <col key={col.key} style={{ width: `${numericWidthPct}%` }} />
+            ))}
+            {consolidatedColumn && (
+              <col style={{ width: `${numericWidthPct}%` }} />
+            )}
+          </colgroup>
           <thead>
             <tr>
-              <th className="min-w-[280px]"></th>
+              <th></th>
               {entityColumns.map((col) => (
-                <th key={col.key} className="min-w-[120px]">
+                <th key={col.key}>
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <span className="cursor-default">{col.label}</span>
@@ -127,7 +140,7 @@ export function EntityBreakdownTable({
                 </th>
               ))}
               {consolidatedColumn && (
-                <th className="min-w-[130px] border-l border-border/50">
+                <th className="border-l border-border/50">
                   {consolidatedColumn.label}
                 </th>
               )}
