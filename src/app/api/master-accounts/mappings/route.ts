@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 
 export async function GET(request: Request) {
   const supabase = await createClient();
@@ -21,8 +22,24 @@ export async function GET(request: Request) {
     );
   }
 
-  // Get all mappings for master accounts in this organization
-  const { data: mappings, error } = await supabase
+  // Verify user belongs to this organization
+  const { data: membership } = await supabase
+    .from("organization_members")
+    .select("organization_id")
+    .eq("user_id", user.id)
+    .eq("organization_id", organizationId)
+    .single();
+
+  if (!membership) {
+    return NextResponse.json({ error: "Access denied" }, { status: 403 });
+  }
+
+  // Use admin client to bypass RLS — the !inner joins with RLS can
+  // silently drop mapping rows when nested table access is restricted.
+  // Access is already verified above via organization membership.
+  const adminClient = createAdminClient();
+
+  const { data: mappings, error } = await adminClient
     .from("master_account_mappings")
     .select(
       `
@@ -39,7 +56,7 @@ export async function GET(request: Request) {
         name,
         classification
       ),
-      accounts!inner (
+      accounts (
         id,
         name,
         account_number,
@@ -47,7 +64,7 @@ export async function GET(request: Request) {
         account_type,
         current_balance
       ),
-      entities!inner (
+      entities (
         id,
         name,
         code
@@ -55,7 +72,7 @@ export async function GET(request: Request) {
     `
     )
     .eq("master_accounts.organization_id", organizationId)
-    .limit(5000);
+    .limit(10000);
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
