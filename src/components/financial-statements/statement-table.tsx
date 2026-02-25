@@ -55,6 +55,17 @@ export function StatementTable({
   function renderBudgetAmount(line: LineItem, periodKey: string) {
     const budget = line.budgetAmounts?.[periodKey];
     if (budget === undefined || budget === null) return null;
+
+    const isMargin = line.id.endsWith("_pct");
+    if (isMargin) {
+      const pct = budget * 100;
+      return (
+        <span className="italic text-muted-foreground">
+          {pct < 0 ? `(${Math.abs(pct).toFixed(1)}%)` : `${pct.toFixed(1)}%`}
+        </span>
+      );
+    }
+
     return formatStatementAmount(budget, false);
   }
 
@@ -68,6 +79,17 @@ export function StatementTable({
       budget === null
     )
       return null;
+
+    const isMargin = line.id.endsWith("_pct");
+    if (isMargin) {
+      const changePts = (actual - budget) * 100;
+      if (Math.abs(changePts) < 0.05) return "\u2014";
+      return (
+        <span className={changePts >= 0 ? "text-green-600 italic" : "text-red-600 italic"}>
+          {changePts >= 0 ? "+" : ""}{changePts.toFixed(1)}pp
+        </span>
+      );
+    }
 
     const variance = actual - budget;
     if (variance === 0) return "\u2014";
@@ -244,21 +266,7 @@ export function StatementTable({
                     >
                       {line.label}
                     </td>
-                    {!isMargin
-                      ? renderPeriodCells(line, "computed")
-                      : periods.map((period) => (
-                          <>
-                            <td key={period.key}>
-                              {renderAmount(line, period.key)}
-                            </td>
-                            {showBudget && (
-                              <>
-                                <td key={`${period.key}-budget`}></td>
-                                <td key={`${period.key}-var`}></td>
-                              </>
-                            )}
-                          </>
-                        ))}
+                    {renderPeriodCells(line, "computed")}
                     {showYoY && renderYoYCells(line)}
                   </tr>
                 </tbody>

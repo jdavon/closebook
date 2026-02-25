@@ -776,6 +776,9 @@ function buildStatement(
         const pyMarginAmounts: Record<string, number> | undefined = hasPY
           ? {}
           : undefined;
+        const budgetMarginAmounts: Record<string, number> | undefined = hasBudget
+          ? {}
+          : undefined;
         for (const bucket of buckets) {
           const revenue = sectionTotals[revenueKey]?.[bucket.key] ?? 0;
           marginAmounts[bucket.key] =
@@ -784,6 +787,11 @@ function buildStatement(
             const pyRevenue = sectionPyTotals[revenueKey]?.[bucket.key] ?? 0;
             pyMarginAmounts[bucket.key] =
               pyRevenue !== 0 ? compPyAmounts[bucket.key] / pyRevenue : 0;
+          }
+          if (hasBudget && budgetMarginAmounts && compBudgetAmounts) {
+            const budgetRevenue = sectionBudgetTotals[revenueKey]?.[bucket.key] ?? 0;
+            budgetMarginAmounts[bucket.key] =
+              budgetRevenue !== 0 ? compBudgetAmounts[bucket.key] / budgetRevenue : 0;
           }
         }
 
@@ -802,6 +810,7 @@ function buildStatement(
             id: `${comp.id}_pct`,
             label: marginLabel,
             amounts: marginAmounts,
+            budgetAmounts: budgetMarginAmounts,
             priorYearAmounts: pyMarginAmounts,
             indent: 1,
             isTotal: false,
