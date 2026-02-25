@@ -790,13 +790,13 @@ export async function POST(request: Request) {
             let valuesSkippedNull = 0;
 
             for (const row of plAccountRows) {
-              // Match account using 3-tier strategy
-              let account: { id: string } | null = null;
+              // Match account using 3-tier strategy (also fetch classification for sign detection)
+              let account: { id: string; classification: string | null } | null = null;
 
               if (row.qboId) {
                 const { data: qboMatch } = await adminClient
                   .from("accounts")
-                  .select("id")
+                  .select("id, classification")
                   .eq("entity_id", entityId)
                   .eq("qbo_id", row.qboId)
                   .maybeSingle();
@@ -805,7 +805,7 @@ export async function POST(request: Request) {
               if (!account) {
                 const { data: fqnMatch } = await adminClient
                   .from("accounts")
-                  .select("id")
+                  .select("id, classification")
                   .eq("entity_id", entityId)
                   .eq("fully_qualified_name", row.accountName)
                   .maybeSingle();
@@ -814,7 +814,7 @@ export async function POST(request: Request) {
               if (!account) {
                 const { data: nameMatch } = await adminClient
                   .from("accounts")
-                  .select("id")
+                  .select("id, classification")
                   .eq("entity_id", entityId)
                   .eq("name", row.accountName)
                   .maybeSingle();
@@ -825,10 +825,12 @@ export async function POST(request: Request) {
                 continue;
               }
 
-              // Determine if this is an income section (needs sign flip to match GL convention)
-              const isIncomeSection =
-                row.section.toLowerCase().includes("income") ||
-                row.section.toLowerCase().includes("revenue");
+              // Use account classification to determine sign, NOT the P&L section name.
+              // P&L section names can be custom (e.g. "Labor & Services") and don't
+              // reliably contain "income" or "revenue". Classification is definitive.
+              // Revenue accounts need negation to match gl_balances (debit - credit) convention.
+              const isRevenueAccount =
+                (account.classification ?? "").toLowerCase() === "revenue";
 
               for (const classCol of classColumns) {
                 if (!classCol.classDbId) continue;
@@ -841,8 +843,8 @@ export async function POST(request: Request) {
                 }
 
                 // P&L shows income as positive. GL stores revenue as negative (credit convention).
-                // Negate income rows to match gl_balances sign convention.
-                const netChange = isIncomeSection ? rawValue * -1 : rawValue;
+                // Negate revenue accounts to match gl_balances sign convention.
+                const netChange = isRevenueAccount ? rawValue * -1 : rawValue;
 
                 const { data: upsertedRow, error: upsertError } = await adminClient
                   .from("gl_class_balances")
