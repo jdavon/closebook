@@ -186,24 +186,75 @@ function createPriorYearBuckets(buckets: PeriodBucket[]): PeriodBucket[] {
 // Helper: aggregate budget amounts into period buckets
 // ---------------------------------------------------------------------------
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 interface RawBudgetAmount {
-  master_account_id: string;
+  master_account_id?: string;
+  account_id?: string;
   period_month: number;
   period_year: number;
   amount: number;
 }
 
+/**
+ * Fetches budget amounts with fallback for column name.
+ * The budget_amounts table may have either `master_account_id` (renamed)
+ * or `account_id` (original migration). Try master_account_id first; if
+ * the query errors, fall back to account_id.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function fetchBudgetAmounts(admin: any, versionIds: string[]): Promise<{
+  rows: RawBudgetAmount[];
+  column: "master_account_id" | "account_id";
+  error?: string;
+}> {
+  // Try master_account_id first (current schema after column rename)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: rows1, error: err1 } = await (admin as any)
+    .from("budget_amounts")
+    .select("master_account_id, period_year, period_month, amount")
+    .in("budget_version_id", versionIds);
+
+  if (!err1 && rows1) {
+    return { rows: rows1 as RawBudgetAmount[], column: "master_account_id" };
+  }
+
+  // Fallback: try account_id (original migration column name)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: rows2, error: err2 } = await (admin as any)
+    .from("budget_amounts")
+    .select("account_id, period_year, period_month, amount")
+    .in("budget_version_id", versionIds);
+
+  if (!err2 && rows2) {
+    return { rows: rows2 as RawBudgetAmount[], column: "account_id" };
+  }
+
+  return {
+    rows: [],
+    column: "master_account_id",
+    error: `master_account_id: ${err1?.message}; account_id: ${err2?.message}`,
+  };
+}
+
 function aggregateBudgetByBucket(
   budgetAmounts: RawBudgetAmount[],
-  buckets: PeriodBucket[]
+  buckets: PeriodBucket[],
+  column: "master_account_id" | "account_id",
+  /** Maps entity account_id -> master account_id (only needed when column is account_id) */
+  entityToMaster?: Map<string, string>
 ): Map<string, Record<string, number>> {
-  // Index budget amounts: master_account_id -> "year-month" -> amount
+  // Index budget amounts by account key -> "year-month" -> amount
   const budgetIndex = new Map<string, Map<string, number>>();
   for (const ba of budgetAmounts) {
-    let byPeriod = budgetIndex.get(ba.master_account_id);
+    const accountKey = column === "master_account_id"
+      ? ba.master_account_id!
+      : ba.account_id!;
+    if (!accountKey) continue;
+
+    let byPeriod = budgetIndex.get(accountKey);
     if (!byPeriod) {
       byPeriod = new Map();
-      budgetIndex.set(ba.master_account_id, byPeriod);
+      budgetIndex.set(accountKey, byPeriod);
     }
     const key = `${ba.period_year}-${ba.period_month}`;
     byPeriod.set(key, (byPeriod.get(key) ?? 0) + Number(ba.amount));
@@ -212,7 +263,13 @@ function aggregateBudgetByBucket(
   // Aggregate by master account and bucket
   const result = new Map<string, Record<string, number>>();
 
-  for (const [masterAccountId, periodAmounts] of budgetIndex) {
+  for (const [accountKey, periodAmounts] of budgetIndex) {
+    // If column is account_id, map entity account -> master account
+    const masterAccountId = column === "account_id" && entityToMaster
+      ? entityToMaster.get(accountKey)
+      : accountKey;
+    if (!masterAccountId) continue;
+
     let masterBuckets = result.get(masterAccountId);
     if (!masterBuckets) {
       masterBuckets = {};
@@ -1298,35 +1355,58 @@ async function buildConsolidatedStatements(params: ConsolidatedStatementsParams)
 
   // Budget data
   let consolidatedBudgetByAccount: Map<string, Record<string, number>> | undefined;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const _budgetDebug: any = { includeBudget, entityCount: entityIds.length };
 
   if (includeBudget && entityIds.length > 0) {
     const budgetYears = [
       ...new Set(buckets.flatMap((b) => b.months.map((m) => m.year))),
     ];
+    _budgetDebug.budgetYears = budgetYears;
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data: activeVersions } = await (admin as any)
+    const { data: activeVersions, error: versionsError } = await (admin as any)
       .from("budget_versions")
       .select("id, fiscal_year, entity_id")
       .in("entity_id", entityIds)
       .eq("is_active", true)
       .in("fiscal_year", budgetYears);
 
+    _budgetDebug.activeVersionCount = (activeVersions ?? []).length;
+    _budgetDebug.activeVersions = (activeVersions ?? []).map(
+      (v: { id: string; fiscal_year: number; entity_id: string }) => ({
+        id: v.id,
+        fiscal_year: v.fiscal_year,
+        entity_id: v.entity_id,
+      })
+    );
+    if (versionsError) _budgetDebug.versionsError = versionsError.message;
+
     const versionIds = (activeVersions ?? []).map(
       (v: { id: string }) => v.id
     );
 
     if (versionIds.length > 0) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data: budgetRows } = await (admin as any)
-        .from("budget_amounts")
-        .select("master_account_id, period_year, period_month, amount")
-        .in("budget_version_id", versionIds);
+      const budgetResult = await fetchBudgetAmounts(admin, versionIds);
+      _budgetDebug.budgetColumn = budgetResult.column;
+      _budgetDebug.budgetRowCount = budgetResult.rows.length;
+      if (budgetResult.error) _budgetDebug.budgetQueryError = budgetResult.error;
 
-      consolidatedBudgetByAccount = aggregateBudgetByBucket(
-        (budgetRows ?? []) as RawBudgetAmount[],
-        buckets
-      );
+      if (budgetResult.rows.length > 0) {
+        // Build entityToMaster mapping (needed if column is account_id)
+        const entityToMaster = new Map<string, string>();
+        for (const m of mappings ?? []) {
+          entityToMaster.set(m.account_id, m.master_account_id);
+        }
+
+        consolidatedBudgetByAccount = aggregateBudgetByBucket(
+          budgetResult.rows,
+          buckets,
+          budgetResult.column,
+          entityToMaster
+        );
+        _budgetDebug.aggregatedAccountCount = consolidatedBudgetByAccount.size;
+      }
     }
   }
 
@@ -1394,6 +1474,7 @@ async function buildConsolidatedStatements(params: ConsolidatedStatementsParams)
     incomeStatement,
     balanceSheet,
     cashFlowStatement,
+    _budgetDebug,
   };
 }
 
@@ -1695,38 +1776,54 @@ export async function GET(request: Request) {
 
     // --------------- Budget data (entity scope) ---------------
     let budgetByAccount: Map<string, Record<string, number>> | undefined;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const _entityBudgetDebug: any = { includeBudget };
 
     if (includeBudget) {
       // Determine which fiscal years we need budgets for
       const budgetYears = [
         ...new Set(buckets.flatMap((b) => b.months.map((m) => m.year))),
       ];
+      _entityBudgetDebug.budgetYears = budgetYears;
 
       // Find active budget versions for this entity in those years
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- budget tables not yet in generated types
-      const { data: activeVersions } = await (admin as any)
+      const { data: activeVersions, error: versionsError } = await (admin as any)
         .from("budget_versions")
         .select("id, fiscal_year")
         .eq("entity_id", entityId!)
         .eq("is_active", true)
         .in("fiscal_year", budgetYears);
 
+      _entityBudgetDebug.activeVersionCount = (activeVersions ?? []).length;
+      _entityBudgetDebug.activeVersions = activeVersions ?? [];
+      if (versionsError) _entityBudgetDebug.versionsError = versionsError.message;
+
       const versionIds = (activeVersions ?? []).map(
         (v: { id: string }) => v.id
       );
 
       if (versionIds.length > 0) {
-        // Fetch budget amounts for those versions
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- budget tables not yet in generated types
-        const { data: budgetRows } = await (admin as any)
-          .from("budget_amounts")
-          .select("master_account_id, period_year, period_month, amount")
-          .in("budget_version_id", versionIds);
+        const budgetResult = await fetchBudgetAmounts(admin, versionIds);
+        _entityBudgetDebug.budgetColumn = budgetResult.column;
+        _entityBudgetDebug.budgetRowCount = budgetResult.rows.length;
+        if (budgetResult.error) _entityBudgetDebug.budgetQueryError = budgetResult.error;
 
-        budgetByAccount = aggregateBudgetByBucket(
-          (budgetRows ?? []) as RawBudgetAmount[],
-          buckets
-        );
+        if (budgetResult.rows.length > 0) {
+          // Build entityToMaster mapping (needed if column is account_id)
+          const entityToMaster = new Map<string, string>();
+          for (const m of mappings ?? []) {
+            entityToMaster.set(m.account_id, m.master_account_id);
+          }
+
+          budgetByAccount = aggregateBudgetByBucket(
+            budgetResult.rows,
+            buckets,
+            budgetResult.column,
+            entityToMaster
+          );
+          _entityBudgetDebug.aggregatedAccountCount = budgetByAccount.size;
+        }
       }
     }
 
@@ -1800,11 +1897,12 @@ export async function GET(request: Request) {
       endYear: b.endYear,
     }));
 
-    const response: FinancialStatementsResponse = {
+    const response = {
       periods,
       incomeStatement,
       balanceSheet,
       cashFlowStatement,
+      _budgetDebug: _entityBudgetDebug,
       metadata: {
         entityName: entity.name,
         organizationName: org?.name ?? undefined,
