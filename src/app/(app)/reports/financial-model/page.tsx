@@ -76,6 +76,18 @@ export default function FinancialModelPage() {
         .order("name");
 
       setEntities(ents ?? []);
+
+      // Auto-enable pro forma toggle when active adjustments exist
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { count } = await (supabase as any)
+        .from("pro_forma_adjustments")
+        .select("id", { count: "exact", head: true })
+        .eq("organization_id", membership.organization_id)
+        .eq("is_excluded", false);
+
+      if (count && count > 0) {
+        setIncludeProForma(true);
+      }
     }
   }, [supabase]);
 
@@ -351,6 +363,7 @@ export default function FinancialModelPage() {
               startMonth={startMonth}
               endYear={endYear}
               endMonth={endMonth}
+              onAdjustmentActivated={() => setIncludeProForma(true)}
             />
           </TabsContent>
 

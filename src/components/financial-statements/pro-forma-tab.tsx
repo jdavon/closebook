@@ -75,6 +75,9 @@ interface ProFormaTabProps {
   startMonth: number;
   endYear: number;
   endMonth: number;
+  /** Called when an adjustment is created, updated, or un-excluded so the
+   *  parent can auto-enable the includeProForma toggle. */
+  onAdjustmentActivated?: () => void;
 }
 
 export function ProFormaTab({
@@ -86,6 +89,7 @@ export function ProFormaTab({
   startMonth,
   endYear,
   endMonth,
+  onAdjustmentActivated,
 }: ProFormaTabProps) {
   const supabase = createClient();
 
@@ -246,6 +250,7 @@ export function ProFormaTab({
         toast.success("Adjustment updated");
         setShowDialog(false);
         loadAdjustments();
+        onAdjustmentActivated?.();
       }
     } else {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -259,6 +264,7 @@ export function ProFormaTab({
         toast.success("Adjustment created");
         setShowDialog(false);
         loadAdjustments();
+        onAdjustmentActivated?.();
       }
     }
 
@@ -304,6 +310,9 @@ export function ProFormaTab({
         )
       );
       toast.error("Failed to update");
+    } else if (currentValue) {
+      // Was excluded, now re-included — notify parent to enable pro forma
+      onAdjustmentActivated?.();
     }
   }
 
