@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import {
@@ -26,6 +26,19 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
@@ -33,7 +46,16 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
-import { Plus, Pencil, Trash2, ArrowRight } from "lucide-react";
+import {
+  Plus,
+  Pencil,
+  Trash2,
+  ArrowRight,
+  ChevronsUpDown,
+  Check,
+  Repeat,
+} from "lucide-react";
+import { cn } from "@/lib/utils";
 import { formatStatementAmount } from "./format-utils";
 import type { Scope, AllocationAdjustment } from "./types";
 
@@ -84,6 +106,106 @@ interface MasterAccountOption {
   classification: string;
   account_type: string;
 }
+
+// ---------------------------------------------------------------------------
+// Searchable Combobox component for entities and accounts
+// ---------------------------------------------------------------------------
+
+interface ComboboxOption {
+  value: string;
+  label: string;
+  sublabel?: string;
+  badge?: string;
+}
+
+function SearchableCombobox({
+  options,
+  value,
+  onValueChange,
+  placeholder = "Select...",
+  searchPlaceholder = "Search...",
+  emptyMessage = "No results found.",
+  className,
+}: {
+  options: ComboboxOption[];
+  value: string;
+  onValueChange: (value: string) => void;
+  placeholder?: string;
+  searchPlaceholder?: string;
+  emptyMessage?: string;
+  className?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const selected = options.find((o) => o.value === value);
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
+          role="combobox"
+          aria-expanded={open}
+          className={cn(
+            "h-8 w-full justify-between text-xs font-normal",
+            !value && "text-muted-foreground",
+            className
+          )}
+        >
+          <span className="truncate">
+            {selected ? selected.label : placeholder}
+          </span>
+          <ChevronsUpDown className="ml-2 h-3.5 w-3.5 shrink-0 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
+        <Command>
+          <CommandInput
+            placeholder={searchPlaceholder}
+            className="h-8 text-xs"
+          />
+          <CommandList>
+            <CommandEmpty className="text-xs py-4 text-center">
+              {emptyMessage}
+            </CommandEmpty>
+            <CommandGroup>
+              {options.map((option) => (
+                <CommandItem
+                  key={option.value}
+                  value={`${option.label} ${option.sublabel ?? ""}`}
+                  onSelect={() => {
+                    onValueChange(option.value === value ? "" : option.value);
+                    setOpen(false);
+                  }}
+                  className="text-xs"
+                >
+                  <Check
+                    className={cn(
+                      "mr-2 h-3.5 w-3.5 shrink-0",
+                      value === option.value ? "opacity-100" : "opacity-0"
+                    )}
+                  />
+                  <span className="truncate">{option.label}</span>
+                  {option.badge && (
+                    <Badge
+                      variant="outline"
+                      className="ml-auto text-[10px] py-0 shrink-0"
+                    >
+                      {option.badge}
+                    </Badge>
+                  )}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// AllocationTab Component
+// ---------------------------------------------------------------------------
 
 interface AllocationTabProps {
   organizationId: string | null;
@@ -140,6 +262,38 @@ export function AllocationTab({
   const [formStartMonth, setFormStartMonth] = useState(startMonth);
   const [formEndYear, setFormEndYear] = useState(endYear);
   const [formEndMonth, setFormEndMonth] = useState(endMonth);
+  // Repeating fields
+  const [formIsRepeating, setFormIsRepeating] = useState(false);
+  const [formRepeatEndYear, setFormRepeatEndYear] = useState(endYear);
+  const [formRepeatEndMonth, setFormRepeatEndMonth] = useState(endMonth);
+
+  // Memoize entity options for combobox
+  const entityOptions: ComboboxOption[] = useMemo(
+    () =>
+      entities.map((e) => ({
+        value: e.id,
+        label: `${e.code} — ${e.name}`,
+      })),
+    [entities]
+  );
+
+  // Filtered destination options (exclude selected source)
+  const destEntityOptions: ComboboxOption[] = useMemo(
+    () => entityOptions.filter((o) => o.value !== formSourceEntityId),
+    [entityOptions, formSourceEntityId]
+  );
+
+  // Memoize master account options for combobox
+  const masterAccountOptions: ComboboxOption[] = useMemo(
+    () =>
+      masterAccounts.map((ma) => ({
+        value: ma.id,
+        label: `${ma.account_number} — ${ma.name}`,
+        sublabel: ma.classification,
+        badge: ma.classification,
+      })),
+    [masterAccounts]
+  );
 
   // Load allocations
   const loadAllocations = useCallback(async () => {
@@ -226,6 +380,9 @@ export function AllocationTab({
     setFormStartMonth(startMonth);
     setFormEndYear(endYear);
     setFormEndMonth(endMonth);
+    setFormIsRepeating(false);
+    setFormRepeatEndYear(endYear);
+    setFormRepeatEndMonth(endMonth);
   }
 
   // Open add dialog
@@ -253,6 +410,9 @@ export function AllocationTab({
       setFormEndYear(alloc.end_year ?? endYear);
       setFormEndMonth(alloc.end_month ?? endMonth);
     }
+    setFormIsRepeating(alloc.is_repeating ?? false);
+    setFormRepeatEndYear(alloc.repeat_end_year ?? endYear);
+    setFormRepeatEndMonth(alloc.repeat_end_month ?? endMonth);
     setShowDialog(true);
   }
 
@@ -294,6 +454,22 @@ export function AllocationTab({
       }
     }
 
+    // Validate repeating end date
+    if (formIsRepeating && formScheduleType === "single_month") {
+      const repeatMonths = countMonthsInRange(
+        formYear,
+        formMonth,
+        formRepeatEndYear,
+        formRepeatEndMonth
+      );
+      if (repeatMonths < 2) {
+        toast.error(
+          "Repeat-through date must be at least one month after the start period"
+        );
+        return;
+      }
+    }
+
     setSaving(true);
 
     const payload: Record<string, unknown> = {
@@ -314,6 +490,9 @@ export function AllocationTab({
       payload.start_month = null;
       payload.end_year = null;
       payload.end_month = null;
+      payload.is_repeating = formIsRepeating;
+      payload.repeat_end_year = formIsRepeating ? formRepeatEndYear : null;
+      payload.repeat_end_month = formIsRepeating ? formRepeatEndMonth : null;
     } else {
       payload.period_year = null;
       payload.period_month = null;
@@ -321,6 +500,9 @@ export function AllocationTab({
       payload.start_month = formStartMonth;
       payload.end_year = formEndYear;
       payload.end_month = formEndMonth;
+      payload.is_repeating = false;
+      payload.repeat_end_year = null;
+      payload.repeat_end_month = null;
     }
 
     if (editingId) {
@@ -465,7 +647,7 @@ export function AllocationTab({
                       Source → Destination
                     </TableHead>
                     <TableHead className="w-[200px]">Master Account</TableHead>
-                    <TableHead className="w-[140px]">Period</TableHead>
+                    <TableHead className="w-[160px]">Period</TableHead>
                     <TableHead className="w-[120px] text-right">
                       Amount
                     </TableHead>
@@ -507,10 +689,28 @@ export function AllocationTab({
                         </TableCell>
                         <TableCell className="text-xs">
                           {alloc.schedule_type === "single_month" ? (
-                            formatPeriod(
-                              alloc.period_year!,
-                              alloc.period_month!
-                            )
+                            <div>
+                              <span>
+                                {formatPeriod(
+                                  alloc.period_year!,
+                                  alloc.period_month!
+                                )}
+                              </span>
+                              {alloc.is_repeating &&
+                                alloc.repeat_end_year &&
+                                alloc.repeat_end_month && (
+                                  <div className="flex items-center gap-1 mt-0.5">
+                                    <Repeat className="h-3 w-3 text-blue-500" />
+                                    <span className="text-[11px] text-muted-foreground">
+                                      through{" "}
+                                      {formatPeriod(
+                                        alloc.repeat_end_year,
+                                        alloc.repeat_end_month
+                                      )}
+                                    </span>
+                                  </div>
+                                )}
+                            </div>
                           ) : (
                             <div>
                               <span>
@@ -537,6 +737,11 @@ export function AllocationTab({
                           {monthlyAmt !== null && (
                             <div className="text-[10px] text-muted-foreground">
                               {formatStatementAmount(monthlyAmt, true)}/mo
+                            </div>
+                          )}
+                          {alloc.is_repeating && (
+                            <div className="text-[10px] text-blue-500">
+                              {formatStatementAmount(alloc.amount, true)}/mo
                             </div>
                           )}
                         </TableCell>
@@ -603,74 +808,51 @@ export function AllocationTab({
           </DialogHeader>
 
           <div className="space-y-4 py-2">
-            {/* Source Entity */}
+            {/* Source Entity - Searchable Combobox */}
             <div className="space-y-1.5">
               <Label className="text-xs">Source Entity (costs move from)</Label>
-              <Select
+              <SearchableCombobox
+                options={entityOptions}
                 value={formSourceEntityId}
-                onValueChange={setFormSourceEntityId}
-              >
-                <SelectTrigger className="h-8 text-xs">
-                  <SelectValue placeholder="Select source entity..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {entities.map((e) => (
-                    <SelectItem key={e.id} value={e.id}>
-                      {e.code} — {e.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                onValueChange={(val) => {
+                  setFormSourceEntityId(val);
+                  // Clear destination if it matches the new source
+                  if (val && val === formDestEntityId) {
+                    setFormDestEntityId("");
+                  }
+                }}
+                placeholder="Search and select source entity..."
+                searchPlaceholder="Search entities..."
+                emptyMessage="No entities found."
+              />
             </div>
 
-            {/* Destination Entity */}
+            {/* Destination Entity - Searchable Combobox */}
             <div className="space-y-1.5">
               <Label className="text-xs">
                 Destination Entity (costs move to)
               </Label>
-              <Select
+              <SearchableCombobox
+                options={destEntityOptions}
                 value={formDestEntityId}
                 onValueChange={setFormDestEntityId}
-              >
-                <SelectTrigger className="h-8 text-xs">
-                  <SelectValue placeholder="Select destination entity..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {entities
-                    .filter((e) => e.id !== formSourceEntityId)
-                    .map((e) => (
-                      <SelectItem key={e.id} value={e.id}>
-                        {e.code} — {e.name}
-                      </SelectItem>
-                    ))}
-                </SelectContent>
-              </Select>
+                placeholder="Search and select destination entity..."
+                searchPlaceholder="Search entities..."
+                emptyMessage="No entities found."
+              />
             </div>
 
-            {/* Master Account */}
+            {/* Master Account - Searchable Combobox */}
             <div className="space-y-1.5">
               <Label className="text-xs">Master Account</Label>
-              <Select
+              <SearchableCombobox
+                options={masterAccountOptions}
                 value={formMasterAccountId}
                 onValueChange={setFormMasterAccountId}
-              >
-                <SelectTrigger className="h-8 text-xs">
-                  <SelectValue placeholder="Select master account..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {masterAccounts.map((ma) => (
-                    <SelectItem key={ma.id} value={ma.id}>
-                      {ma.account_number} — {ma.name}
-                      <Badge
-                        variant="outline"
-                        className="ml-2 text-[10px] py-0"
-                      >
-                        {ma.classification}
-                      </Badge>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                placeholder="Search and select master account..."
+                searchPlaceholder="Search by name or number..."
+                emptyMessage="No accounts found."
+              />
             </div>
 
             {/* Schedule Type */}
@@ -678,9 +860,14 @@ export function AllocationTab({
               <Label className="text-xs">Schedule</Label>
               <Select
                 value={formScheduleType}
-                onValueChange={(v) =>
-                  setFormScheduleType(v as "single_month" | "monthly_spread")
-                }
+                onValueChange={(v) => {
+                  const newType = v as "single_month" | "monthly_spread";
+                  setFormScheduleType(newType);
+                  // Disable repeating when switching to monthly_spread
+                  if (newType === "monthly_spread") {
+                    setFormIsRepeating(false);
+                  }
+                }}
               >
                 <SelectTrigger className="h-8 text-xs">
                   <SelectValue />
@@ -696,42 +883,121 @@ export function AllocationTab({
 
             {/* Period fields */}
             {formScheduleType === "single_month" ? (
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1.5">
-                  <Label className="text-xs">Month</Label>
-                  <Select
-                    value={String(formMonth)}
-                    onValueChange={(v) => setFormMonth(parseInt(v))}
-                  >
-                    <SelectTrigger className="h-8 text-xs">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {MONTHS.map((m, i) => (
-                        <SelectItem key={i + 1} value={String(i + 1)}>
-                          {m}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+              <div className="space-y-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Month</Label>
+                    <Select
+                      value={String(formMonth)}
+                      onValueChange={(v) => setFormMonth(parseInt(v))}
+                    >
+                      <SelectTrigger className="h-8 text-xs">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {MONTHS.map((m, i) => (
+                          <SelectItem key={i + 1} value={String(i + 1)}>
+                            {m}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Year</Label>
+                    <Select
+                      value={String(formYear)}
+                      onValueChange={(v) => setFormYear(parseInt(v))}
+                    >
+                      <SelectTrigger className="h-8 text-xs">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {YEARS.map((y) => (
+                          <SelectItem key={y} value={String(y)}>
+                            {y}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
                 </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs">Year</Label>
-                  <Select
-                    value={String(formYear)}
-                    onValueChange={(v) => setFormYear(parseInt(v))}
-                  >
-                    <SelectTrigger className="h-8 text-xs">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {YEARS.map((y) => (
-                        <SelectItem key={y} value={String(y)}>
-                          {y}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+
+                {/* Repeating checkbox */}
+                <div className="space-y-2">
+                  <label className="flex items-center gap-2 text-xs cursor-pointer">
+                    <Checkbox
+                      checked={formIsRepeating}
+                      onCheckedChange={(checked) =>
+                        setFormIsRepeating(checked === true)
+                      }
+                    />
+                    <Repeat className="h-3.5 w-3.5 text-blue-500" />
+                    Repeating (full amount each month)
+                  </label>
+
+                  {formIsRepeating && (
+                    <div className="ml-6 space-y-2">
+                      <Label className="text-xs text-muted-foreground">
+                        Repeat through
+                      </Label>
+                      <div className="grid grid-cols-2 gap-3">
+                        <Select
+                          value={String(formRepeatEndMonth)}
+                          onValueChange={(v) =>
+                            setFormRepeatEndMonth(parseInt(v))
+                          }
+                        >
+                          <SelectTrigger className="h-8 text-xs">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {MONTHS.map((m, i) => (
+                              <SelectItem key={i + 1} value={String(i + 1)}>
+                                {m}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <Select
+                          value={String(formRepeatEndYear)}
+                          onValueChange={(v) =>
+                            setFormRepeatEndYear(parseInt(v))
+                          }
+                        >
+                          <SelectTrigger className="h-8 text-xs">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {YEARS.map((y) => (
+                              <SelectItem key={y} value={String(y)}>
+                                {y}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <p className="text-[11px] text-muted-foreground">
+                        The full amount of{" "}
+                        {formAmount && !isNaN(parseFloat(formAmount))
+                          ? formatStatementAmount(
+                              parseFloat(formAmount),
+                              true
+                            )
+                          : "$0"}{" "}
+                        will be applied every month from{" "}
+                        {formatPeriod(formYear, formMonth)} through{" "}
+                        {formatPeriod(formRepeatEndYear, formRepeatEndMonth)} (
+                        {countMonthsInRange(
+                          formYear,
+                          formMonth,
+                          formRepeatEndYear,
+                          formRepeatEndMonth
+                        )}{" "}
+                        months).
+                      </p>
+                    </div>
+                  )}
                 </div>
               </div>
             ) : (

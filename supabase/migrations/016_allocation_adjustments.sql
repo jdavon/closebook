@@ -27,6 +27,11 @@ CREATE TABLE allocation_adjustments (
   end_year                int,
   end_month               int CHECK (end_month IS NULL OR end_month BETWEEN 1 AND 12),
 
+  -- Repeating: full amount each month through a given end date
+  is_repeating            boolean NOT NULL DEFAULT false,
+  repeat_end_year         int,
+  repeat_end_month        int CHECK (repeat_end_month IS NULL OR repeat_end_month BETWEEN 1 AND 12),
+
   -- Metadata
   created_by              uuid REFERENCES auth.users(id),
   created_at              timestamptz NOT NULL DEFAULT now(),
@@ -45,6 +50,14 @@ CREATE TABLE allocation_adjustments (
     schedule_type != 'monthly_spread' OR (
       start_year IS NOT NULL AND start_month IS NOT NULL AND
       end_year IS NOT NULL AND end_month IS NOT NULL
+    )
+  ),
+
+  -- Repeating requires end date when enabled (only for single_month)
+  CONSTRAINT chk_repeating CHECK (
+    is_repeating = false OR (
+      schedule_type = 'single_month' AND
+      repeat_end_year IS NOT NULL AND repeat_end_month IS NOT NULL
     )
   )
 );

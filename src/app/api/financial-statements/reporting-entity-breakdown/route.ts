@@ -119,25 +119,47 @@ function expandAllocationEntries(allocRows: any[]): Array<{
     amount: number;
   }> = [];
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function pushPair(alloc: any, year: number, month: number, amt: number) {
+    entries.push({
+      entity_id: alloc.source_entity_id,
+      master_account_id: alloc.master_account_id,
+      period_year: year,
+      period_month: month,
+      amount: -amt,
+    });
+    entries.push({
+      entity_id: alloc.destination_entity_id,
+      master_account_id: alloc.master_account_id,
+      period_year: year,
+      period_month: month,
+      amount: amt,
+    });
+  }
+
   for (const alloc of allocRows) {
     const totalAmount = Number(alloc.amount);
 
     if (alloc.schedule_type === "single_month") {
       if (alloc.period_year == null || alloc.period_month == null) continue;
-      entries.push({
-        entity_id: alloc.source_entity_id,
-        master_account_id: alloc.master_account_id,
-        period_year: alloc.period_year,
-        period_month: alloc.period_month,
-        amount: -totalAmount,
-      });
-      entries.push({
-        entity_id: alloc.destination_entity_id,
-        master_account_id: alloc.master_account_id,
-        period_year: alloc.period_year,
-        period_month: alloc.period_month,
-        amount: totalAmount,
-      });
+
+      if (alloc.is_repeating && alloc.repeat_end_year != null && alloc.repeat_end_month != null) {
+        // Repeating: full amount each month from period through repeat_end
+        const totalMonths =
+          (alloc.repeat_end_year - alloc.period_year) * 12 +
+          (alloc.repeat_end_month - alloc.period_month) + 1;
+        if (totalMonths < 1) continue;
+
+        let y = alloc.period_year;
+        let m = alloc.period_month;
+        for (let i = 0; i < totalMonths; i++) {
+          pushPair(alloc, y, m, totalAmount);
+          m++;
+          if (m > 12) { m = 1; y++; }
+        }
+      } else {
+        pushPair(alloc, alloc.period_year, alloc.period_month, totalAmount);
+      }
     } else if (alloc.schedule_type === "monthly_spread") {
       if (
         alloc.start_year == null || alloc.start_month == null ||
@@ -153,20 +175,7 @@ function expandAllocationEntries(allocRows: any[]): Array<{
       let y = alloc.start_year;
       let m = alloc.start_month;
       for (let i = 0; i < totalMonths; i++) {
-        entries.push({
-          entity_id: alloc.source_entity_id,
-          master_account_id: alloc.master_account_id,
-          period_year: y,
-          period_month: m,
-          amount: -monthlyAmount,
-        });
-        entries.push({
-          entity_id: alloc.destination_entity_id,
-          master_account_id: alloc.master_account_id,
-          period_year: y,
-          period_month: m,
-          amount: monthlyAmount,
-        });
+        pushPair(alloc, y, m, monthlyAmount);
         m++;
         if (m > 12) { m = 1; y++; }
       }
@@ -320,11 +329,11 @@ function buildREStatement(
               : "Net Income Margin %";
 
         finalSections.push({
-          id: `${comp.id}_margin`,
+          id: `${comp.id}_pct`,
           title: "",
           lines: [],
           subtotalLine: {
-            id: `${comp.id}_margin`,
+            id: `${comp.id}_pct`,
             label: marginLabel,
             amounts: marginAmounts,
             indent: 1,

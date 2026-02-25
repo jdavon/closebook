@@ -124,6 +124,9 @@ export interface AllocationAdjustment {
   start_month: number | null;
   end_year: number | null;
   end_month: number | null;
+  is_repeating: boolean;
+  repeat_end_year: number | null;
+  repeat_end_month: number | null;
   created_by: string | null;
   created_at: string;
   updated_at: string;

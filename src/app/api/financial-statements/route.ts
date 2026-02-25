@@ -354,12 +354,39 @@ interface RawAllocationAdjustment {
   start_month: number | null;
   end_year: number | null;
   end_month: number | null;
+  is_repeating: boolean;
+  repeat_end_year: number | null;
+  repeat_end_month: number | null;
+}
+
+/** Push a +/- pair of entries for source and destination */
+function pushAllocPair(
+  entries: Array<{ entity_id: string; master_account_id: string; period_year: number; period_month: number; amount: number }>,
+  alloc: RawAllocationAdjustment,
+  year: number,
+  month: number,
+  amt: number
+) {
+  entries.push({
+    entity_id: alloc.source_entity_id,
+    master_account_id: alloc.master_account_id,
+    period_year: year,
+    period_month: month,
+    amount: -amt,
+  });
+  entries.push({
+    entity_id: alloc.destination_entity_id,
+    master_account_id: alloc.master_account_id,
+    period_year: year,
+    period_month: month,
+    amount: amt,
+  });
 }
 
 /**
  * Expand allocation adjustments into paired +/- entries per entity per period.
- * For single_month: one pair.
- * For monthly_spread: one pair per month in the range (amount divided equally).
+ * - single_month: one pair (or many pairs if is_repeating).
+ * - monthly_spread: one pair per month in the range (amount divided equally).
  */
 function expandAllocationAdjustments(
   allocations: RawAllocationAdjustment[]
@@ -367,56 +394,46 @@ function expandAllocationAdjustments(
   const entries: Array<{ entity_id: string; master_account_id: string; period_year: number; period_month: number; amount: number }> = [];
 
   for (const alloc of allocations) {
+    const totalAmount = Number(alloc.amount);
+
     if (alloc.schedule_type === "single_month") {
       if (alloc.period_year == null || alloc.period_month == null) continue;
-      // Source loses the amount
-      entries.push({
-        entity_id: alloc.source_entity_id,
-        master_account_id: alloc.master_account_id,
-        period_year: alloc.period_year,
-        period_month: alloc.period_month,
-        amount: -Number(alloc.amount),
-      });
-      // Destination gains the amount
-      entries.push({
-        entity_id: alloc.destination_entity_id,
-        master_account_id: alloc.master_account_id,
-        period_year: alloc.period_year,
-        period_month: alloc.period_month,
-        amount: Number(alloc.amount),
-      });
+
+      if (alloc.is_repeating && alloc.repeat_end_year != null && alloc.repeat_end_month != null) {
+        // Repeating: full amount each month from period through repeat_end
+        const totalMonths =
+          (alloc.repeat_end_year - alloc.period_year) * 12 +
+          (alloc.repeat_end_month - alloc.period_month) + 1;
+        if (totalMonths < 1) continue;
+
+        let y = alloc.period_year;
+        let m = alloc.period_month;
+        for (let i = 0; i < totalMonths; i++) {
+          pushAllocPair(entries, alloc, y, m, totalAmount);
+          m++;
+          if (m > 12) { m = 1; y++; }
+        }
+      } else {
+        // Single month, not repeating
+        pushAllocPair(entries, alloc, alloc.period_year, alloc.period_month, totalAmount);
+      }
     } else if (alloc.schedule_type === "monthly_spread") {
       if (
         alloc.start_year == null || alloc.start_month == null ||
         alloc.end_year == null || alloc.end_month == null
       ) continue;
 
-      // Count months in range
       const totalMonths =
         (alloc.end_year - alloc.start_year) * 12 +
         (alloc.end_month - alloc.start_month) + 1;
       if (totalMonths < 1) continue;
 
-      const monthlyAmount = Number(alloc.amount) / totalMonths;
+      const monthlyAmount = totalAmount / totalMonths;
 
       let y = alloc.start_year;
       let m = alloc.start_month;
       for (let i = 0; i < totalMonths; i++) {
-        entries.push({
-          entity_id: alloc.source_entity_id,
-          master_account_id: alloc.master_account_id,
-          period_year: y,
-          period_month: m,
-          amount: -monthlyAmount,
-        });
-        entries.push({
-          entity_id: alloc.destination_entity_id,
-          master_account_id: alloc.master_account_id,
-          period_year: y,
-          period_month: m,
-          amount: monthlyAmount,
-        });
-        // Advance to next month
+        pushAllocPair(entries, alloc, y, m, monthlyAmount);
         m++;
         if (m > 12) { m = 1; y++; }
       }
