@@ -541,9 +541,12 @@ async function buildDrillDownResponse(
         const [keyMaId, keyEntityId, keyAccountId] = aggKey.split("|");
         if (keyMaId !== maId) continue;
 
-        // For P&L revenue accounts, flip the sign for display
+        // Credit-normal accounts stored as negatives in GL, flip sign for display:
+        // Revenue (P&L), Liability & Equity (Balance Sheet)
         let displayAmount = amount;
         if (useNetChange && maInfo?.classification === "Revenue") {
+          displayAmount = -amount;
+        } else if (!useNetChange && !isCashFlowLine && (maInfo?.classification === "Liability" || maInfo?.classification === "Equity")) {
           displayAmount = -amount;
         }
 

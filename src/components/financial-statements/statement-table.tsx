@@ -470,6 +470,51 @@ export function StatementTable({
               </tbody>
             );
           })}
+          {/* Balance check row for balance sheets */}
+          {data.id === "balance_sheet" && (() => {
+            const totalAssets = data.sections.find((s) => s.id === "total_assets")?.subtotalLine;
+            const totalLE = data.sections.find((s) => s.id === "total_liabilities_and_equity")?.subtotalLine;
+            if (!totalAssets || !totalLE) return null;
+
+            const hasImbalance = periods.some((p) => {
+              const diff = (totalAssets.amounts[p.key] ?? 0) - (totalLE.amounts[p.key] ?? 0);
+              return Math.abs(diff) >= 0.5;
+            });
+
+            return (
+              <tbody>
+                <tr className="stmt-separator"><td colSpan={totalCols}></td></tr>
+                <tr className="text-xs">
+                  <td className={`italic ${hasImbalance ? "text-red-600" : "text-muted-foreground"}`}>
+                    Check: Assets − (Liabilities + Equity)
+                  </td>
+                  {periods.map((period) => {
+                    const diff = (totalAssets.amounts[period.key] ?? 0) - (totalLE.amounts[period.key] ?? 0);
+                    const isOff = Math.abs(diff) >= 0.5;
+                    return (
+                      <>
+                        <td key={period.key} className={isOff ? "text-red-600 font-medium" : "text-muted-foreground"}>
+                          {isOff ? formatStatementAmount(diff, true) : "$\u2014"}
+                        </td>
+                        {showBudget && (
+                          <>
+                            <td key={`${period.key}-budget`}></td>
+                            <td key={`${period.key}-var`}></td>
+                          </>
+                        )}
+                      </>
+                    );
+                  })}
+                  {showYoY && (
+                    <>
+                      <td></td>
+                      <td></td>
+                    </>
+                  )}
+                </tr>
+              </tbody>
+            );
+          })()}
       </table>
     </div>
   );

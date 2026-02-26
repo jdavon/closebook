@@ -315,6 +315,44 @@ export function EntityBreakdownTable({
               </tbody>
             );
           })}
+          {/* Balance check row for balance sheets */}
+          {data.id === "balance_sheet" && (() => {
+            const totalAssets = data.sections.find((s) => s.id === "total_assets")?.subtotalLine;
+            const totalLE = data.sections.find((s) => s.id === "total_liabilities_and_equity")?.subtotalLine;
+            if (!totalAssets || !totalLE) return null;
+
+            const allKeys = [...entityColumns.map((c) => c.key), ...(consolidatedColumn ? ["consolidated"] : [])];
+            const hasImbalance = allKeys.some((k) => Math.abs((totalAssets.amounts[k] ?? 0) - (totalLE.amounts[k] ?? 0)) >= 0.5);
+
+            return (
+              <tbody>
+                <tr className="stmt-separator"><td colSpan={totalCols}></td></tr>
+                <tr className="text-xs">
+                  <td className={`italic ${hasImbalance ? "text-red-600" : "text-muted-foreground"}`}>
+                    Check: Assets − (L + E)
+                  </td>
+                  {entityColumns.map((col) => {
+                    const diff = (totalAssets.amounts[col.key] ?? 0) - (totalLE.amounts[col.key] ?? 0);
+                    const isOff = Math.abs(diff) >= 0.5;
+                    return (
+                      <td key={col.key} className={isOff ? "text-red-600 font-medium" : "text-muted-foreground"}>
+                        {isOff ? formatStatementAmount(diff, true) : "$\u2014"}
+                      </td>
+                    );
+                  })}
+                  {consolidatedColumn && (() => {
+                    const diff = (totalAssets.amounts["consolidated"] ?? 0) - (totalLE.amounts["consolidated"] ?? 0);
+                    const isOff = Math.abs(diff) >= 0.5;
+                    return (
+                      <td className={`border-l border-border/50 ${isOff ? "text-red-600 font-medium" : "text-muted-foreground"}`}>
+                        {isOff ? formatStatementAmount(diff, true) : "$\u2014"}
+                      </td>
+                    );
+                  })()}
+                </tr>
+              </tbody>
+            );
+          })()}
         </table>
       </div>
     </TooltipProvider>

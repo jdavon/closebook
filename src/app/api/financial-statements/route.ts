@@ -651,10 +651,11 @@ function buildStatement(
         const raw = useNetChange
           ? (bucketed?.netChange[bucket.key] ?? 0)
           : (bucketed?.endingBalance[bucket.key] ?? 0);
-        // Revenue stored as negative net_change in GL, flip sign for display
+        // Credit-normal accounts stored as negatives in GL, flip sign for display:
+        // Revenue (net_change on P&L), Liability & Equity (ending_balance on BS)
         amounts[bucket.key] = useNetChange
           ? (config.classification === "Revenue" ? -raw : raw)
-          : raw;
+          : (config.classification === "Liability" || config.classification === "Equity" ? -raw : raw);
         totals[bucket.key] += amounts[bucket.key];
 
         // Prior year amounts
@@ -664,7 +665,7 @@ function buildStatement(
             : (pyBucketed?.endingBalance[bucket.key] ?? 0);
           priorYearAmounts[bucket.key] = useNetChange
             ? (config.classification === "Revenue" ? -pyRaw : pyRaw)
-            : pyRaw;
+            : (config.classification === "Liability" || config.classification === "Equity" ? -pyRaw : pyRaw);
           pyTotals[bucket.key] += priorYearAmounts[bucket.key];
         }
 

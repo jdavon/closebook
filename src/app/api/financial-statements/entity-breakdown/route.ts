@@ -262,7 +262,9 @@ function buildEntityStatement(
           ? config.classification === "Revenue"
             ? -raw
             : raw
-          : raw;
+          : (config.classification === "Liability" || config.classification === "Equity")
+            ? -raw
+            : raw;
         totals[key] += amounts[key];
       }
 
