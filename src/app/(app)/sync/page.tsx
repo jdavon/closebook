@@ -289,7 +289,10 @@ export default function SyncManagementPage() {
     }
   }, [entities, loadFinancials]);
 
-  // Load which months have been synced per entity for the batch sync year
+  // Load which months have been synced per entity for the batch sync year.
+  // Uses head-only count queries (1 per month per entity) to avoid
+  // Supabase's default 1000-row limit truncating results when an entity
+  // has many accounts (e.g. 150 accounts × 12 months = 1800 rows).
   const loadSyncedMonths = useCallback(async () => {
     if (entities.length === 0) return;
 
@@ -298,18 +301,23 @@ export default function SyncManagementPage() {
     const result: Record<string, Set<number>> = {};
 
     for (const entity of entities) {
-      const { data } = await supabase
-        .from("gl_balances")
-        .select("period_month")
-        .eq("entity_id", entity.id)
-        .eq("period_year", year);
-
       const months = new Set<number>();
-      if (data) {
-        for (const row of data) {
-          months.add(row.period_month);
-        }
-      }
+
+      // Fire all 12 month checks in parallel for speed
+      const checks = Array.from({ length: 12 }, (_, i) => {
+        const month = i + 1;
+        return supabase
+          .from("gl_balances")
+          .select("id", { count: "exact", head: true })
+          .eq("entity_id", entity.id)
+          .eq("period_year", year)
+          .eq("period_month", month)
+          .then(({ count }) => {
+            if (count && count > 0) months.add(month);
+          });
+      });
+
+      await Promise.all(checks);
       result[entity.id] = months;
     }
 
