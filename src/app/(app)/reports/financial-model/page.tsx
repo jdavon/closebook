@@ -29,6 +29,7 @@ import type {
   StatementTab,
   FinancialModelConfig,
   LineItem,
+  VarianceDisplayMode,
 } from "@/components/financial-statements/types";
 
 interface Entity {
@@ -70,6 +71,7 @@ export default function FinancialModelPage() {
   const [includeProForma, setIncludeProForma] = useState(false);
   const [includeAllocations, setIncludeAllocations] = useState(false);
   const [ebitdaOnly, setEbitdaOnly] = useState(false);
+  const [varianceDisplay, setVarianceDisplay] = useState<VarianceDisplayMode>("dollars");
   const [activeTab, setActiveTab] = useState<StatementTab>("all");
 
   // Load organization
@@ -249,6 +251,7 @@ export default function FinancialModelPage() {
     endYear,
     endMonth,
     granularity,
+    varianceDisplay,
   };
 
   return (
@@ -353,6 +356,8 @@ export default function FinancialModelPage() {
         onIncludeProFormaChange={setIncludeProForma}
         onIncludeAllocationsChange={setIncludeAllocations}
         onEbitdaOnlyChange={setEbitdaOnly}
+        varianceDisplay={varianceDisplay}
+        onVarianceDisplayChange={setVarianceDisplay}
         onExport={handleExport}
         onExportAll={handleExportAll}
         onPrint={handlePrint}

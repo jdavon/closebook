@@ -17,7 +17,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Download, Printer, ChevronDown } from "lucide-react";
-import type { Granularity, StatementTab } from "./types";
+import type { Granularity, StatementTab, VarianceDisplayMode } from "./types";
 
 const TAB_LABELS: Record<StatementTab, string> = {
   "income-statement": "Income Statement",
@@ -51,6 +51,8 @@ interface ConfigToolbarProps {
   onIncludeProFormaChange?: (val: boolean) => void;
   onIncludeAllocationsChange?: (val: boolean) => void;
   onEbitdaOnlyChange?: (val: boolean) => void;
+  varianceDisplay?: VarianceDisplayMode;
+  onVarianceDisplayChange?: (mode: VarianceDisplayMode) => void;
   onExport: () => void;
   onExportAll?: () => void;
   onPrint: () => void;
@@ -86,6 +88,8 @@ export function ConfigToolbar({
   onIncludeProFormaChange,
   onIncludeAllocationsChange,
   onEbitdaOnlyChange,
+  varianceDisplay = "dollars",
+  onVarianceDisplayChange,
   onExport,
   onExportAll,
   onPrint,
@@ -241,6 +245,35 @@ export function ConfigToolbar({
             />
             EBITDA Only
           </label>
+        )}
+        {(includeBudget || includeYoY) && onVarianceDisplayChange && (
+          <div className="flex items-center gap-1 ml-2">
+            <Label className="text-xs text-muted-foreground mr-1">Variance:</Label>
+            <div className="inline-flex rounded-md border border-input bg-muted p-0.5">
+              <button
+                type="button"
+                className={`px-2 py-0.5 text-xs rounded-sm transition-colors ${
+                  varianceDisplay === "dollars"
+                    ? "bg-background shadow-sm font-medium"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+                onClick={() => onVarianceDisplayChange("dollars")}
+              >
+                $
+              </button>
+              <button
+                type="button"
+                className={`px-2 py-0.5 text-xs rounded-sm transition-colors ${
+                  varianceDisplay === "percentage"
+                    ? "bg-background shadow-sm font-medium"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+                onClick={() => onVarianceDisplayChange("percentage")}
+              >
+                %
+              </button>
+            </div>
+          </div>
         )}
       </div>
 

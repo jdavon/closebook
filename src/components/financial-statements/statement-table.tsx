@@ -3,13 +3,14 @@
 import { useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { formatStatementAmount } from "./format-utils";
-import type { StatementData, Period, LineItem } from "./types";
+import type { StatementData, Period, LineItem, VarianceDisplayMode } from "./types";
 
 interface StatementTableProps {
   data: StatementData;
   periods: Period[];
   showBudget?: boolean;
   showYoY?: boolean;
+  varianceDisplay?: VarianceDisplayMode;
   onCellClick?: (
     line: LineItem,
     periodKey: string,
@@ -24,6 +25,7 @@ export function StatementTable({
   periods,
   showBudget = false,
   showYoY = false,
+  varianceDisplay = "dollars",
   onCellClick,
 }: StatementTableProps) {
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(
@@ -102,6 +104,17 @@ export function StatementTable({
     const variance = actual - budget;
     if (variance === 0) return "\u2014";
 
+    if (varianceDisplay === "percentage") {
+      if (budget === 0) return "\u2014";
+      const pct = (variance / Math.abs(budget)) * 100;
+      const favorable = line.varianceInvertColor ? pct <= 0 : pct >= 0;
+      return (
+        <span className={favorable ? "text-green-600" : "text-red-600"}>
+          {pct >= 0 ? "+" : ""}{pct.toFixed(1)}%
+        </span>
+      );
+    }
+
     const formatted = formatStatementAmount(variance, false);
     // For expense items, positive variance (over-budget) is unfavorable
     const favorable = line.varianceInvertColor
@@ -148,6 +161,18 @@ export function StatementTable({
       const change = currentAmount - pyAmount;
       if (change === 0) {
         changeCell = "\u2014";
+      } else if (varianceDisplay === "percentage") {
+        if (pyAmount === 0) {
+          changeCell = "\u2014";
+        } else {
+          const pct = (change / Math.abs(pyAmount)) * 100;
+          const favorable = line.varianceInvertColor ? pct <= 0 : pct >= 0;
+          changeCell = (
+            <span className={favorable ? "text-green-600" : "text-red-600"}>
+              {pct >= 0 ? "+" : ""}{pct.toFixed(1)}%
+            </span>
+          );
+        }
       } else {
         const formatted = formatStatementAmount(change, false);
         // For expense items, cost increase YoY is unfavorable
@@ -276,7 +301,7 @@ export function StatementTable({
                       key={`${period.key}-var`}
                       className="min-w-[90px] text-muted-foreground"
                     >
-                      Var $
+                      {varianceDisplay === "percentage" ? "Var %" : "Var $"}
                     </th>
                   </>
                 )}
@@ -285,7 +310,9 @@ export function StatementTable({
             {showYoY && (
               <>
                 <th className="min-w-[120px]">Prior Year</th>
-                <th className="min-w-[120px]">YoY Change</th>
+                <th className="min-w-[120px]">
+                  {varianceDisplay === "percentage" ? "YoY %" : "YoY Change"}
+                </th>
               </>
             )}
           </tr>

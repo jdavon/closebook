@@ -3,7 +3,7 @@
 import { Card, CardContent } from "@/components/ui/card";
 import { StatementHeader } from "./statement-header";
 import { StatementTable } from "./statement-table";
-import type { StatementData, Period, Granularity, LineItem } from "./types";
+import type { StatementData, Period, Granularity, LineItem, VarianceDisplayMode } from "./types";
 
 interface StatementCardProps {
   companyName: string;
@@ -17,6 +17,7 @@ interface StatementCardProps {
   endYear: number;
   endMonth: number;
   granularity: Granularity;
+  varianceDisplay?: VarianceDisplayMode;
   pageBreak?: boolean;
   onCellClick?: (
     line: LineItem,
@@ -39,6 +40,7 @@ export function StatementCard({
   endYear,
   endMonth,
   granularity,
+  varianceDisplay,
   pageBreak = false,
   onCellClick,
 }: StatementCardProps) {
@@ -60,6 +62,7 @@ export function StatementCard({
             periods={periods}
             showBudget={showBudget}
             showYoY={showYoY}
+            varianceDisplay={varianceDisplay}
             onCellClick={onCellClick}
           />
         </CardContent>
