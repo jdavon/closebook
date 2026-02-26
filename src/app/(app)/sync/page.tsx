@@ -27,6 +27,7 @@ import {
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
+import { Progress } from "@/components/ui/progress";
 import {
   RefreshCw,
   CheckCircle2,
@@ -36,6 +37,7 @@ import {
   TrendingUp,
   TrendingDown,
   Building2,
+  CalendarRange,
 } from "lucide-react";
 import {
   formatCurrency,
@@ -110,6 +112,16 @@ export default function SyncManagementPage() {
     Record<string, EntityPeriodSummary[]>
   >({});
   const [loadingFinancials, setLoadingFinancials] = useState(false);
+
+  // Full-year sync state
+  const [yearSyncEntityId, setYearSyncEntityId] = useState<string>("");
+  const [yearSyncYear, setYearSyncYear] = useState(String(currentPeriod.year));
+  const [yearSyncing, setYearSyncing] = useState(false);
+  const [yearSyncProgress, setYearSyncProgress] = useState(0);
+  const [yearSyncCurrentMonth, setYearSyncCurrentMonth] = useState(0);
+  const [yearSyncMonthStatuses, setYearSyncMonthStatuses] = useState<
+    Record<number, { success: boolean; recordsSynced: number; error?: string }>
+  >({});
 
   const loadEntities = useCallback(async () => {
     setLoading(true);
@@ -293,6 +305,94 @@ export default function SyncManagementPage() {
     setSyncing(false);
   }
 
+  async function handleSyncYear() {
+    if (!yearSyncEntityId) {
+      toast.error("Select an entity first");
+      return;
+    }
+
+    setYearSyncing(true);
+    setYearSyncProgress(0);
+    setYearSyncCurrentMonth(0);
+    setYearSyncMonthStatuses({});
+
+    try {
+      const response = await fetch("/api/qbo/sync-year", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          entityId: yearSyncEntityId,
+          year: parseInt(yearSyncYear),
+        }),
+      });
+
+      if (!response.body) {
+        toast.error("No response from server");
+        setYearSyncing(false);
+        return;
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          try {
+            const event = JSON.parse(line.slice(6));
+
+            if (event.progress != null) {
+              setYearSyncProgress(event.progress);
+            }
+            if (event.month != null) {
+              setYearSyncCurrentMonth(event.month);
+            }
+
+            if (event.step === "month_complete") {
+              setYearSyncMonthStatuses((prev) => ({
+                ...prev,
+                [event.month]: {
+                  success: true,
+                  recordsSynced: event.recordsSynced ?? 0,
+                },
+              }));
+            } else if (event.step === "month_error") {
+              setYearSyncMonthStatuses((prev) => ({
+                ...prev,
+                [event.month]: {
+                  success: false,
+                  recordsSynced: 0,
+                  error: event.detail,
+                },
+              }));
+            } else if (event.step === "complete") {
+              const entityName =
+                entities.find((e) => e.id === yearSyncEntityId)?.name ?? "Entity";
+              toast.success(
+                `${entityName}: Full year sync complete — ${event.monthsSynced}/12 months, ${event.totalRecordsSynced} records`
+              );
+              loadEntities();
+              loadFinancials();
+            }
+          } catch {
+            /* skip unparseable lines */
+          }
+        }
+      }
+    } catch {
+      toast.error("Full year sync failed — network error");
+    }
+
+    setYearSyncing(false);
+  }
+
   const connByEntity = new Map(
     connections.map((c) => [c.entity_id, c])
   );
@@ -450,6 +550,119 @@ export default function SyncManagementPage() {
                   })}
                 </TableBody>
               </Table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Full Year Sync — Single Entity */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <CalendarRange className="h-5 w-5" />
+            Full Year Sync — Single Entity
+          </CardTitle>
+          <CardDescription>
+            Sync all 12 months of a year for one entity at once. Each month is
+            synced sequentially.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center gap-3 flex-wrap">
+            <Select value={yearSyncEntityId} onValueChange={setYearSyncEntityId}>
+              <SelectTrigger className="w-[220px]">
+                <SelectValue placeholder="Select entity" />
+              </SelectTrigger>
+              <SelectContent>
+                {entities
+                  .filter((e) => connByEntity.has(e.id))
+                  .map((e) => (
+                    <SelectItem key={e.id} value={e.id}>
+                      {e.code} — {e.name}
+                    </SelectItem>
+                  ))}
+              </SelectContent>
+            </Select>
+            <Select value={yearSyncYear} onValueChange={setYearSyncYear}>
+              <SelectTrigger className="w-[100px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {[
+                  currentPeriod.year - 2,
+                  currentPeriod.year - 1,
+                  currentPeriod.year,
+                  currentPeriod.year + 1,
+                ].map((y) => (
+                  <SelectItem key={y} value={String(y)}>
+                    {y}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button
+              onClick={handleSyncYear}
+              disabled={yearSyncing || !yearSyncEntityId}
+            >
+              <RefreshCw
+                className={`mr-2 h-4 w-4 ${yearSyncing ? "animate-spin" : ""}`}
+              />
+              {yearSyncing
+                ? `Syncing month ${yearSyncCurrentMonth}/12...`
+                : "Sync Full Year"}
+            </Button>
+          </div>
+
+          {yearSyncing && (
+            <div className="space-y-2">
+              <Progress value={yearSyncProgress} className="h-2" />
+              <p className="text-sm text-muted-foreground">
+                Syncing month {yearSyncCurrentMonth} of 12...
+              </p>
+            </div>
+          )}
+
+          {Object.keys(yearSyncMonthStatuses).length > 0 && (
+            <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-12 gap-2">
+              {Array.from({ length: 12 }, (_, i) => i + 1).map((month) => {
+                const status = yearSyncMonthStatuses[month];
+                const isCurrentlySyncing =
+                  yearSyncing && yearSyncCurrentMonth === month && !status;
+
+                return (
+                  <div
+                    key={month}
+                    className={`text-center rounded-md border px-2 py-1.5 text-xs ${
+                      status?.success
+                        ? "border-green-200 bg-green-50 text-green-700 dark:border-green-800 dark:bg-green-950 dark:text-green-400"
+                        : status && !status.success
+                        ? "border-red-200 bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-400"
+                        : isCurrentlySyncing
+                        ? "border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-950 dark:text-blue-400"
+                        : "border-muted text-muted-foreground"
+                    }`}
+                  >
+                    <div className="font-medium">
+                      {MONTH_NAMES[month - 1].slice(0, 3)}
+                    </div>
+                    {status?.success && (
+                      <div className="flex items-center justify-center mt-0.5">
+                        <CheckCircle2 className="h-3 w-3" />
+                      </div>
+                    )}
+                    {status && !status.success && (
+                      <div className="flex items-center justify-center mt-0.5">
+                        <XCircle className="h-3 w-3" />
+                      </div>
+                    )}
+                    {isCurrentlySyncing && (
+                      <div className="flex items-center justify-center mt-0.5">
+                        <RefreshCw className="h-3 w-3 animate-spin" />
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
         </CardContent>
