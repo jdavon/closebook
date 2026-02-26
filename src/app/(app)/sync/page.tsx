@@ -26,6 +26,13 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { toast } from "sonner";
 import { Progress } from "@/components/ui/progress";
 import {
@@ -112,6 +119,20 @@ export default function SyncManagementPage() {
     Record<string, EntityPeriodSummary[]>
   >({});
   const [loadingFinancials, setLoadingFinancials] = useState(false);
+
+  // Per-entity synced months (for the batch sync year)
+  const [syncedMonthsByEntity, setSyncedMonthsByEntity] = useState<
+    Record<string, Set<number>>
+  >({});
+  const [loadingSyncedMonths, setLoadingSyncedMonths] = useState(false);
+
+  // Selected periods for targeted sync
+  const [selectedPeriods, setSelectedPeriods] = useState<Set<string>>(
+    new Set()
+  ); // "entityId:month" keys
+  const [syncingSelected, setSyncingSelected] = useState(false);
+  const [selectedSyncProgress, setSelectedSyncProgress] = useState(0);
+  const [selectedSyncCurrent, setSelectedSyncCurrent] = useState("");
 
   // Full-year sync state
   const [yearSyncEntityId, setYearSyncEntityId] = useState<string>("");
@@ -268,6 +289,40 @@ export default function SyncManagementPage() {
     }
   }, [entities, loadFinancials]);
 
+  // Load which months have been synced per entity for the batch sync year
+  const loadSyncedMonths = useCallback(async () => {
+    if (entities.length === 0) return;
+
+    setLoadingSyncedMonths(true);
+    const year = parseInt(syncYear);
+    const result: Record<string, Set<number>> = {};
+
+    for (const entity of entities) {
+      const { data } = await supabase
+        .from("gl_balances")
+        .select("period_month")
+        .eq("entity_id", entity.id)
+        .eq("period_year", year);
+
+      const months = new Set<number>();
+      if (data) {
+        for (const row of data) {
+          months.add(row.period_month);
+        }
+      }
+      result[entity.id] = months;
+    }
+
+    setSyncedMonthsByEntity(result);
+    setLoadingSyncedMonths(false);
+  }, [supabase, entities, syncYear]);
+
+  useEffect(() => {
+    if (entities.length > 0) {
+      loadSyncedMonths();
+    }
+  }, [entities, loadSyncedMonths]);
+
   async function handleSyncAll() {
     setSyncing(true);
     setSyncResults(null);
@@ -292,8 +347,9 @@ export default function SyncManagementPage() {
             parseInt(syncMonth)
           )} — ${data.totalRecordsSynced} records`
         );
-        // Refresh connection data and financials
+        // Refresh connection data, synced months, and financials
         loadEntities();
+        loadSyncedMonths();
         loadFinancials();
       } else {
         toast.error(data.error || "Batch sync failed");
@@ -303,6 +359,133 @@ export default function SyncManagementPage() {
     }
 
     setSyncing(false);
+  }
+
+  function togglePeriod(entityId: string, month: number) {
+    const key = `${entityId}:${month}`;
+    setSelectedPeriods((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  }
+
+  function selectAllUnsyncedForEntity(entityId: string) {
+    const synced = syncedMonthsByEntity[entityId] ?? new Set();
+    setSelectedPeriods((prev) => {
+      const next = new Set(prev);
+      for (let m = 1; m <= 12; m++) {
+        const key = `${entityId}:${m}`;
+        if (!synced.has(m)) {
+          next.add(key);
+        }
+      }
+      return next;
+    });
+  }
+
+  function deselectAllForEntity(entityId: string) {
+    setSelectedPeriods((prev) => {
+      const next = new Set(prev);
+      for (let m = 1; m <= 12; m++) {
+        next.delete(`${entityId}:${m}`);
+      }
+      return next;
+    });
+  }
+
+  async function handleSyncSelected() {
+    if (selectedPeriods.size === 0) return;
+
+    setSyncingSelected(true);
+    setSelectedSyncProgress(0);
+    setSelectedSyncCurrent("");
+
+    // Group selections by entity for sequential processing
+    const periodsArray = Array.from(selectedPeriods).map((key) => {
+      const [entityId, monthStr] = key.split(":");
+      return { entityId, month: parseInt(monthStr) };
+    });
+    // Sort by entity then month for predictable order
+    periodsArray.sort((a, b) =>
+      a.entityId === b.entityId ? a.month - b.month : a.entityId.localeCompare(b.entityId)
+    );
+
+    let completed = 0;
+    let successCount = 0;
+    let totalRecords = 0;
+    const year = parseInt(syncYear);
+
+    for (const { entityId, month } of periodsArray) {
+      const entity = entities.find((e) => e.id === entityId);
+      setSelectedSyncCurrent(
+        `${entity?.code ?? "?"} — ${MONTH_NAMES[month - 1]}`
+      );
+      setSelectedSyncProgress(
+        Math.round((completed / periodsArray.length) * 100)
+      );
+
+      try {
+        const syncResponse = await fetch("/api/qbo/sync", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            entityId,
+            syncType: "trial_balance",
+            periodYear: year,
+            periodMonth: month,
+          }),
+        });
+
+        // Read SSE stream for the final result
+        let lastEvent: Record<string, unknown> = {};
+        if (syncResponse.body) {
+          const reader = syncResponse.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n");
+            buffer = lines.pop() ?? "";
+            for (const line of lines) {
+              if (line.startsWith("data: ")) {
+                try {
+                  lastEvent = JSON.parse(line.slice(6));
+                } catch {
+                  /* skip */
+                }
+              }
+            }
+          }
+        }
+
+        if (!lastEvent.error) {
+          successCount++;
+          totalRecords += (lastEvent.recordsSynced as number) ?? 0;
+        }
+      } catch {
+        // Individual period failed, continue
+      }
+
+      completed++;
+    }
+
+    setSelectedSyncProgress(100);
+    setSelectedSyncCurrent("");
+    toast.success(
+      `Synced ${successCount}/${periodsArray.length} periods — ${totalRecords} records`
+    );
+    setSelectedPeriods(new Set());
+    setSyncingSelected(false);
+    loadEntities();
+    loadSyncedMonths();
+    loadFinancials();
   }
 
   async function handleSyncYear() {
@@ -379,6 +562,7 @@ export default function SyncManagementPage() {
                 `${entityName}: Full year sync complete — ${event.monthsSynced}/12 months, ${event.totalRecordsSynced} records`
               );
               loadEntities();
+              loadSyncedMonths();
               loadFinancials();
             }
           } catch {
@@ -471,85 +655,215 @@ export default function SyncManagementPage() {
             </Button>
           </div>
 
-          {/* Entity Connection Status */}
+          {/* Entity Sync Status with Month Grid */}
           {!loading && (
-            <div className="mt-4">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Entity</TableHead>
-                    <TableHead>Code</TableHead>
-                    <TableHead>QBO Company</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Last Synced</TableHead>
-                    {syncResults && <TableHead>Sync Result</TableHead>}
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {entities.map((entity) => {
-                    const conn = connByEntity.get(entity.id);
-                    const result = syncResults?.find(
-                      (r) => r.entityId === entity.id
-                    );
+            <div className="mt-4 space-y-4">
+              <TooltipProvider delayDuration={200}>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="min-w-[180px]">Entity</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead className="min-w-[420px]">
+                        Synced Months ({syncYear})
+                      </TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {entities.map((entity) => {
+                      const conn = connByEntity.get(entity.id);
+                      const synced = syncedMonthsByEntity[entity.id] ?? new Set<number>();
+                      const result = syncResults?.find(
+                        (r) => r.entityId === entity.id
+                      );
+                      const entitySelectedCount = Array.from({ length: 12 }, (_, i) => i + 1)
+                        .filter((m) => selectedPeriods.has(`${entity.id}:${m}`)).length;
+                      const entityUnsyncedCount = 12 - synced.size;
 
-                    return (
-                      <TableRow key={entity.id}>
-                        <TableCell className="font-medium">
-                          <Link
-                            href={`/${entity.id}/settings`}
-                            className="hover:underline"
-                          >
-                            {entity.name}
-                          </Link>
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant="outline">{entity.code}</Badge>
-                        </TableCell>
-                        <TableCell className="text-muted-foreground">
-                          {conn?.company_name ?? "---"}
-                        </TableCell>
-                        <TableCell>
-                          {conn ? (
-                            <Badge variant="default" className="gap-1">
-                              <CheckCircle2 className="h-3 w-3" />
-                              Connected
-                            </Badge>
-                          ) : (
-                            <Badge variant="outline" className="gap-1">
-                              <Minus className="h-3 w-3" />
-                              Not Connected
-                            </Badge>
-                          )}
-                        </TableCell>
-                        <TableCell className="text-sm text-muted-foreground">
-                          {conn?.last_sync_at
-                            ? new Date(conn.last_sync_at).toLocaleString()
-                            : "---"}
-                        </TableCell>
-                        {syncResults && (
+                      return (
+                        <TableRow key={entity.id}>
                           <TableCell>
-                            {result ? (
-                              result.success ? (
+                            <Link
+                              href={`/${entity.id}/settings`}
+                              className="hover:underline font-medium"
+                            >
+                              <Badge variant="outline" className="mr-2 text-xs">
+                                {entity.code}
+                              </Badge>
+                              {entity.name}
+                            </Link>
+                            <div className="text-xs text-muted-foreground mt-0.5">
+                              {conn?.company_name ?? "No QBO connection"}
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            {conn ? (
+                              <div className="space-y-1">
                                 <Badge variant="default" className="gap-1">
                                   <CheckCircle2 className="h-3 w-3" />
-                                  {result.recordsSynced} records
+                                  Connected
                                 </Badge>
-                              ) : (
-                                <Badge variant="destructive" className="gap-1">
-                                  <XCircle className="h-3 w-3" />
-                                  {result.error ?? "Failed"}
-                                </Badge>
-                              )
+                                {result && (
+                                  <div>
+                                    {result.success ? (
+                                      <Badge variant="default" className="gap-1 text-xs">
+                                        <CheckCircle2 className="h-3 w-3" />
+                                        {result.recordsSynced} records
+                                      </Badge>
+                                    ) : (
+                                      <Badge variant="destructive" className="gap-1 text-xs">
+                                        <XCircle className="h-3 w-3" />
+                                        {result.error ?? "Failed"}
+                                      </Badge>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
                             ) : (
-                              <span className="text-muted-foreground">---</span>
+                              <Badge variant="outline" className="gap-1">
+                                <Minus className="h-3 w-3" />
+                                Not Connected
+                              </Badge>
                             )}
                           </TableCell>
-                        )}
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
+                          <TableCell>
+                            {conn ? (
+                              loadingSyncedMonths ? (
+                                <span className="text-xs text-muted-foreground">Loading...</span>
+                              ) : (
+                                <div className="flex gap-1">
+                                  {Array.from({ length: 12 }, (_, i) => i + 1).map((month) => {
+                                    const isSynced = synced.has(month);
+                                    const isSelected = selectedPeriods.has(`${entity.id}:${month}`);
+
+                                    return (
+                                      <Tooltip key={month}>
+                                        <TooltipTrigger asChild>
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              if (!isSynced) togglePeriod(entity.id, month);
+                                            }}
+                                            disabled={syncingSelected || syncing}
+                                            className={`
+                                              relative flex flex-col items-center justify-center
+                                              w-8 h-9 rounded border text-[10px] font-medium
+                                              transition-colors
+                                              ${
+                                                isSynced
+                                                  ? "border-green-300 bg-green-50 text-green-700 dark:border-green-800 dark:bg-green-950 dark:text-green-400"
+                                                  : isSelected
+                                                  ? "border-blue-400 bg-blue-100 text-blue-800 dark:border-blue-600 dark:bg-blue-950 dark:text-blue-300 ring-1 ring-blue-400"
+                                                  : "border-muted-foreground/25 bg-muted/30 text-muted-foreground hover:border-blue-300 hover:bg-blue-50 dark:hover:border-blue-700 dark:hover:bg-blue-950/50 cursor-pointer"
+                                              }
+                                              ${isSynced ? "cursor-default" : ""}
+                                            `}
+                                          >
+                                            <span>{MONTH_NAMES[month - 1].slice(0, 3)}</span>
+                                            {isSynced && (
+                                              <CheckCircle2 className="h-3 w-3 text-green-600 dark:text-green-400" />
+                                            )}
+                                            {!isSynced && isSelected && (
+                                              <Checkbox
+                                                checked
+                                                className="h-3 w-3 pointer-events-none"
+                                                tabIndex={-1}
+                                              />
+                                            )}
+                                          </button>
+                                        </TooltipTrigger>
+                                        <TooltipContent side="bottom" className="text-xs">
+                                          {isSynced
+                                            ? `${MONTH_NAMES[month - 1]} ${syncYear} — Synced`
+                                            : isSelected
+                                            ? `${MONTH_NAMES[month - 1]} ${syncYear} — Selected for sync`
+                                            : `${MONTH_NAMES[month - 1]} ${syncYear} — Click to select`}
+                                        </TooltipContent>
+                                      </Tooltip>
+                                    );
+                                  })}
+                                </div>
+                              )
+                            ) : (
+                              <span className="text-xs text-muted-foreground">
+                                Connect to QBO first
+                              </span>
+                            )}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {conn && entityUnsyncedCount > 0 && (
+                              <div className="flex justify-end gap-1">
+                                {entitySelectedCount > 0 ? (
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="text-xs h-7"
+                                    onClick={() => deselectAllForEntity(entity.id)}
+                                    disabled={syncingSelected}
+                                  >
+                                    Deselect
+                                  </Button>
+                                ) : (
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="text-xs h-7"
+                                    onClick={() => selectAllUnsyncedForEntity(entity.id)}
+                                    disabled={syncingSelected}
+                                  >
+                                    Select All Unsynced
+                                  </Button>
+                                )}
+                              </div>
+                            )}
+                            {conn && entityUnsyncedCount === 0 && (
+                              <Badge variant="outline" className="text-xs gap-1">
+                                <CheckCircle2 className="h-3 w-3 text-green-600" />
+                                All months synced
+                              </Badge>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </TooltipProvider>
+
+              {/* Sync Selected Periods action bar */}
+              {selectedPeriods.size > 0 && (
+                <div className="flex items-center gap-3 rounded-lg border bg-muted/50 p-3">
+                  <span className="text-sm font-medium">
+                    {selectedPeriods.size} period{selectedPeriods.size !== 1 ? "s" : ""} selected
+                  </span>
+                  <Button
+                    size="sm"
+                    onClick={handleSyncSelected}
+                    disabled={syncingSelected || syncing}
+                  >
+                    <RefreshCw
+                      className={`mr-2 h-3.5 w-3.5 ${syncingSelected ? "animate-spin" : ""}`}
+                    />
+                    {syncingSelected
+                      ? `Syncing ${selectedSyncCurrent}...`
+                      : `Sync ${selectedPeriods.size} Selected Period${selectedPeriods.size !== 1 ? "s" : ""}`}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setSelectedPeriods(new Set())}
+                    disabled={syncingSelected}
+                  >
+                    Clear Selection
+                  </Button>
+                  {syncingSelected && (
+                    <div className="flex-1">
+                      <Progress value={selectedSyncProgress} className="h-1.5" />
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </CardContent>
