@@ -562,14 +562,15 @@ async function buildDrillDownResponse(
         subtotal += displayAmount;
       }
 
-      // Sort rows by entity code, then account name
-      rows.sort((a, b) =>
-        a.entityCode.localeCompare(b.entityCode) ||
-        a.accountName.localeCompare(b.accountName)
-      );
+      // Remove zero-dollar rows and sort by absolute amount descending
+      const nonZeroRows = rows.filter((r) => Math.abs(r.amount) >= 0.005);
 
-      if (rows.length > 0) {
-        const signedSubtotal = subtotal * target.sign;
+      // Sort by absolute amount descending (biggest first)
+      nonZeroRows.sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
+
+      if (nonZeroRows.length > 0) {
+        const filteredSubtotal = nonZeroRows.reduce((sum, r) => sum + r.amount, 0);
+        const signedSubtotal = filteredSubtotal * target.sign;
         groups.push({
           masterAccountId: maId,
           masterAccountName: maInfo?.name ?? maId,
@@ -577,7 +578,7 @@ async function buildDrillDownResponse(
           sectionLabel: target.sectionLabel || undefined,
           sign: target.sign,
           subtotal: signedSubtotal,
-          rows,
+          rows: nonZeroRows,
         });
         grandTotal += signedSubtotal;
       }
@@ -732,12 +733,18 @@ async function buildDrillDownResponse(
     }
   }
 
+  // Sort groups by absolute subtotal descending (biggest first)
+  groups.sort((a, b) => Math.abs(b.subtotal) - Math.abs(a.subtotal));
+
+  // Remove zero-dollar adjustments
+  const nonZeroAdjustments = adjustments.filter((a) => Math.abs(a.amount) >= 0.005);
+
   const response: DrillDownResponse = {
     lineLabel: "",
     periodLabel: targetBucket.label,
     total: grandTotal,
     groups,
-    adjustments,
+    adjustments: nonZeroAdjustments,
   };
 
   return NextResponse.json(response);
