@@ -28,11 +28,13 @@ export function useReportingEntityBreakdown(
   const [data, setData] = useState<EntityBreakdownResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [fetchCount, setFetchCount] = useState(0);
 
-  const fetchData = useCallback(async () => {
+  useEffect(() => {
     if (!enabled || !config.organizationId) return;
-    setLoading(true);
-    setError(null);
+
+    const controller = new AbortController();
+    const { signal } = controller;
 
     const params = new URLSearchParams({
       organizationId: config.organizationId,
@@ -45,25 +47,40 @@ export function useReportingEntityBreakdown(
       includeAllocations: String(config.includeAllocations ?? false),
     });
 
-    try {
-      const response = await fetch(
-        `/api/financial-statements/reporting-entity-breakdown?${params.toString()}`
-      );
+    setLoading(true);
+    setError(null);
 
-      if (!response.ok) {
-        const errBody = await response.json().catch(() => ({}));
-        throw new Error(
-          errBody.error ?? `HTTP ${response.status}: ${response.statusText}`
-        );
-      }
+    fetch(`/api/financial-statements/reporting-entity-breakdown?${params.toString()}`, { signal })
+      .then(async (response) => {
+        if (!response.ok) {
+          const errBody = await response.json().catch(() => ({}));
+          throw new Error(
+            errBody.error ?? `HTTP ${response.status}: ${response.statusText}`
+          );
+        }
+        return response.json();
+      })
+      .then((result: EntityBreakdownResponse) => {
+        if (!signal.aborted) {
+          setData(result);
+        }
+      })
+      .catch((err) => {
+        if (!signal.aborted) {
+          setError(
+            err instanceof Error ? err.message : "Failed to load data"
+          );
+        }
+      })
+      .finally(() => {
+        if (!signal.aborted) {
+          setLoading(false);
+        }
+      });
 
-      const result: EntityBreakdownResponse = await response.json();
-      setData(result);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load data");
-    } finally {
-      setLoading(false);
-    }
+    return () => {
+      controller.abort();
+    };
   }, [
     enabled,
     config.organizationId,
@@ -74,11 +91,12 @@ export function useReportingEntityBreakdown(
     config.granularity,
     config.includeProForma,
     config.includeAllocations,
+    fetchCount,
   ]);
 
-  useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+  const refetch = useCallback(() => {
+    setFetchCount((c) => c + 1);
+  }, []);
 
-  return { data, loading, error, refetch: fetchData };
+  return { data, loading, error, refetch };
 }
