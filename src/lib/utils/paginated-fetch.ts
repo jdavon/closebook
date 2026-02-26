@@ -87,6 +87,49 @@ export async function fetchAllRows<T>(
 }
 
 // ---------------------------------------------------------------------------
+// Flexible paginated fetcher – preserves original query structure
+// ---------------------------------------------------------------------------
+
+/**
+ * Generic paginated fetcher that accepts a query-builder callback.
+ * The callback receives (offset, limit) and must return a Supabase query
+ * with `.range(offset, offset + limit - 1)` applied.
+ *
+ * Usage:
+ *   const rows = await fetchAllPaginated<MyRow>((offset, limit) =>
+ *     admin.from("my_table").select("*").eq("col", val).range(offset, offset + limit - 1)
+ *   );
+ */
+export async function fetchAllPaginated<T>(
+  buildQuery: (offset: number, limit: number) => PromiseLike<{ data: T[] | null; error: unknown }>,
+  pageSize: number = PAGE_SIZE
+): Promise<T[]> {
+  const allRows: T[] = [];
+  let offset = 0;
+  let hasMore = true;
+
+  while (hasMore) {
+    const { data, error } = await buildQuery(offset, pageSize);
+
+    if (error) {
+      console.error("Paginated fetch error:", error);
+      break;
+    }
+
+    const rows = (data ?? []) as T[];
+    allRows.push(...rows);
+
+    if (rows.length < pageSize) {
+      hasMore = false;
+    } else {
+      offset += pageSize;
+    }
+  }
+
+  return allRows;
+}
+
+// ---------------------------------------------------------------------------
 // Convenience: fetch all master account mappings
 // ---------------------------------------------------------------------------
 
