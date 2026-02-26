@@ -74,8 +74,17 @@ export default function FinancialModelPage() {
   const [varianceDisplay, setVarianceDisplay] = useState<VarianceDisplayMode>("dollars");
   const [activeTab, setActiveTab] = useState<StatementTab>("all");
 
+  // Prevents the financial-data hook from firing until loadOrg has finished
+  // setting organizationId, includeProForma, and includeAllocations.  Without
+  // this gate the hook fires as soon as organizationId is set (before the
+  // async pro-forma / allocation checks complete), producing an intermediate
+  // fetch with incorrect config that causes revenue to "jump".
+  const [configReady, setConfigReady] = useState(false);
+
   // Load organization
   const loadOrg = useCallback(async () => {
+    setConfigReady(false);
+
     const {
       data: { user },
     } = await supabase.auth.getUser();
@@ -140,6 +149,8 @@ export default function FinancialModelPage() {
         setIncludeAllocations(true);
       }
     }
+
+    setConfigReady(true);
   }, [supabase]);
 
   useEffect(() => {
@@ -166,11 +177,12 @@ export default function FinancialModelPage() {
     includeAllocations,
   };
 
-  // Only fetch when we have the IDs we need
+  // Only fetch when loadOrg is done and we have the IDs we need
   const canFetch =
-    (scope === "organization" && organizationId) ||
-    (scope === "entity" && selectedEntityId) ||
-    (scope === "reporting_entity" && selectedReportingEntityId);
+    configReady &&
+    ((scope === "organization" && organizationId) ||
+      (scope === "entity" && selectedEntityId) ||
+      (scope === "reporting_entity" && selectedReportingEntityId));
 
   const { data, loading, error } = useFinancialStatements(config, !!canFetch);
   const drillDown = useDrillDown(config);

@@ -381,6 +381,66 @@ function buildEntityStatement(
 }
 
 // ---------------------------------------------------------------------------
+// Helper: inject Net Income into balance sheet equity section.
+// Same logic as in the main route but adapted for EntityAmounts structure.
+// ---------------------------------------------------------------------------
+
+function injectNetIncomeIntoEntityBreakdownBS(
+  balanceSheet: StatementData,
+  accounts: AccountInfo[],
+  entityAmounts: Map<string, EntityAmounts>,
+  columnKeys: string[]
+): void {
+  const plAccounts = accounts.filter(
+    (a) => a.classification === "Revenue" || a.classification === "Expense"
+  );
+  if (plAccounts.length === 0) return;
+
+  // Net Income = -(sum of P&L ending_balances) per column
+  const niAmounts: Record<string, number> = {};
+  for (const key of columnKeys) {
+    let plEnding = 0;
+    for (const acct of plAccounts) {
+      plEnding += entityAmounts.get(acct.id)?.endingBalance[key] ?? 0;
+    }
+    niAmounts[key] = -plEnding;
+  }
+
+  const equitySection = balanceSheet.sections.find((s) => s.id === "equity");
+  if (!equitySection?.subtotalLine) return;
+
+  equitySection.lines.push({
+    id: "equity-net-income",
+    label: "Net Income",
+    amounts: niAmounts,
+    indent: 1,
+    isTotal: false,
+    isGrandTotal: false,
+    isHeader: false,
+    isSeparator: false,
+    showDollarSign: equitySection.lines.length === 0,
+  });
+
+  for (const key of columnKeys) {
+    equitySection.subtotalLine.amounts[key] =
+      (equitySection.subtotalLine.amounts[key] ?? 0) + niAmounts[key];
+  }
+
+  for (const section of balanceSheet.sections) {
+    if (
+      (section.id === "total_equity" ||
+        section.id === "total_liabilities_and_equity") &&
+      section.subtotalLine
+    ) {
+      for (const key of columnKeys) {
+        section.subtotalLine.amounts[key] =
+          (section.subtotalLine.amounts[key] ?? 0) + niAmounts[key];
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // GET handler
 // ---------------------------------------------------------------------------
 
@@ -786,6 +846,14 @@ export async function GET(request: Request) {
     entityAmounts,
     columnKeys,
     false
+  );
+
+  // Inject Net Income into BS equity so Assets = L + E
+  injectNetIncomeIntoEntityBreakdownBS(
+    balanceSheet,
+    consolidatedAccounts,
+    entityAmounts,
+    columnKeys
   );
 
   // Build columns metadata

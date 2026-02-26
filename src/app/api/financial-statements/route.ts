@@ -872,6 +872,106 @@ function buildStatement(
 }
 
 // ---------------------------------------------------------------------------
+// Helper: inject Net Income into balance sheet equity section.
+//
+// QBO equity accounts (e.g. Retained Earnings) do NOT include the current
+// fiscal year's net income until the books are closed.  To make the balance
+// sheet balance (Assets = Liabilities + Equity) we compute cumulative YTD
+// net income from P&L ending_balances and add it as a synthetic line in the
+// equity section.
+// ---------------------------------------------------------------------------
+
+function injectNetIncomeIntoBalanceSheet(
+  balanceSheet: StatementData,
+  accounts: AccountInfo[],
+  aggregated: Map<string, BucketedAmounts>,
+  buckets: PeriodBucket[],
+  pyAggregated?: Map<string, BucketedAmounts>
+): void {
+  const plAccounts = accounts.filter(
+    (a) => a.classification === "Revenue" || a.classification === "Expense"
+  );
+  if (plAccounts.length === 0) return;
+
+  // Revenue ending_balance is negative (credit-normal); Expense is positive
+  // (debit-normal).  Net Income = -(sum of all P&L ending_balances).
+  const niAmounts: Record<string, number> = {};
+  const pyNiAmounts: Record<string, number> | undefined = pyAggregated
+    ? {}
+    : undefined;
+
+  for (const bucket of buckets) {
+    let plEnding = 0;
+    let pyPlEnding = 0;
+
+    for (const acct of plAccounts) {
+      plEnding += aggregated.get(acct.id)?.endingBalance[bucket.key] ?? 0;
+      if (pyAggregated) {
+        pyPlEnding +=
+          pyAggregated.get(acct.id)?.endingBalance[bucket.key] ?? 0;
+      }
+    }
+
+    niAmounts[bucket.key] = -plEnding;
+    if (pyNiAmounts) {
+      pyNiAmounts[bucket.key] = -pyPlEnding;
+    }
+  }
+
+  // Find equity section
+  const equitySection = balanceSheet.sections.find((s) => s.id === "equity");
+  if (!equitySection?.subtotalLine) return;
+
+  // Add synthetic Net Income line
+  equitySection.lines.push({
+    id: "equity-net-income",
+    label: "Net Income",
+    amounts: niAmounts,
+    priorYearAmounts: pyNiAmounts,
+    indent: 1,
+    isTotal: false,
+    isGrandTotal: false,
+    isHeader: false,
+    isSeparator: false,
+    showDollarSign: equitySection.lines.length === 0,
+  });
+
+  // Update equity subtotal
+  for (const bucket of buckets) {
+    equitySection.subtotalLine.amounts[bucket.key] =
+      (equitySection.subtotalLine.amounts[bucket.key] ?? 0) +
+      niAmounts[bucket.key];
+
+    if (pyNiAmounts && equitySection.subtotalLine.priorYearAmounts) {
+      equitySection.subtotalLine.priorYearAmounts[bucket.key] =
+        (equitySection.subtotalLine.priorYearAmounts[bucket.key] ?? 0) +
+        pyNiAmounts[bucket.key];
+    }
+  }
+
+  // Update computed lines that include equity
+  for (const section of balanceSheet.sections) {
+    if (
+      (section.id === "total_equity" ||
+        section.id === "total_liabilities_and_equity") &&
+      section.subtotalLine
+    ) {
+      for (const bucket of buckets) {
+        section.subtotalLine.amounts[bucket.key] =
+          (section.subtotalLine.amounts[bucket.key] ?? 0) +
+          niAmounts[bucket.key];
+
+        if (pyNiAmounts && section.subtotalLine.priorYearAmounts) {
+          section.subtotalLine.priorYearAmounts[bucket.key] =
+            (section.subtotalLine.priorYearAmounts[bucket.key] ?? 0) +
+            pyNiAmounts[bucket.key];
+        }
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Helper: build cash flow statement (indirect method)
 // ---------------------------------------------------------------------------
 
@@ -1646,6 +1746,15 @@ async function buildConsolidatedStatements(params: ConsolidatedStatementsParams)
     pyAggregated
   );
 
+  // Inject Net Income into BS equity so Assets = L + E
+  injectNetIncomeIntoBalanceSheet(
+    balanceSheet,
+    consolidatedAccounts,
+    aggregated,
+    buckets,
+    pyAggregated
+  );
+
   const cashFlowStatement = buildCashFlowStatement(
     consolidatedAccounts,
     aggregated,
@@ -2078,6 +2187,15 @@ export async function GET(request: Request) {
       buckets,
       false, // use ending_balance
       undefined, // no budget for BS
+      pyAggregated
+    );
+
+    // Inject Net Income into BS equity so Assets = L + E
+    injectNetIncomeIntoBalanceSheet(
+      balanceSheet,
+      consolidatedAccounts,
+      aggregated,
+      buckets,
       pyAggregated
     );
 

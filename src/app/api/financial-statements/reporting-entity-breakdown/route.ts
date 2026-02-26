@@ -373,6 +373,65 @@ function buildREStatement(
 }
 
 // ---------------------------------------------------------------------------
+// Helper: inject Net Income into balance sheet equity section.
+// Same logic as in the main route but adapted for ColumnAmounts structure.
+// ---------------------------------------------------------------------------
+
+function injectNetIncomeIntoREBreakdownBS(
+  balanceSheet: StatementData,
+  accounts: AccountInfo[],
+  columnAmounts: Map<string, ColumnAmounts>,
+  columnKeys: string[]
+): void {
+  const plAccounts = accounts.filter(
+    (a) => a.classification === "Revenue" || a.classification === "Expense"
+  );
+  if (plAccounts.length === 0) return;
+
+  const niAmounts: Record<string, number> = {};
+  for (const key of columnKeys) {
+    let plEnding = 0;
+    for (const acct of plAccounts) {
+      plEnding += columnAmounts.get(acct.id)?.endingBalance[key] ?? 0;
+    }
+    niAmounts[key] = -plEnding;
+  }
+
+  const equitySection = balanceSheet.sections.find((s) => s.id === "equity");
+  if (!equitySection?.subtotalLine) return;
+
+  equitySection.lines.push({
+    id: "equity-net-income",
+    label: "Net Income",
+    amounts: niAmounts,
+    indent: 1,
+    isTotal: false,
+    isGrandTotal: false,
+    isHeader: false,
+    isSeparator: false,
+    showDollarSign: equitySection.lines.length === 0,
+  });
+
+  for (const key of columnKeys) {
+    equitySection.subtotalLine.amounts[key] =
+      (equitySection.subtotalLine.amounts[key] ?? 0) + niAmounts[key];
+  }
+
+  for (const section of balanceSheet.sections) {
+    if (
+      (section.id === "total_equity" ||
+        section.id === "total_liabilities_and_equity") &&
+      section.subtotalLine
+    ) {
+      for (const key of columnKeys) {
+        section.subtotalLine.amounts[key] =
+          (section.subtotalLine.amounts[key] ?? 0) + niAmounts[key];
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // GET handler
 // ---------------------------------------------------------------------------
 
@@ -858,6 +917,14 @@ export async function GET(request: Request) {
     columnAmounts,
     columnKeys,
     false
+  );
+
+  // Inject Net Income into BS equity so Assets = L + E
+  injectNetIncomeIntoREBreakdownBS(
+    balanceSheet,
+    consolidatedAccounts,
+    columnAmounts,
+    columnKeys
   );
 
   // Build columns metadata
