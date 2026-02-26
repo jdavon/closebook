@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { fetchAllPaginated } from "@/lib/utils/paginated-fetch";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import {
   Table,
@@ -316,37 +317,39 @@ export function AllocationTab({
     setLoading(true);
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let query = (supabase as any)
-      .from("allocation_adjustments")
-      .select(
-        `
-        *,
-        source:entities!allocation_adjustments_source_entity_id_fkey(name, code),
-        destination:entities!allocation_adjustments_destination_entity_id_fkey(name, code),
-        master_accounts!inner(name, account_number),
-        dest_master:master_accounts!allocation_adjustments_destination_master_account_id_fkey(name, account_number)
-      `
-      )
-      .eq("organization_id", organizationId)
-      .order("created_at", { ascending: false });
+    let data: any[];
+    try {
+      data = await fetchAllPaginated<any>((offset, limit) => {
+        let q = (supabase as any)
+          .from("allocation_adjustments")
+          .select(
+            `
+            *,
+            source:entities!allocation_adjustments_source_entity_id_fkey(name, code),
+            destination:entities!allocation_adjustments_destination_entity_id_fkey(name, code),
+            master_accounts!allocation_adjustments_master_account_id_fkey!inner(name, account_number),
+            dest_master:master_accounts!allocation_adjustments_destination_master_account_id_fkey(name, account_number)
+          `
+          )
+          .eq("organization_id", organizationId)
+          .order("created_at", { ascending: false });
 
-    if (scope === "entity" && selectedEntityId) {
-      // Show allocations where the selected entity is source or destination
-      query = query.or(
-        `source_entity_id.eq.${selectedEntityId},destination_entity_id.eq.${selectedEntityId}`
-      );
-    }
+        if (scope === "entity" && selectedEntityId) {
+          q = q.or(
+            `source_entity_id.eq.${selectedEntityId},destination_entity_id.eq.${selectedEntityId}`
+          );
+        }
 
-    const { data, error } = await query;
-
-    if (error) {
+        return q.range(offset, offset + limit - 1);
+      });
+    } catch {
       toast.error("Failed to load allocations");
       setLoading(false);
       return;
     }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const mapped = (data ?? []).map((row: any) => ({
+    const mapped = data.map((row: any) => ({
       ...row,
       source_entity_name: row.source?.name,
       source_entity_code: row.source?.code,
