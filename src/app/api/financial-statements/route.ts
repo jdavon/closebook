@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getPeriodsInRange, type PeriodBucket } from "@/lib/utils/dates";
-import { fetchAllMappings } from "@/lib/utils/paginated-fetch";
+import { fetchAllMappings, fetchAllPaginated } from "@/lib/utils/paginated-fetch";
 import {
   INCOME_STATEMENT_SECTIONS,
   INCOME_STATEMENT_COMPUTED,
@@ -209,31 +209,41 @@ async function fetchBudgetAmounts(admin: any, versionIds: string[]): Promise<{
   error?: string;
 }> {
   // Try master_account_id first (current schema after column rename)
+  // Paginate to avoid PostgREST row-limit truncation (versions × accounts × 12 months)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: rows1, error: err1 } = await (admin as any)
+  const { data: probe, error: err1 } = await (admin as any)
     .from("budget_amounts")
-    .select("master_account_id, period_year, period_month, amount")
+    .select("master_account_id", { count: "exact", head: true })
     .in("budget_version_id", versionIds);
 
-  if (!err1 && rows1) {
-    return { rows: rows1 as RawBudgetAmount[], column: "master_account_id" };
+  if (!err1) {
+    const rows1 = await fetchAllPaginated<RawBudgetAmount>((offset, limit) =>
+      (admin as any)
+        .from("budget_amounts")
+        .select("master_account_id, period_year, period_month, amount")
+        .in("budget_version_id", versionIds)
+        .range(offset, offset + limit - 1)
+    );
+    return { rows: rows1, column: "master_account_id" };
   }
 
   // Fallback: try account_id (original migration column name)
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: rows2, error: err2 } = await (admin as any)
-    .from("budget_amounts")
-    .select("account_id, period_year, period_month, amount")
-    .in("budget_version_id", versionIds);
+  const rows2 = await fetchAllPaginated<RawBudgetAmount>((offset, limit) =>
+    (admin as any)
+      .from("budget_amounts")
+      .select("account_id, period_year, period_month, amount")
+      .in("budget_version_id", versionIds)
+      .range(offset, offset + limit - 1)
+  );
 
-  if (!err2 && rows2) {
-    return { rows: rows2 as RawBudgetAmount[], column: "account_id" };
+  if (rows2.length > 0) {
+    return { rows: rows2, column: "account_id" };
   }
 
   return {
     rows: [],
     column: "master_account_id",
-    error: `master_account_id: ${err1?.message}; account_id: ${err2?.message}`,
+    error: `master_account_id: ${err1?.message}; account_id fallback returned 0 rows`,
   };
 }
 
@@ -503,7 +513,8 @@ interface BucketedAmounts {
 function aggregateByBucket(
   accounts: AccountInfo[],
   balances: RawGLBalance[],
-  buckets: PeriodBucket[]
+  buckets: PeriodBucket[],
+  fiscalYearStartMonth: number = 1
 ): Map<string, BucketedAmounts> {
   // Index balances by account_id -> "year-month" -> balance
   const balIndex = new Map<string, Map<string, RawGLBalance>>();
@@ -520,6 +531,9 @@ function aggregateByBucket(
 
   for (const account of accounts) {
     const accountBalances = balIndex.get(account.id);
+    const isPL =
+      account.classification === "Revenue" ||
+      account.classification === "Expense";
     const bucketed: BucketedAmounts = {
       netChange: {},
       endingBalance: {},
@@ -535,15 +549,29 @@ function aggregateByBucket(
       for (const m of bucket.months) {
         const bal = accountBalances?.get(`${m.year}-${m.month}`);
         if (bal) {
-          netChange += bal.net_change;
+          const pm = m.month === 1 ? 12 : m.month - 1;
+          const py = m.month === 1 ? m.year - 1 : m.year;
+          const priorBal = accountBalances?.get(`${py}-${pm}`);
+
+          // Derive standalone monthly net change from ending balance
+          // differences. The QBO trial balance stores cumulative YTD in
+          // ending_balance/net_change for P&L accounts. Subtracting the
+          // prior month's ending balance gives the true monthly activity.
+          if (isPL && m.month === fiscalYearStartMonth) {
+            // First month of fiscal year: P&L resets, YTD IS standalone
+            netChange += bal.ending_balance;
+          } else if (priorBal) {
+            netChange += bal.ending_balance - priorBal.ending_balance;
+          } else {
+            // No prior month data — use ending_balance as best available
+            netChange += bal.ending_balance;
+          }
+
           endingBal = bal.ending_balance; // last one wins
           if (!foundFirst) {
             // Derive beginning balance from the PRIOR month's ending balance.
             // The DB's beginning_balance may be 0 if the sync didn't populate it.
             // collectAllMonths() already fetches prior-month data for this purpose.
-            const priorMonth = m.month === 1 ? 12 : m.month - 1;
-            const priorYear = m.month === 1 ? m.year - 1 : m.year;
-            const priorBal = accountBalances?.get(`${priorYear}-${priorMonth}`);
             beginningBal = priorBal
               ? priorBal.ending_balance
               : bal.beginning_balance; // fallback to DB value
@@ -1424,6 +1452,7 @@ interface ConsolidatedStatementsParams {
   startMonth: number;
   endYear: number;
   endMonth: number;
+  fiscalYearStartMonth: number;
 }
 
 async function buildConsolidatedStatements(params: ConsolidatedStatementsParams) {
@@ -1443,18 +1472,22 @@ async function buildConsolidatedStatements(params: ConsolidatedStatementsParams)
     startMonth,
     endYear,
     endMonth,
+    fiscalYearStartMonth,
   } = params;
 
-  // Get master accounts
-  const { data: masterAccounts } = await admin
-    .from("master_accounts")
-    .select("*")
-    .eq("organization_id", organizationId)
-    .eq("is_active", true)
-    .order("display_order")
-    .order("account_number");
+  // Get master accounts (paginated to avoid PostgREST row-limit truncation)
+  const masterAccounts = await fetchAllPaginated<any>((offset, limit) =>
+    admin
+      .from("master_accounts")
+      .select("*")
+      .eq("organization_id", organizationId)
+      .eq("is_active", true)
+      .order("display_order")
+      .order("account_number")
+      .range(offset, offset + limit - 1)
+  );
 
-  if (!masterAccounts || masterAccounts.length === 0) {
+  if (masterAccounts.length === 0) {
     return {
       periods: [] as Period[],
       incomeStatement: { id: "income_statement", title: "Income Statement", sections: [] },
@@ -1559,35 +1592,39 @@ async function buildConsolidatedStatements(params: ConsolidatedStatementsParams)
     }
   }
 
-  // Pro Forma Adjustments
+  // Pro Forma Adjustments (paginated to avoid row-limit truncation)
   if (includeProForma) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data: proFormaRows } = await (admin as any)
-      .from("pro_forma_adjustments")
-      .select("master_account_id, period_year, period_month, amount")
-      .eq("organization_id", organizationId)
-      .eq("is_excluded", false);
+    const proFormaRows = await fetchAllPaginated<RawProFormaAdjustment>((offset, limit) =>
+      (admin as any)
+        .from("pro_forma_adjustments")
+        .select("master_account_id, period_year, period_month, amount")
+        .eq("organization_id", organizationId)
+        .eq("is_excluded", false)
+        .range(offset, offset + limit - 1)
+    );
 
-    if (proFormaRows && proFormaRows.length > 0) {
+    if (proFormaRows.length > 0) {
       injectProFormaAdjustments(
         consolidatedBalances,
-        proFormaRows as RawProFormaAdjustment[],
+        proFormaRows,
         "consolidated"
       );
     }
   }
 
-  // Allocation Adjustments (org/RE scope — net zero at consolidated level)
+  // Allocation Adjustments (org/RE scope — net zero at consolidated level, paginated)
   if (includeAllocations) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data: allocRows } = await (admin as any)
-      .from("allocation_adjustments")
-      .select("source_entity_id, destination_entity_id, master_account_id, destination_master_account_id, amount, schedule_type, period_year, period_month, start_year, start_month, end_year, end_month, is_repeating, repeat_end_year, repeat_end_month")
-      .eq("organization_id", organizationId)
-      .eq("is_excluded", false);
+    const allocRows = await fetchAllPaginated<RawAllocationAdjustment>((offset, limit) =>
+      (admin as any)
+        .from("allocation_adjustments")
+        .select("source_entity_id, destination_entity_id, master_account_id, destination_master_account_id, amount, schedule_type, period_year, period_month, start_year, start_month, end_year, end_month, is_repeating, repeat_end_year, repeat_end_month")
+        .eq("organization_id", organizationId)
+        .eq("is_excluded", false)
+        .range(offset, offset + limit - 1)
+    );
 
-    if (allocRows && allocRows.length > 0) {
-      const expanded = expandAllocationAdjustments(allocRows as RawAllocationAdjustment[]);
+    if (allocRows.length > 0) {
+      const expanded = expandAllocationAdjustments(allocRows);
       // Filter to entries belonging to entities in scope.
       // For org scope this keeps both sides (net zero at consolidated).
       // For reporting_entity scope this shows the net effect of cross-RE allocations.
@@ -1601,14 +1638,15 @@ async function buildConsolidatedStatements(params: ConsolidatedStatementsParams)
   const aggregated = aggregateByBucket(
     consolidatedAccounts,
     consolidatedBalances,
-    buckets
+    buckets,
+    fiscalYearStartMonth
   );
 
   // Prior year aggregation for YoY
   let pyAggregated: Map<string, BucketedAmounts> | undefined;
   if (includeYoY) {
     const pyBuckets = createPriorYearBuckets(buckets);
-    pyAggregated = aggregateByBucket(consolidatedAccounts, consolidatedBalances, pyBuckets);
+    pyAggregated = aggregateByBucket(consolidatedAccounts, consolidatedBalances, pyBuckets, fiscalYearStartMonth);
   }
 
   // Depreciation
@@ -1657,7 +1695,7 @@ async function buildConsolidatedStatements(params: ConsolidatedStatementsParams)
           const mSet = new Set(
             bucket.months.map((m) => `${m.year}-${m.month}`)
           );
-          for (const row of depRows ?? []) {
+          for (const row of depRows) {
             if (mSet.has(`${row.period_year}-${row.period_month}`)) {
               pyDepreciationByBucket[bucket.key] += Number(row.book_depreciation);
             }
@@ -1852,13 +1890,16 @@ export async function GET(request: Request) {
     // Verify access
     const { data: entity } = await admin
       .from("entities")
-      .select("id, name, code, organization_id")
+      .select("id, name, code, organization_id, fiscal_year_end_month")
       .eq("id", entityId!)
       .single();
 
     if (!entity) {
       return NextResponse.json({ error: "Entity not found" }, { status: 404 });
     }
+
+    const fyEndMonth = entity.fiscal_year_end_month ?? 12;
+    const fiscalYearStartMonth = (fyEndMonth % 12) + 1;
 
     // Get org info
     const { data: org } = await admin
@@ -1867,16 +1908,19 @@ export async function GET(request: Request) {
       .eq("id", entity.organization_id)
       .single();
 
-    // Get master accounts for the organization (same structure as consolidated)
-    const { data: masterAccounts } = await admin
-      .from("master_accounts")
-      .select("*")
-      .eq("organization_id", entity.organization_id)
-      .eq("is_active", true)
-      .order("display_order")
-      .order("account_number");
+    // Get master accounts for the organization (paginated to avoid row-limit truncation)
+    const masterAccounts = await fetchAllPaginated<any>((offset, limit) =>
+      admin
+        .from("master_accounts")
+        .select("*")
+        .eq("organization_id", entity.organization_id)
+        .eq("is_active", true)
+        .order("display_order")
+        .order("account_number")
+        .range(offset, offset + limit - 1)
+    );
 
-    if (!masterAccounts || masterAccounts.length === 0) {
+    if (masterAccounts.length === 0) {
       return NextResponse.json({
         periods: [],
         incomeStatement: { id: "income_statement", title: "Income Statement", sections: [] },
@@ -1896,15 +1940,17 @@ export async function GET(request: Request) {
 
     // Get mappings for THIS entity only
     const masterAccountIds = masterAccounts.map((ma) => ma.id);
-    const { data: mappings } = await admin
-      .from("master_account_mappings")
-      .select("master_account_id, entity_id, account_id")
-      .in("master_account_id", masterAccountIds)
-      .eq("entity_id", entityId!)
-      .limit(10000);
+    const mappings = await fetchAllPaginated<any>((offset, limit) =>
+      admin
+        .from("master_account_mappings")
+        .select("master_account_id, entity_id, account_id")
+        .in("master_account_id", masterAccountIds)
+        .eq("entity_id", entityId!)
+        .range(offset, offset + limit - 1)
+    );
 
     // Get GL balances for mapped accounts (paginated to avoid row limit truncation)
-    const mappedAccountIds = (mappings ?? []).map((m) => m.account_id);
+    const mappedAccountIds = mappings.map((m) => m.account_id);
     let glBalances: RawGLBalance[] = [];
 
     if (mappedAccountIds.length > 0) {
@@ -1991,17 +2037,20 @@ export async function GET(request: Request) {
 
     // --- Pro Forma Adjustments (entity scope) ---
     if (includeProForma) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- pro_forma_adjustments not in generated types
-      const { data: proFormaRows } = await (admin as any)
-        .from("pro_forma_adjustments")
-        .select("master_account_id, period_year, period_month, amount")
-        .eq("entity_id", entityId!)
-        .eq("is_excluded", false);
+      // Paginated to avoid PostgREST row-limit truncation
+      const proFormaRows = await fetchAllPaginated<RawProFormaAdjustment>((offset, limit) =>
+        (admin as any)
+          .from("pro_forma_adjustments")
+          .select("master_account_id, period_year, period_month, amount")
+          .eq("entity_id", entityId!)
+          .eq("is_excluded", false)
+          .range(offset, offset + limit - 1)
+      );
 
-      if (proFormaRows && proFormaRows.length > 0) {
+      if (proFormaRows.length > 0) {
         injectProFormaAdjustments(
           consolidatedBalances,
-          proFormaRows as RawProFormaAdjustment[],
+          proFormaRows,
           entityId!
         );
       }
@@ -2009,16 +2058,18 @@ export async function GET(request: Request) {
 
     // --- Allocation Adjustments (entity scope) ---
     if (includeAllocations) {
-      // Fetch allocations where this entity is source or destination
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data: allocRows } = await (admin as any)
-        .from("allocation_adjustments")
-        .select("source_entity_id, destination_entity_id, master_account_id, destination_master_account_id, amount, schedule_type, period_year, period_month, start_year, start_month, end_year, end_month, is_repeating, repeat_end_year, repeat_end_month")
-        .or(`source_entity_id.eq.${entityId!},destination_entity_id.eq.${entityId!}`)
-        .eq("is_excluded", false);
+      // Fetch allocations where this entity is source or destination (paginated)
+      const allocRows = await fetchAllPaginated<RawAllocationAdjustment>((offset, limit) =>
+        (admin as any)
+          .from("allocation_adjustments")
+          .select("source_entity_id, destination_entity_id, master_account_id, destination_master_account_id, amount, schedule_type, period_year, period_month, start_year, start_month, end_year, end_month, is_repeating, repeat_end_year, repeat_end_month")
+          .or(`source_entity_id.eq.${entityId!},destination_entity_id.eq.${entityId!}`)
+          .eq("is_excluded", false)
+          .range(offset, offset + limit - 1)
+      );
 
-      if (allocRows && allocRows.length > 0) {
-        const expanded = expandAllocationAdjustments(allocRows as RawAllocationAdjustment[]);
+      if (allocRows.length > 0) {
+        const expanded = expandAllocationAdjustments(allocRows);
         // Only inject entries that belong to this entity
         const entityEntries = expanded.filter((e) => e.entity_id === entityId!);
         if (entityEntries.length > 0) {
@@ -2031,26 +2082,31 @@ export async function GET(request: Request) {
     const aggregated = aggregateByBucket(
       consolidatedAccounts,
       consolidatedBalances,
-      buckets
+      buckets,
+      fiscalYearStartMonth
     );
 
     // Prior year aggregation for YoY
     let pyAggregated: Map<string, BucketedAmounts> | undefined;
     if (includeYoY) {
       const pyBuckets = createPriorYearBuckets(buckets);
-      pyAggregated = aggregateByBucket(consolidatedAccounts, consolidatedBalances, pyBuckets);
+      pyAggregated = aggregateByBucket(consolidatedAccounts, consolidatedBalances, pyBuckets, fiscalYearStartMonth);
     }
 
     // Get depreciation data for cash flow
     const depreciationByBucket: Record<string, number> = {};
     const pyDepreciationByBucket: Record<string, number> = {};
     {
-      const { data: assetIds } = await admin
-        .from("fixed_assets")
-        .select("id")
-        .eq("entity_id", entityId!);
+      // Paginated to avoid PostgREST row-limit truncation
+      const assetIds = await fetchAllPaginated<any>((offset, limit) =>
+        admin
+          .from("fixed_assets")
+          .select("id")
+          .eq("entity_id", entityId!)
+          .range(offset, offset + limit - 1)
+      );
 
-      const ids = (assetIds ?? []).map((a) => a.id);
+      const ids = assetIds.map((a) => a.id);
       for (const bucket of buckets) {
         depreciationByBucket[bucket.key] = 0;
         pyDepreciationByBucket[bucket.key] = 0;
@@ -2065,18 +2121,22 @@ export async function GET(request: Request) {
           ? [...new Set([...uniqueYears, ...uniqueYears.map((y) => y - 1)])]
           : uniqueYears;
 
-        const { data: depRows } = await admin
-          .from("fixed_asset_depreciation")
-          .select("period_year, period_month, book_depreciation")
-          .in("fixed_asset_id", ids)
-          .in("period_year", allDepYears);
+        // Paginated: assets × years × 12 months can exceed 1000 rows
+        const depRows = await fetchAllPaginated<any>((offset, limit) =>
+          admin
+            .from("fixed_asset_depreciation")
+            .select("period_year, period_month, book_depreciation")
+            .in("fixed_asset_id", ids)
+            .in("period_year", allDepYears)
+            .range(offset, offset + limit - 1)
+        );
 
         // Aggregate into buckets
         for (const bucket of buckets) {
           const monthSet = new Set(
             bucket.months.map((m) => `${m.year}-${m.month}`)
           );
-          for (const row of depRows ?? []) {
+          for (const row of depRows) {
             if (monthSet.has(`${row.period_year}-${row.period_month}`)) {
               depreciationByBucket[bucket.key] += Number(row.book_depreciation);
             }
@@ -2090,7 +2150,7 @@ export async function GET(request: Request) {
             const monthSet = new Set(
               bucket.months.map((m) => `${m.year}-${m.month}`)
             );
-            for (const row of depRows ?? []) {
+            for (const row of depRows) {
               if (monthSet.has(`${row.period_year}-${row.period_month}`)) {
                 pyDepreciationByBucket[bucket.key] += Number(row.book_depreciation);
               }
@@ -2271,10 +2331,12 @@ export async function GET(request: Request) {
     // Get all active entities for this org
     const { data: orgEntities } = await admin
       .from("entities")
-      .select("id")
+      .select("id, fiscal_year_end_month")
       .eq("organization_id", organizationId)
       .eq("is_active", true);
     const orgEntityIds = (orgEntities ?? []).map((e: { id: string }) => e.id);
+    const orgFyEnd = (orgEntities ?? [])[0]?.fiscal_year_end_month ?? 12;
+    const orgFiscalYearStartMonth = (orgFyEnd % 12) + 1;
 
     const result = await buildConsolidatedStatements({
       admin,
@@ -2292,6 +2354,7 @@ export async function GET(request: Request) {
       startMonth,
       endYear,
       endMonth,
+      fiscalYearStartMonth: orgFiscalYearStartMonth,
     });
 
     return NextResponse.json({
@@ -2372,6 +2435,15 @@ export async function GET(request: Request) {
       });
     }
 
+    // Get fiscal year end month from member entities
+    const { data: reMemberEntities } = await admin
+      .from("entities")
+      .select("fiscal_year_end_month")
+      .in("id", memberEntityIds)
+      .limit(1);
+    const reFyEnd = (reMemberEntities ?? [])[0]?.fiscal_year_end_month ?? 12;
+    const reFiscalYearStartMonth = (reFyEnd % 12) + 1;
+
     const result = await buildConsolidatedStatements({
       admin,
       organizationId: reportingEntity.organization_id,
@@ -2388,6 +2460,7 @@ export async function GET(request: Request) {
       startMonth,
       endYear,
       endMonth,
+      fiscalYearStartMonth: reFiscalYearStartMonth,
     });
 
     return NextResponse.json({
