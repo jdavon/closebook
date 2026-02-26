@@ -346,6 +346,7 @@ interface RawAllocationAdjustment {
   source_entity_id: string;
   destination_entity_id: string;
   master_account_id: string;
+  destination_master_account_id: string | null;
   amount: number;
   schedule_type: string;
   period_year: number | null;
@@ -359,7 +360,9 @@ interface RawAllocationAdjustment {
   repeat_end_month: number | null;
 }
 
-/** Push a +/- pair of entries for source and destination */
+/** Push a +/- pair of entries for source and destination.
+ *  For reclass (same entity, different accounts): -amt on source account, +amt on dest account.
+ *  For inter-entity: -amt on source entity, +amt on destination entity (same account). */
 function pushAllocPair(
   entries: Array<{ entity_id: string; master_account_id: string; period_year: number; period_month: number; amount: number }>,
   alloc: RawAllocationAdjustment,
@@ -367,20 +370,39 @@ function pushAllocPair(
   month: number,
   amt: number
 ) {
-  entries.push({
-    entity_id: alloc.source_entity_id,
-    master_account_id: alloc.master_account_id,
-    period_year: year,
-    period_month: month,
-    amount: -amt,
-  });
-  entries.push({
-    entity_id: alloc.destination_entity_id,
-    master_account_id: alloc.master_account_id,
-    period_year: year,
-    period_month: month,
-    amount: amt,
-  });
+  if (alloc.destination_master_account_id) {
+    // Intra-entity reclass: move between accounts within same entity
+    entries.push({
+      entity_id: alloc.source_entity_id,
+      master_account_id: alloc.master_account_id,
+      period_year: year,
+      period_month: month,
+      amount: -amt,
+    });
+    entries.push({
+      entity_id: alloc.source_entity_id,
+      master_account_id: alloc.destination_master_account_id,
+      period_year: year,
+      period_month: month,
+      amount: amt,
+    });
+  } else {
+    // Inter-entity: move between entities on same account
+    entries.push({
+      entity_id: alloc.source_entity_id,
+      master_account_id: alloc.master_account_id,
+      period_year: year,
+      period_month: month,
+      amount: -amt,
+    });
+    entries.push({
+      entity_id: alloc.destination_entity_id,
+      master_account_id: alloc.master_account_id,
+      period_year: year,
+      period_month: month,
+      amount: amt,
+    });
+  }
 }
 
 /**
@@ -1459,7 +1481,7 @@ async function buildConsolidatedStatements(params: ConsolidatedStatementsParams)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data: allocRows } = await (admin as any)
       .from("allocation_adjustments")
-      .select("source_entity_id, destination_entity_id, master_account_id, amount, schedule_type, period_year, period_month, start_year, start_month, end_year, end_month")
+      .select("source_entity_id, destination_entity_id, master_account_id, destination_master_account_id, amount, schedule_type, period_year, period_month, start_year, start_month, end_year, end_month, is_repeating, repeat_end_year, repeat_end_month")
       .eq("organization_id", organizationId)
       .eq("is_excluded", false);
 
@@ -1881,7 +1903,7 @@ export async function GET(request: Request) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { data: allocRows } = await (admin as any)
         .from("allocation_adjustments")
-        .select("source_entity_id, destination_entity_id, master_account_id, amount, schedule_type, period_year, period_month, start_year, start_month, end_year, end_month")
+        .select("source_entity_id, destination_entity_id, master_account_id, destination_master_account_id, amount, schedule_type, period_year, period_month, start_year, start_month, end_year, end_month, is_repeating, repeat_end_year, repeat_end_month")
         .or(`source_entity_id.eq.${entityId!},destination_entity_id.eq.${entityId!}`)
         .eq("is_excluded", false);
 

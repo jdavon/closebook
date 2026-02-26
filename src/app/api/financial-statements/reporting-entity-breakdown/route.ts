@@ -121,20 +121,39 @@ function expandAllocationEntries(allocRows: any[]): Array<{
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   function pushPair(alloc: any, year: number, month: number, amt: number) {
-    entries.push({
-      entity_id: alloc.source_entity_id,
-      master_account_id: alloc.master_account_id,
-      period_year: year,
-      period_month: month,
-      amount: -amt,
-    });
-    entries.push({
-      entity_id: alloc.destination_entity_id,
-      master_account_id: alloc.master_account_id,
-      period_year: year,
-      period_month: month,
-      amount: amt,
-    });
+    if (alloc.destination_master_account_id) {
+      // Intra-entity reclass: move between accounts within same entity
+      entries.push({
+        entity_id: alloc.source_entity_id,
+        master_account_id: alloc.master_account_id,
+        period_year: year,
+        period_month: month,
+        amount: -amt,
+      });
+      entries.push({
+        entity_id: alloc.source_entity_id,
+        master_account_id: alloc.destination_master_account_id,
+        period_year: year,
+        period_month: month,
+        amount: amt,
+      });
+    } else {
+      // Inter-entity: move between entities on same account
+      entries.push({
+        entity_id: alloc.source_entity_id,
+        master_account_id: alloc.master_account_id,
+        period_year: year,
+        period_month: month,
+        amount: -amt,
+      });
+      entries.push({
+        entity_id: alloc.destination_entity_id,
+        master_account_id: alloc.master_account_id,
+        period_year: year,
+        period_month: month,
+        amount: amt,
+      });
+    }
   }
 
   for (const alloc of allocRows) {
@@ -744,7 +763,7 @@ export async function GET(request: Request) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data: allocRows } = await (admin as any)
       .from("allocation_adjustments")
-      .select("source_entity_id, destination_entity_id, master_account_id, amount, schedule_type, period_year, period_month, start_year, start_month, end_year, end_month")
+      .select("source_entity_id, destination_entity_id, master_account_id, destination_master_account_id, amount, schedule_type, period_year, period_month, start_year, start_month, end_year, end_month, is_repeating, repeat_end_year, repeat_end_month")
       .eq("organization_id", organizationId)
       .eq("is_excluded", false);
 

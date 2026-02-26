@@ -38,13 +38,16 @@ export async function GET(request: Request) {
     return NextResponse.json({ entities: [], variances: [] });
   }
 
-  // For each entity, get GL balances grouped by period
-  // We query all gl_balances for the year and compute debits - credits per period
+  // For each entity, get GL balances grouped by period.
+  // IMPORTANT: Join with accounts to match the entity trial-balance page query.
+  // Without the join, orphaned gl_balance rows (where the linked account was
+  // deleted or replaced) would inflate the variance total while the entity TB
+  // page silently excludes them via its INNER JOIN.
   const entityIds = entities.map((e) => e.id);
 
   const { data: balances, error } = await supabase
     .from("gl_balances")
-    .select("entity_id, period_year, period_month, debit_total, credit_total")
+    .select("entity_id, period_year, period_month, debit_total, credit_total, account_id, accounts!inner(id)")
     .in("entity_id", entityIds)
     .eq("period_year", year);
 

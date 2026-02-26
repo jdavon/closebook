@@ -130,6 +130,7 @@ export interface AllocationAdjustment {
   source_entity_id: string;
   destination_entity_id: string;
   master_account_id: string;
+  destination_master_account_id: string | null;
   amount: number;
   description: string;
   notes: string | null;
@@ -154,6 +155,8 @@ export interface AllocationAdjustment {
   destination_entity_code?: string;
   master_account_name?: string;
   master_account_number?: string;
+  destination_master_account_name?: string;
+  destination_master_account_number?: string;
 }
 
 /** A column in the entity-breakdown view */

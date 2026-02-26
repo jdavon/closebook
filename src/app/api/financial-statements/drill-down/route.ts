@@ -626,11 +626,15 @@ async function buildDrillDownResponse(
   }
 
   if (includeAllocations) {
+    // Fetch allocations that touch any of the drilled-into master accounts
+    // (either as source account or as reclass destination account)
+    const maIdList = allMasterAccountIds.join(",");
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data: allocRows } = await (admin as any)
       .from("allocation_adjustments")
       .select(`
         id, source_entity_id, destination_entity_id, master_account_id,
+        destination_master_account_id,
         amount, description, schedule_type, period_year, period_month,
         start_year, start_month, end_year, end_month, is_repeating,
         repeat_end_year, repeat_end_month,
@@ -638,7 +642,7 @@ async function buildDrillDownResponse(
         destination:entities!allocation_adjustments_destination_entity_id_fkey(name, code)
       `)
       .eq("organization_id", organizationId)
-      .in("master_account_id", allMasterAccountIds)
+      .or(`master_account_id.in.(${maIdList}),destination_master_account_id.in.(${maIdList})`)
       .eq("is_excluded", false);
 
     for (const alloc of allocRows ?? []) {
@@ -646,7 +650,6 @@ async function buildDrillDownResponse(
       const appliesInPeriod = targetMonths.some((m) => {
         if (alloc.schedule_type === "single_month") {
           if (alloc.is_repeating) {
-            // Repeating: check if month matches and year is in range
             if (alloc.period_month !== m.month) return false;
             if (alloc.period_year && m.year < alloc.period_year) return false;
             if (alloc.repeat_end_year && m.year > alloc.repeat_end_year) return false;
@@ -664,10 +667,6 @@ async function buildDrillDownResponse(
       });
 
       if (!appliesInPeriod) continue;
-
-      // Check if source or destination entity is in scope
-      const srcInScope = scopeEntityIds.includes(alloc.source_entity_id);
-      const dstInScope = scopeEntityIds.includes(alloc.destination_entity_id);
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const src = alloc.source as any;
@@ -705,30 +704,71 @@ async function buildDrillDownResponse(
 
       const totalAmount = monthlyAmount * applicableMonths.length;
 
-      if (srcInScope) {
-        adjustments.push({
-          type: "allocation",
-          entityName: src?.name ?? "",
-          entityCode: src?.code ?? "",
-          description: alloc.description,
-          amount: -totalAmount,
-          sourceEntityName: src?.name,
-          destinationEntityName: dst?.name,
-        });
-        grandTotal -= totalAmount;
-      }
+      const masterAccountIdSet = new Set(allMasterAccountIds);
 
-      if (dstInScope) {
-        adjustments.push({
-          type: "allocation",
-          entityName: dst?.name ?? "",
-          entityCode: dst?.code ?? "",
-          description: alloc.description,
-          amount: totalAmount,
-          sourceEntityName: src?.name,
-          destinationEntityName: dst?.name,
-        });
-        grandTotal += totalAmount;
+      if (alloc.destination_master_account_id) {
+        // Intra-entity reclass: show the side that touches the drilled-into account
+        const entityInScope = scopeEntityIds.includes(alloc.source_entity_id);
+        if (!entityInScope) continue;
+
+        const srcAccountMatches = masterAccountIdSet.has(alloc.master_account_id);
+        const dstAccountMatches = masterAccountIdSet.has(alloc.destination_master_account_id);
+
+        if (srcAccountMatches) {
+          adjustments.push({
+            type: "allocation",
+            entityName: src?.name ?? "",
+            entityCode: src?.code ?? "",
+            description: `${alloc.description} (reclass)`,
+            amount: -totalAmount,
+            sourceEntityName: src?.name,
+            destinationEntityName: src?.name,
+          });
+          grandTotal -= totalAmount;
+        }
+
+        if (dstAccountMatches) {
+          adjustments.push({
+            type: "allocation",
+            entityName: src?.name ?? "",
+            entityCode: src?.code ?? "",
+            description: `${alloc.description} (reclass)`,
+            amount: totalAmount,
+            sourceEntityName: src?.name,
+            destinationEntityName: src?.name,
+          });
+          grandTotal += totalAmount;
+        }
+      } else {
+        // Inter-entity allocation (existing behavior)
+        const srcInScope = scopeEntityIds.includes(alloc.source_entity_id);
+        const dstInScope = scopeEntityIds.includes(alloc.destination_entity_id);
+
+        if (srcInScope) {
+          adjustments.push({
+            type: "allocation",
+            entityName: src?.name ?? "",
+            entityCode: src?.code ?? "",
+            description: alloc.description,
+            amount: -totalAmount,
+            sourceEntityName: src?.name,
+            destinationEntityName: dst?.name,
+          });
+          grandTotal -= totalAmount;
+        }
+
+        if (dstInScope) {
+          adjustments.push({
+            type: "allocation",
+            entityName: dst?.name ?? "",
+            entityCode: dst?.code ?? "",
+            description: alloc.description,
+            amount: totalAmount,
+            sourceEntityName: src?.name,
+            destinationEntityName: dst?.name,
+          });
+          grandTotal += totalAmount;
+        }
       }
     }
   }

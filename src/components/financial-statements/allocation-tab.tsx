@@ -51,6 +51,7 @@ import {
   Pencil,
   Trash2,
   ArrowRight,
+  ArrowLeftRight,
   ChevronsUpDown,
   Check,
   Repeat,
@@ -248,6 +249,8 @@ export function AllocationTab({
   const [formSourceEntityId, setFormSourceEntityId] = useState<string>("");
   const [formDestEntityId, setFormDestEntityId] = useState<string>("");
   const [formMasterAccountId, setFormMasterAccountId] = useState<string>("");
+  const [formDestMasterAccountId, setFormDestMasterAccountId] =
+    useState<string>("");
   const [formAmount, setFormAmount] = useState("");
   const [formDescription, setFormDescription] = useState("");
   const [formNotes, setFormNotes] = useState("");
@@ -277,10 +280,22 @@ export function AllocationTab({
     [entities]
   );
 
-  // Filtered destination options (exclude selected source)
-  const destEntityOptions: ComboboxOption[] = useMemo(
-    () => entityOptions.filter((o) => o.value !== formSourceEntityId),
-    [entityOptions, formSourceEntityId]
+  // Whether this is a reclass (same entity, different accounts)
+  const isReclass =
+    formSourceEntityId !== "" && formSourceEntityId === formDestEntityId;
+
+  // Destination master account options (exclude the source master account)
+  const destMasterAccountOptions: ComboboxOption[] = useMemo(
+    () =>
+      masterAccounts
+        .filter((ma) => ma.id !== formMasterAccountId)
+        .map((ma) => ({
+          value: ma.id,
+          label: `${ma.account_number} — ${ma.name}`,
+          sublabel: ma.classification,
+          badge: ma.classification,
+        })),
+    [masterAccounts, formMasterAccountId]
   );
 
   // Memoize master account options for combobox
@@ -308,7 +323,8 @@ export function AllocationTab({
         *,
         source:entities!allocation_adjustments_source_entity_id_fkey(name, code),
         destination:entities!allocation_adjustments_destination_entity_id_fkey(name, code),
-        master_accounts!inner(name, account_number)
+        master_accounts!inner(name, account_number),
+        dest_master:master_accounts!allocation_adjustments_destination_master_account_id_fkey(name, account_number)
       `
       )
       .eq("organization_id", organizationId)
@@ -338,6 +354,8 @@ export function AllocationTab({
       destination_entity_code: row.destination?.code,
       master_account_name: row.master_accounts?.name,
       master_account_number: row.master_accounts?.account_number,
+      destination_master_account_name: row.dest_master?.name,
+      destination_master_account_number: row.dest_master?.account_number,
     }));
 
     setAllocations(mapped);
@@ -370,6 +388,7 @@ export function AllocationTab({
     setFormSourceEntityId("");
     setFormDestEntityId("");
     setFormMasterAccountId("");
+    setFormDestMasterAccountId("");
     setFormAmount("");
     setFormDescription("");
     setFormNotes("");
@@ -397,6 +416,7 @@ export function AllocationTab({
     setFormSourceEntityId(alloc.source_entity_id);
     setFormDestEntityId(alloc.destination_entity_id);
     setFormMasterAccountId(alloc.master_account_id);
+    setFormDestMasterAccountId(alloc.destination_master_account_id ?? "");
     setFormAmount(String(alloc.amount));
     setFormDescription(alloc.description);
     setFormNotes(alloc.notes ?? "");
@@ -430,8 +450,17 @@ export function AllocationTab({
       return;
     }
 
-    if (formSourceEntityId === formDestEntityId) {
-      toast.error("Source and destination entities must be different");
+    // Reclass: same entity requires a destination master account
+    const reclassMode =
+      formSourceEntityId === formDestEntityId;
+    if (reclassMode && !formDestMasterAccountId) {
+      toast.error(
+        "Same-entity reclass requires a destination account to move the amount to"
+      );
+      return;
+    }
+    if (reclassMode && formMasterAccountId === formDestMasterAccountId) {
+      toast.error("Source and destination accounts must be different");
       return;
     }
 
@@ -477,6 +506,9 @@ export function AllocationTab({
       source_entity_id: formSourceEntityId,
       destination_entity_id: formDestEntityId,
       master_account_id: formMasterAccountId,
+      destination_master_account_id: reclassMode
+        ? formDestMasterAccountId
+        : null,
       amount,
       description: formDescription.trim(),
       notes: formNotes.trim() || null,
@@ -617,8 +649,8 @@ export function AllocationTab({
               {allocations.length > 0 && ` (${activeCount} active)`}
             </p>
             <p className="text-xs text-muted-foreground mt-1">
-              Move costs between entities. Allocations net to zero at the
-              consolidated level.
+              Move amounts between entities or between accounts within the same
+              entity (reclass).
             </p>
           </div>
           <Button size="sm" onClick={handleAdd} disabled={!organizationId}>
@@ -667,25 +699,66 @@ export function AllocationTab({
                         className={alloc.is_excluded ? "opacity-50" : ""}
                       >
                         <TableCell className="text-xs">
-                          <div className="flex items-center gap-1">
-                            <span className="font-medium">
-                              {alloc.source_entity_code}
-                            </span>
-                            <ArrowRight className="h-3 w-3 text-muted-foreground shrink-0" />
-                            <span className="font-medium">
-                              {alloc.destination_entity_code}
-                            </span>
-                          </div>
-                          <span className="text-muted-foreground text-[11px]">
-                            {alloc.source_entity_name} →{" "}
-                            {alloc.destination_entity_name}
-                          </span>
+                          {alloc.destination_master_account_id ? (
+                            <>
+                              <div className="flex items-center gap-1">
+                                <span className="font-medium">
+                                  {alloc.source_entity_code}
+                                </span>
+                                <Badge
+                                  variant="secondary"
+                                  className="text-[9px] py-0"
+                                >
+                                  reclass
+                                </Badge>
+                              </div>
+                              <span className="text-muted-foreground text-[11px]">
+                                {alloc.source_entity_name}
+                              </span>
+                            </>
+                          ) : (
+                            <>
+                              <div className="flex items-center gap-1">
+                                <span className="font-medium">
+                                  {alloc.source_entity_code}
+                                </span>
+                                <ArrowRight className="h-3 w-3 text-muted-foreground shrink-0" />
+                                <span className="font-medium">
+                                  {alloc.destination_entity_code}
+                                </span>
+                              </div>
+                              <span className="text-muted-foreground text-[11px]">
+                                {alloc.source_entity_name} →{" "}
+                                {alloc.destination_entity_name}
+                              </span>
+                            </>
+                          )}
                         </TableCell>
                         <TableCell className="text-xs">
-                          <span className="font-medium">
-                            {alloc.master_account_number}
-                          </span>{" "}
-                          — {alloc.master_account_name}
+                          {alloc.destination_master_account_id ? (
+                            <div>
+                              <div className="flex items-center gap-1">
+                                <span className="font-medium">
+                                  {alloc.master_account_number}
+                                </span>
+                                <ArrowRight className="h-3 w-3 text-muted-foreground shrink-0" />
+                                <span className="font-medium">
+                                  {alloc.destination_master_account_number}
+                                </span>
+                              </div>
+                              <span className="text-muted-foreground text-[11px]">
+                                {alloc.master_account_name} →{" "}
+                                {alloc.destination_master_account_name}
+                              </span>
+                            </div>
+                          ) : (
+                            <>
+                              <span className="font-medium">
+                                {alloc.master_account_number}
+                              </span>{" "}
+                              — {alloc.master_account_name}
+                            </>
+                          )}
                         </TableCell>
                         <TableCell className="text-xs">
                           {alloc.schedule_type === "single_month" ? (
@@ -803,25 +876,25 @@ export function AllocationTab({
             <DialogDescription>
               {editingId
                 ? "Update the details of this allocation."
-                : "Move costs from one entity to another. The source entity will be reduced and the destination increased by the specified amount."}
+                : "Move amounts between entities, or between accounts within the same entity (reclass). Select the same entity for both source and destination to create a reclass."}
             </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4 py-2">
             {/* Source Entity - Searchable Combobox */}
             <div className="space-y-1.5">
-              <Label className="text-xs">Source Entity (costs move from)</Label>
+              <Label className="text-xs">
+                {isReclass ? "Entity" : "Source Entity (costs move from)"}
+              </Label>
               <SearchableCombobox
                 options={entityOptions}
                 value={formSourceEntityId}
                 onValueChange={(val) => {
                   setFormSourceEntityId(val);
-                  // Clear destination if it matches the new source
-                  if (val && val === formDestEntityId) {
-                    setFormDestEntityId("");
-                  }
+                  // If destination was set to the old source, keep it synced
+                  // (only for reclass mode continuity)
                 }}
-                placeholder="Search and select source entity..."
+                placeholder="Search and select entity..."
                 searchPlaceholder="Search entities..."
                 emptyMessage="No entities found."
               />
@@ -830,30 +903,65 @@ export function AllocationTab({
             {/* Destination Entity - Searchable Combobox */}
             <div className="space-y-1.5">
               <Label className="text-xs">
-                Destination Entity (costs move to)
+                Destination Entity{" "}
+                {isReclass ? "(same = reclass)" : "(costs move to)"}
               </Label>
               <SearchableCombobox
-                options={destEntityOptions}
+                options={entityOptions}
                 value={formDestEntityId}
-                onValueChange={setFormDestEntityId}
+                onValueChange={(val) => {
+                  setFormDestEntityId(val);
+                  // Clear dest master account if switching to inter-entity
+                  if (val !== formSourceEntityId) {
+                    setFormDestMasterAccountId("");
+                  }
+                }}
                 placeholder="Search and select destination entity..."
                 searchPlaceholder="Search entities..."
                 emptyMessage="No entities found."
               />
+              {isReclass && (
+                <p className="text-[11px] text-blue-600">
+                  Same entity selected — this is a reclass between accounts.
+                </p>
+              )}
             </div>
 
             {/* Master Account - Searchable Combobox */}
             <div className="space-y-1.5">
-              <Label className="text-xs">Master Account</Label>
+              <Label className="text-xs">
+                {isReclass ? "From Account (reduce)" : "Master Account"}
+              </Label>
               <SearchableCombobox
                 options={masterAccountOptions}
                 value={formMasterAccountId}
-                onValueChange={setFormMasterAccountId}
+                onValueChange={(val) => {
+                  setFormMasterAccountId(val);
+                  // Clear dest master account if it matches the new source
+                  if (val && val === formDestMasterAccountId) {
+                    setFormDestMasterAccountId("");
+                  }
+                }}
                 placeholder="Search and select master account..."
                 searchPlaceholder="Search by name or number..."
                 emptyMessage="No accounts found."
               />
             </div>
+
+            {/* Destination Master Account (reclass only) */}
+            {isReclass && (
+              <div className="space-y-1.5">
+                <Label className="text-xs">To Account (increase)</Label>
+                <SearchableCombobox
+                  options={destMasterAccountOptions}
+                  value={formDestMasterAccountId}
+                  onValueChange={setFormDestMasterAccountId}
+                  placeholder="Search and select destination account..."
+                  searchPlaceholder="Search by name or number..."
+                  emptyMessage="No accounts found."
+                />
+              </div>
+            )}
 
             {/* Schedule Type */}
             <div className="space-y-1.5">
@@ -1114,8 +1222,9 @@ export function AllocationTab({
                 className="h-8 text-xs"
               />
               <p className="text-[11px] text-muted-foreground">
-                This amount will be removed from the source entity and added to
-                the destination entity for the selected account.
+                {isReclass
+                  ? "This amount will be moved from the source account to the destination account within the same entity."
+                  : "This amount will be removed from the source entity and added to the destination entity for the selected account."}
               </p>
             </div>
 
