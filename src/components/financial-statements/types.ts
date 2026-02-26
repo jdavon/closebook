@@ -14,6 +14,21 @@ export interface Period {
   endYear: number;      // Year of the last month (may differ from year for fiscal years)
 }
 
+/** Metadata enabling cell drill-down to entity/account detail */
+export type DrillDownLineType = "account" | "section_total" | "computed" | "percentage" | "none";
+
+export interface DrillDownMeta {
+  type: DrillDownLineType;
+  /** For 'account': the single master_account_id this line represents */
+  masterAccountIds?: string[];
+  /** For 'section_total': the section config IDs to resolve */
+  sectionIds?: string[];
+  /** For 'computed': the formula with signed section references */
+  formula?: Array<{ sectionId: string; sign: 1 | -1 }>;
+  /** Which statement type (determines net_change vs ending_balance) */
+  statementType?: "income_statement" | "balance_sheet" | "cash_flow";
+}
+
 /** A single row in a financial statement */
 export interface LineItem {
   id: string;
@@ -32,6 +47,7 @@ export interface LineItem {
   isSeparator: boolean;     // Blank separator row
   showDollarSign: boolean;  // Show $ on this row
   varianceInvertColor?: boolean;  // When true, positive variance is unfavorable (expense items)
+  drillDownMeta?: DrillDownMeta;
 }
 
 /** A group of line items under a section header */
@@ -157,4 +173,52 @@ export interface EntityBreakdownResponse {
     startPeriod: string;
     endPeriod: string;
   };
+}
+
+// ---------------------------------------------------------------------------
+// Drill-down types
+// ---------------------------------------------------------------------------
+
+/** A single entity+account row in the drill-down detail */
+export interface DrillDownEntityRow {
+  entityId: string;
+  entityCode: string;
+  entityName: string;
+  accountId: string;
+  accountName: string;
+  accountNumber: string | null;
+  amount: number;
+}
+
+/** A group of entity rows for one master account */
+export interface DrillDownGroup {
+  masterAccountId: string;
+  masterAccountName: string;
+  masterAccountNumber: string | null;
+  /** Section label for computed-line grouping (e.g. "Revenue", "Direct Operating Costs") */
+  sectionLabel?: string;
+  /** Sign applied to this group in computed formulas (+1 or -1) */
+  sign: 1 | -1;
+  subtotal: number;
+  rows: DrillDownEntityRow[];
+}
+
+/** An adjustment row (pro forma or allocation) in the drill-down */
+export interface DrillDownAdjustmentRow {
+  type: "pro_forma" | "allocation";
+  entityName: string;
+  entityCode: string;
+  description: string;
+  amount: number;
+  sourceEntityName?: string;
+  destinationEntityName?: string;
+}
+
+/** Full response from the drill-down API */
+export interface DrillDownResponse {
+  lineLabel: string;
+  periodLabel: string;
+  total: number;
+  groups: DrillDownGroup[];
+  adjustments: DrillDownAdjustmentRow[];
 }

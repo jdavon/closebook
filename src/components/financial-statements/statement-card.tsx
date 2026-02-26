@@ -3,7 +3,7 @@
 import { Card, CardContent } from "@/components/ui/card";
 import { StatementHeader } from "./statement-header";
 import { StatementTable } from "./statement-table";
-import type { StatementData, Period, Granularity } from "./types";
+import type { StatementData, Period, Granularity, LineItem } from "./types";
 
 interface StatementCardProps {
   companyName: string;
@@ -18,6 +18,13 @@ interface StatementCardProps {
   endMonth: number;
   granularity: Granularity;
   pageBreak?: boolean;
+  onCellClick?: (
+    line: LineItem,
+    periodKey: string,
+    periodLabel: string,
+    columnType: "actual" | "budget",
+    amount: number
+  ) => void;
 }
 
 export function StatementCard({
@@ -33,6 +40,7 @@ export function StatementCard({
   endMonth,
   granularity,
   pageBreak = false,
+  onCellClick,
 }: StatementCardProps) {
   return (
     <div className={pageBreak ? "stmt-page-break" : undefined}>
@@ -52,6 +60,7 @@ export function StatementCard({
             periods={periods}
             showBudget={showBudget}
             showYoY={showYoY}
+            onCellClick={onCellClick}
           />
         </CardContent>
       </Card>

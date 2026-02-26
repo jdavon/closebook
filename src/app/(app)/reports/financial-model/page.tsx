@@ -16,6 +16,8 @@ import { getCurrentPeriod } from "@/lib/utils/dates";
 import { StatementCard } from "@/components/financial-statements/statement-card";
 import { ConfigToolbar } from "@/components/financial-statements/config-toolbar";
 import { useFinancialStatements } from "@/components/financial-statements/use-financial-statements";
+import { useDrillDown } from "@/components/financial-statements/use-drill-down";
+import { DrillDownDialog } from "@/components/financial-statements/drill-down-dialog";
 import { filterForEbitdaOnly } from "@/components/financial-statements/format-utils";
 import { ProFormaTab } from "@/components/financial-statements/pro-forma-tab";
 import { AllocationTab } from "@/components/financial-statements/allocation-tab";
@@ -26,6 +28,7 @@ import type {
   Scope,
   StatementTab,
   FinancialModelConfig,
+  LineItem,
 } from "@/components/financial-statements/types";
 
 interface Entity {
@@ -168,6 +171,19 @@ export default function FinancialModelPage() {
     (scope === "reporting_entity" && selectedReportingEntityId);
 
   const { data, loading, error } = useFinancialStatements(config, !!canFetch);
+  const drillDown = useDrillDown(config);
+
+  function handleCellClick(statementId: string) {
+    return (
+      line: LineItem,
+      periodKey: string,
+      periodLabel: string,
+      columnType: "actual" | "budget",
+      amount: number
+    ) => {
+      drillDown.openDrillDown(line, periodKey, periodLabel, columnType, amount, statementId);
+    };
+  }
 
   function buildExportUrl(statements: StatementTab) {
     const exportParams = new URLSearchParams({
@@ -403,6 +419,7 @@ export default function FinancialModelPage() {
               periods={data.periods}
               showBudget={includeBudget}
               showYoY={includeYoY}
+              onCellClick={handleCellClick("income_statement")}
             />
             {!ebitdaOnly && (
               <>
@@ -414,6 +431,7 @@ export default function FinancialModelPage() {
                   showBudget={includeBudget}
                   showYoY={includeYoY}
                   pageBreak
+                  onCellClick={handleCellClick("balance_sheet")}
                 />
                 <StatementCard
                   {...sharedCardProps}
@@ -423,6 +441,7 @@ export default function FinancialModelPage() {
                   showBudget={false}
                   showYoY={includeYoY}
                   pageBreak
+                  onCellClick={handleCellClick("cash_flow")}
                 />
               </>
             )}
@@ -437,6 +456,7 @@ export default function FinancialModelPage() {
               periods={data.periods}
               showBudget={includeBudget}
               showYoY={includeYoY}
+              onCellClick={handleCellClick("income_statement")}
             />
           </TabsContent>
 
@@ -449,6 +469,7 @@ export default function FinancialModelPage() {
               periods={data.periods}
               showBudget={includeBudget}
               showYoY={includeYoY}
+              onCellClick={handleCellClick("balance_sheet")}
             />
           </TabsContent>
 
@@ -461,6 +482,7 @@ export default function FinancialModelPage() {
               periods={data.periods}
               showBudget={false}
               showYoY={includeYoY}
+              onCellClick={handleCellClick("cash_flow")}
             />
           </TabsContent>
 
@@ -532,6 +554,18 @@ export default function FinancialModelPage() {
           )}
         </Tabs>
       )}
+
+      {/* Drill-down dialog */}
+      <DrillDownDialog
+        open={drillDown.isOpen}
+        onOpenChange={(open) => {
+          if (!open) drillDown.closeDrillDown();
+        }}
+        loading={drillDown.loading}
+        data={drillDown.data}
+        error={drillDown.error}
+        cellInfo={drillDown.cellInfo}
+      />
     </div>
   );
 }

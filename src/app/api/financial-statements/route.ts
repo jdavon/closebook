@@ -583,6 +583,7 @@ function buildStatement(
   const sectionPyTotals: Record<string, Record<string, number>> = {};
   const hasBudget = budgetByAccount && budgetByAccount.size > 0;
   const hasPY = !!pyAggregated;
+  const stmtType = statementId as "income_statement" | "balance_sheet" | "cash_flow";
 
   for (const config of sectionConfigs) {
     // Expense-classified sections: positive variance is unfavorable (over-budget)
@@ -668,6 +669,11 @@ function buildStatement(
         isSeparator: false,
         showDollarSign: lineIndex === 0,
         varianceInvertColor: isExpenseSection,
+        drillDownMeta: {
+          type: "account",
+          masterAccountIds: [account.id],
+          statementType: stmtType,
+        },
       });
       lineIndex++;
     }
@@ -690,6 +696,11 @@ function buildStatement(
       isSeparator: false,
       showDollarSign: true,
       varianceInvertColor: isExpenseSection,
+      drillDownMeta: {
+        type: "section_total",
+        sectionIds: [config.id],
+        statementType: stmtType,
+      },
     };
 
     sections.push({
@@ -762,6 +773,11 @@ function buildStatement(
           isHeader: false,
           isSeparator: false,
           showDollarSign: true,
+          drillDownMeta: {
+            type: "computed",
+            formula: comp.formula,
+            statementType: stmtType,
+          },
         },
       });
 
@@ -818,6 +834,7 @@ function buildStatement(
             isHeader: false,
             isSeparator: false,
             showDollarSign: false,
+            drillDownMeta: { type: "percentage" },
           },
         });
       }
@@ -863,6 +880,7 @@ function buildCashFlowStatement(
     isHeader: false,
     isSeparator: false,
     showDollarSign: true,
+    drillDownMeta: { type: "none" },
   });
 
   // Depreciation adjustment
@@ -889,6 +907,7 @@ function buildCashFlowStatement(
     isHeader: false,
     isSeparator: false,
     showDollarSign: false,
+    drillDownMeta: { type: "none" },
   });
 
   // Working capital changes header
@@ -956,6 +975,11 @@ function buildCashFlowStatement(
       isHeader: false,
       isSeparator: false,
       showDollarSign: false,
+      drillDownMeta: {
+        type: "account",
+        masterAccountIds: [account.id],
+        statementType: "cash_flow",
+      },
     });
   }
 
@@ -991,6 +1015,11 @@ function buildCashFlowStatement(
       isHeader: false,
       isSeparator: false,
       showDollarSign: false,
+      drillDownMeta: {
+        type: "account",
+        masterAccountIds: [account.id],
+        statementType: "cash_flow",
+      },
     });
   }
 
@@ -1055,6 +1084,11 @@ function buildCashFlowStatement(
       isHeader: false,
       isSeparator: false,
       showDollarSign: false,
+      drillDownMeta: {
+        type: "account",
+        masterAccountIds: [account.id],
+        statementType: "cash_flow",
+      },
     });
   }
 
@@ -1122,6 +1156,11 @@ function buildCashFlowStatement(
       isHeader: false,
       isSeparator: false,
       showDollarSign: false,
+      drillDownMeta: {
+        type: "account",
+        masterAccountIds: [account.id],
+        statementType: "cash_flow",
+      },
     });
   }
 

@@ -10,6 +10,13 @@ interface StatementTableProps {
   periods: Period[];
   showBudget?: boolean;
   showYoY?: boolean;
+  onCellClick?: (
+    line: LineItem,
+    periodKey: string,
+    periodLabel: string,
+    columnType: "actual" | "budget",
+    amount: number
+  ) => void;
 }
 
 export function StatementTable({
@@ -17,6 +24,7 @@ export function StatementTable({
   periods,
   showBudget = false,
   showYoY = false,
+  onCellClick,
 }: StatementTableProps) {
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(
     new Set()
@@ -181,16 +189,59 @@ export function StatementTable({
   // Determine stripe index for alternating row colors
   let stripeIndex = 0;
 
+  function isDrillable(line: LineItem): boolean {
+    const meta = line.drillDownMeta;
+    return !!meta && meta.type !== "percentage" && meta.type !== "none";
+  }
+
+  const drillableClass = onCellClick
+    ? "cursor-pointer hover:bg-accent/50 transition-colors"
+    : undefined;
+
   function renderPeriodCells(
     line: LineItem,
     renderFn: "amount" | "budget-row" | "subtotal" | "computed"
   ) {
+    const canDrill = isDrillable(line) && !!onCellClick;
+
     return periods.map((period) => (
       <>
-        <td key={period.key}>{renderAmount(line, period.key)}</td>
+        <td
+          key={period.key}
+          className={canDrill ? drillableClass : undefined}
+          onClick={
+            canDrill
+              ? () =>
+                  onCellClick!(
+                    line,
+                    period.key,
+                    period.label,
+                    "actual",
+                    line.amounts[period.key] ?? 0
+                  )
+              : undefined
+          }
+        >
+          {renderAmount(line, period.key)}
+        </td>
         {showBudget && (
           <>
-            <td key={`${period.key}-budget`}>
+            <td
+              key={`${period.key}-budget`}
+              className={canDrill ? drillableClass : undefined}
+              onClick={
+                canDrill
+                  ? () =>
+                      onCellClick!(
+                        line,
+                        period.key,
+                        period.label,
+                        "budget",
+                        line.budgetAmounts?.[period.key] ?? 0
+                      )
+                  : undefined
+              }
+            >
               {renderBudgetAmount(line, period.key)}
             </td>
             <td key={`${period.key}-var`}>
