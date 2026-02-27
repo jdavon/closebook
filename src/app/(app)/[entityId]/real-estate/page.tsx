@@ -45,6 +45,8 @@ import {
   calculateLeaseLiability,
   calculateROUAsset,
 } from "@/lib/utils/lease-calculations";
+import { getCurrentRent } from "@/lib/utils/lease-payments";
+import type { EscalationRule } from "@/lib/utils/lease-payments";
 import type { LeaseStatus, LeaseType, CriticalDateType, SubleaseStatus } from "@/lib/types/database";
 
 // --- Interfaces ---
@@ -141,9 +143,9 @@ const DATE_TYPE_LABELS: Record<CriticalDateType, string> = {
   custom: "Custom",
 };
 
-function totalMonthlyCost(lease: LeaseListItem): number {
+function totalMonthlyCost(lease: LeaseListItem, currentRentOverride?: number): number {
   return (
-    lease.base_rent_monthly +
+    (currentRentOverride ?? lease.base_rent_monthly) +
     lease.cam_monthly +
     lease.insurance_monthly +
     lease.property_tax_annual / 12 +
@@ -203,6 +205,7 @@ export default function RealEstatePage() {
   const supabase = createClient();
 
   const [leases, setLeases] = useState<LeaseListItem[]>([]);
+  const [escalationsByLease, setEscalationsByLease] = useState<Record<string, EscalationRule[]>>({});
   const [subleases, setSubleases] = useState<SubleaseListItem[]>([]);
   const [criticalDates, setCriticalDates] = useState<CriticalDateItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -246,11 +249,28 @@ export default function RealEstatePage() {
       .eq("entity_id", entityId)
       .order("sublease_name");
 
+    const escalationsQuery = supabase
+      .from("lease_escalations")
+      .select("lease_id, escalation_type, effective_date, percentage_increase, amount_increase, frequency")
+      .order("effective_date");
+
     const leasesResult = await leasesQuery;
     const datesResult = await datesQuery;
     const subleasesResult = await subleasesQuery;
+    const escalationsResult = await escalationsQuery;
+
+    // Build escalation map by lease_id
+    const escMap: Record<string, EscalationRule[]> = {};
+    if (escalationsResult.data) {
+      for (const row of escalationsResult.data) {
+        const lid = (row as { lease_id: string }).lease_id;
+        if (!escMap[lid]) escMap[lid] = [];
+        escMap[lid].push(row as unknown as EscalationRule);
+      }
+    }
 
     setLeases((leasesResult.data as unknown as LeaseListItem[]) ?? []);
+    setEscalationsByLease(escMap);
     setSubleases((subleasesResult.data as unknown as SubleaseListItem[]) ?? []);
     setCriticalDates((datesResult.data as unknown as CriticalDateItem[]) ?? []);
     setLoading(false);
@@ -274,8 +294,21 @@ export default function RealEstatePage() {
     return name.includes(q) || lessor.includes(q) || property.includes(q);
   });
 
+  // Compute current rent (after escalations) for each lease
+  const currentRentMap = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const l of leases) {
+      map[l.id] = getCurrentRent(l.base_rent_monthly, escalationsByLease[l.id] ?? []);
+    }
+    return map;
+  }, [leases, escalationsByLease]);
+
+  function leaseCurrentRent(lease: LeaseListItem): number {
+    return currentRentMap[lease.id] ?? lease.base_rent_monthly;
+  }
+
   const activeLeases = leases.filter((l) => l.status === "active");
-  const totalMonthly = activeLeases.reduce((s, l) => s + totalMonthlyCost(l), 0);
+  const totalMonthly = activeLeases.reduce((s, l) => s + totalMonthlyCost(l, leaseCurrentRent(l)), 0);
   const totalAnnual = totalMonthly * 12;
   const totalSF = activeLeases.reduce(
     (s, l) => s + (l.properties?.rentable_square_footage ?? 0),
@@ -621,10 +654,10 @@ export default function RealEstatePage() {
                             ).toLocaleDateString()}
                           </TableCell>
                           <TableCell className="text-right tabular-nums">
-                            {formatCurrency(lease.base_rent_monthly)}
+                            {formatCurrency(leaseCurrentRent(lease))}
                           </TableCell>
                           <TableCell className="text-right tabular-nums font-medium">
-                            {formatCurrency(totalMonthlyCost(lease))}
+                            {formatCurrency(totalMonthlyCost(lease, leaseCurrentRent(lease)))}
                           </TableCell>
                           <TableCell>
                             <Badge
@@ -654,7 +687,7 @@ export default function RealEstatePage() {
                         <TableCell className="text-right tabular-nums">
                           {formatCurrency(
                             filteredLeases.reduce(
-                              (s, l) => s + l.base_rent_monthly,
+                              (s, l) => s + leaseCurrentRent(l),
                               0
                             )
                           )}
@@ -662,7 +695,7 @@ export default function RealEstatePage() {
                         <TableCell className="text-right tabular-nums">
                           {formatCurrency(
                             filteredLeases.reduce(
-                              (s, l) => s + totalMonthlyCost(l),
+                              (s, l) => s + totalMonthlyCost(l, leaseCurrentRent(l)),
                               0
                             )
                           )}
@@ -718,7 +751,7 @@ export default function RealEstatePage() {
                           Math.ceil(days / 30.44)
                         );
                         const remainingCost =
-                          totalMonthlyCost(lease) * monthsRemaining;
+                          totalMonthlyCost(lease, leaseCurrentRent(lease)) * monthsRemaining;
                         return (
                           <TableRow key={lease.id}>
                             <TableCell className="font-medium">
@@ -749,7 +782,7 @@ export default function RealEstatePage() {
                               )}
                             </TableCell>
                             <TableCell className="text-right tabular-nums">
-                              {formatCurrency(totalMonthlyCost(lease))}
+                              {formatCurrency(totalMonthlyCost(lease, leaseCurrentRent(lease)))}
                             </TableCell>
                             <TableCell className="text-right tabular-nums">
                               {formatCurrency(remainingCost)}
@@ -856,7 +889,7 @@ export default function RealEstatePage() {
                               {lease.lease_term_months} mo
                             </TableCell>
                             <TableCell className="text-right tabular-nums">
-                              {formatCurrency(totalMonthlyCost(lease))}
+                              {formatCurrency(totalMonthlyCost(lease, leaseCurrentRent(lease)))}
                             </TableCell>
                             <TableCell className="text-right tabular-nums font-medium">
                               {formatCurrency(totalLifetimeCost(lease))}
@@ -935,7 +968,7 @@ export default function RealEstatePage() {
                       {(() => {
                         const totals = {
                           "Base Rent": activeLeases.reduce(
-                            (s, l) => s + l.base_rent_monthly,
+                            (s, l) => s + leaseCurrentRent(l),
                             0
                           ),
                           CAM: activeLeases.reduce(
