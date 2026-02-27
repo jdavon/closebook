@@ -413,6 +413,8 @@ export default function LeaseDetailPage() {
 
   // ASC 842 tab state
   const [asc842ShowJournalEntries, setAsc842ShowJournalEntries] = useState(false);
+  const [discountRateInput, setDiscountRateInput] = useState("");
+  const [savingDiscountRate, setSavingDiscountRate] = useState(false);
 
   // Document upload & AI extraction state
   const [uploadingDoc, setUploadingDoc] = useState(false);
@@ -513,6 +515,7 @@ export default function LeaseDetailPage() {
       setCamExpenseAccountId(l.cam_expense_account_id ?? "");
       setAsc842AdjustmentAccountId(l.asc842_adjustment_account_id ?? "");
       setCashApAccountId(l.cash_ap_account_id ?? "");
+      setDiscountRateInput(l.discount_rate > 0 ? String(l.discount_rate * 100) : "");
     }
 
     setPayments((paymentsResult.data as unknown as PaymentRow[]) ?? []);
@@ -550,6 +553,28 @@ export default function LeaseDetailPage() {
     if (error) toast.error(error.message);
     else toast.success("GL accounts updated");
     setSaving(false);
+  }
+
+  async function handleSaveDiscountRate() {
+    const pct = parseFloat(discountRateInput);
+    if (isNaN(pct) || pct <= 0) {
+      toast.error("Enter a valid discount rate (e.g. 5.5 for 5.5%)");
+      return;
+    }
+    setSavingDiscountRate(true);
+    const decimalRate = pct / 100;
+    const { error } = await supabase
+      .from("leases")
+      .update({ discount_rate: decimalRate })
+      .eq("id", leaseId);
+
+    if (error) {
+      toast.error(error.message);
+    } else {
+      toast.success("Discount rate updated");
+      loadData();
+    }
+    setSavingDiscountRate(false);
   }
 
   async function handleTogglePaid(paymentId: string, isPaid: boolean) {
@@ -2076,16 +2101,60 @@ export default function LeaseDetailPage() {
         <TabsContent value="asc842">
           {!asc842Data ? (
             <Card>
-              <CardContent className="py-8">
-                <p className="text-sm text-muted-foreground text-center">
-                  ASC 842 calculations require a discount rate (IBR) and lease
-                  term to be set. Update the lease&apos;s financial terms to
-                  generate the amortization schedule.
-                </p>
+              <CardHeader>
+                <CardTitle>Set Discount Rate (IBR)</CardTitle>
+                <CardDescription>
+                  ASC 842 calculations require a discount rate to generate the
+                  amortization schedule. Enter your incremental borrowing rate below.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="flex items-end gap-3 max-w-sm">
+                  <div className="flex-1 space-y-2">
+                    <Label htmlFor="discountRateSetup">Discount Rate (%)</Label>
+                    <Input
+                      id="discountRateSetup"
+                      type="number"
+                      step="0.01"
+                      placeholder="e.g. 5.5"
+                      value={discountRateInput}
+                      onChange={(e) => setDiscountRateInput(e.target.value)}
+                    />
+                  </div>
+                  <Button
+                    onClick={handleSaveDiscountRate}
+                    disabled={savingDiscountRate || !discountRateInput}
+                  >
+                    {savingDiscountRate ? "Saving..." : "Generate Schedule"}
+                  </Button>
+                </div>
               </CardContent>
             </Card>
           ) : (
             <div className="space-y-6">
+              {/* Discount Rate adjuster */}
+              <div className="flex items-end gap-3">
+                <div className="space-y-2">
+                  <Label htmlFor="discountRateEdit">Discount Rate / IBR (%)</Label>
+                  <Input
+                    id="discountRateEdit"
+                    type="number"
+                    step="0.01"
+                    className="w-40"
+                    value={discountRateInput}
+                    onChange={(e) => setDiscountRateInput(e.target.value)}
+                  />
+                </div>
+                <Button
+                  size="sm"
+                  onClick={handleSaveDiscountRate}
+                  disabled={savingDiscountRate || !discountRateInput || parseFloat(discountRateInput) === lease.discount_rate * 100}
+                >
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                  {savingDiscountRate ? "Recalculating..." : "Recalculate"}
+                </Button>
+              </div>
+
               {/* Summary cards */}
               <div className="grid grid-cols-2 gap-6 lg:grid-cols-4">
                 <Card>
