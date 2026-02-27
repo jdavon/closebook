@@ -29,6 +29,15 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -49,10 +58,12 @@ import {
   Upload,
   Calendar,
   Check,
+  ChevronsUpDown,
   FileText,
   Users,
 } from "lucide-react";
 import Link from "next/link";
+import { cn } from "@/lib/utils";
 import {
   formatCurrency,
   formatPercentage,
@@ -363,6 +374,9 @@ export default function LeaseDetailPage() {
   const [leaseExpenseAccountId, setLeaseExpenseAccountId] = useState("");
   const [interestExpenseAccountId, setInterestExpenseAccountId] = useState("");
   const [camExpenseAccountId, setCamExpenseAccountId] = useState("");
+
+  // GL account combobox open states
+  const [glPopoverOpen, setGlPopoverOpen] = useState<Record<string, boolean>>({});
 
   // Sheet states
   const [escalationSheetOpen, setEscalationSheetOpen] = useState(false);
@@ -1007,23 +1021,64 @@ export default function LeaseDetailPage() {
     onChange: (v: string) => void,
     accountList: Account[]
   ) {
+    const selected = accountList.find((a) => a.id === value);
+    const open = glPopoverOpen[id] ?? false;
+    const setOpen = (v: boolean) =>
+      setGlPopoverOpen((prev) => ({ ...prev, [id]: v }));
     return (
       <div className="space-y-2">
         <Label htmlFor={id}>{label}</Label>
-        <Select value={value} onValueChange={onChange}>
-          <SelectTrigger id={id}>
-            <SelectValue placeholder="Select account..." />
-          </SelectTrigger>
-          <SelectContent>
-            {accountList.map((account) => (
-              <SelectItem key={account.id} value={account.id}>
-                {account.account_number
-                  ? `${account.account_number} - ${account.name}`
-                  : account.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <Popover open={open} onOpenChange={setOpen}>
+          <PopoverTrigger asChild>
+            <Button
+              id={id}
+              variant="outline"
+              role="combobox"
+              aria-expanded={open}
+              className="w-full justify-between font-normal"
+            >
+              {selected
+                ? selected.account_number
+                  ? `${selected.account_number} - ${selected.name}`
+                  : selected.name
+                : "Select account..."}
+              <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
+            <Command>
+              <CommandInput placeholder="Search accounts..." />
+              <CommandList>
+                <CommandEmpty>No account found.</CommandEmpty>
+                <CommandGroup>
+                  {accountList.map((account) => {
+                    const display = account.account_number
+                      ? `${account.account_number} - ${account.name}`
+                      : account.name;
+                    return (
+                      <CommandItem
+                        key={account.id}
+                        value={display}
+                        onSelect={() => {
+                          onChange(account.id === value ? "" : account.id);
+                          setOpen(false);
+                        }}
+                      >
+                        <Check
+                          className={cn(
+                            "mr-2 h-4 w-4",
+                            value === account.id ? "opacity-100" : "opacity-0"
+                          )}
+                        />
+                        {display}
+                      </CommandItem>
+                    );
+                  })}
+                </CommandGroup>
+              </CommandList>
+            </Command>
+          </PopoverContent>
+        </Popover>
       </div>
     );
   }
