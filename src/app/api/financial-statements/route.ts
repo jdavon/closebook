@@ -304,6 +304,7 @@ function aggregateBudgetByBucket(
 // ---------------------------------------------------------------------------
 
 interface RawProFormaAdjustment {
+  entity_id: string;
   master_account_id: string;
   offset_master_account_id: string | null;
   period_year: number;
@@ -1808,9 +1809,10 @@ async function buildConsolidatedStatements(params: ConsolidatedStatementsParams)
     proFormaRows = await fetchAllPaginated<RawProFormaAdjustment>((offset, limit) =>
       (admin as any)
         .from("pro_forma_adjustments")
-        .select("master_account_id, offset_master_account_id, period_year, period_month, amount, description")
+        .select("entity_id, master_account_id, offset_master_account_id, period_year, period_month, amount, description")
         .eq("organization_id", organizationId)
         .eq("is_excluded", false)
+        .in("entity_id", entityIds)
         .range(offset, offset + limit - 1)
     );
 
