@@ -39,6 +39,7 @@ export function useFinancialStatements(
       includeYoY: String(config.includeYoY),
       includeProForma: String(config.includeProForma),
       includeAllocations: String(config.includeAllocations),
+      includeTotal: String(config.includeTotal),
     });
 
     if (config.entityId) params.set("entityId", config.entityId);
@@ -96,6 +97,7 @@ export function useFinancialStatements(
     config.includeYoY,
     config.includeProForma,
     config.includeAllocations,
+    config.includeTotal,
     fetchCount,
   ]);
 

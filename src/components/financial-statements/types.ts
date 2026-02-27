@@ -13,6 +13,7 @@ export interface Period {
   startMonth: number;   // First month in the period (1-12)
   endMonth: number;     // Last month in the period (1-12)
   endYear: number;      // Year of the last month (may differ from year for fiscal years)
+  isTotal?: boolean;    // True for the synthetic "Total" column
 }
 
 /** Metadata enabling cell drill-down to entity/account detail */
@@ -99,6 +100,7 @@ export interface FinancialModelConfig {
   includeYoY: boolean;
   includeProForma: boolean;
   includeAllocations: boolean;
+  includeTotal: boolean;
 }
 
 /** A pro forma adjustment row from the database */
@@ -107,6 +109,7 @@ export interface ProFormaAdjustment {
   organization_id: string;
   entity_id: string;
   master_account_id: string;
+  offset_master_account_id: string | null;
   period_year: number;
   period_month: number;
   amount: number;
@@ -121,6 +124,8 @@ export interface ProFormaAdjustment {
   entity_code?: string;
   master_account_name?: string;
   master_account_number?: string;
+  offset_master_account_name?: string;
+  offset_master_account_number?: string;
 }
 
 /** An allocation adjustment row from the database */

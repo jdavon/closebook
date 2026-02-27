@@ -29,6 +29,7 @@ export default function FinancialStatementsPage() {
   const [granularity, setGranularity] = useState<Granularity>("monthly");
   const [includeBudget, setIncludeBudget] = useState(false);
   const [includeYoY, setIncludeYoY] = useState(false);
+  const [includeTotal, setIncludeTotal] = useState(false);
   const [ebitdaOnly, setEbitdaOnly] = useState(false);
   const [activeTab, setActiveTab] = useState<StatementTab>("all");
 
@@ -44,6 +45,7 @@ export default function FinancialStatementsPage() {
     includeYoY,
     includeProForma: false,
     includeAllocations: false,
+    includeTotal,
   };
 
   const { data, loading, error } = useFinancialStatements(config);
@@ -59,6 +61,7 @@ export default function FinancialStatementsPage() {
       granularity,
       includeBudget: String(includeBudget),
       includeYoY: String(includeYoY),
+      includeTotal: String(includeTotal),
       statements,
     });
     return `/api/financial-statements/export?${exportParams.toString()}`;
@@ -116,6 +119,7 @@ export default function FinancialStatementsPage() {
         includeBudget={includeBudget}
         includeYoY={includeYoY}
         ebitdaOnly={ebitdaOnly}
+        includeTotal={includeTotal}
         onStartYearChange={setStartYear}
         onStartMonthChange={setStartMonth}
         onEndYearChange={setEndYear}
@@ -124,6 +128,7 @@ export default function FinancialStatementsPage() {
         onIncludeBudgetChange={setIncludeBudget}
         onIncludeYoYChange={setIncludeYoY}
         onEbitdaOnlyChange={setEbitdaOnly}
+        onIncludeTotalChange={setIncludeTotal}
         onExport={handleExport}
         onExportAll={handleExportAll}
         onPrint={handlePrint}

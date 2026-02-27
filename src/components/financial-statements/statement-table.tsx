@@ -127,8 +127,12 @@ export function StatementTable({
     );
   }
 
-  // Last period key for YoY comparison columns
-  const lastPeriodKey = periods[periods.length - 1]?.key ?? "";
+  // Last non-total period key for YoY comparison columns
+  const lastNonTotalPeriod = [...periods].reverse().find((p) => !p.isTotal);
+  const lastPeriodKey = lastNonTotalPeriod?.key ?? "";
+
+  // CSS class for total column visual separation
+  const totalBorderClass = "border-l-2 border-border";
 
   function renderYoYCells(line: LineItem) {
     const isMargin = line.id.endsWith("_pct");
@@ -229,53 +233,60 @@ export function StatementTable({
   ) {
     const canDrill = isDrillable(line) && !!onCellClick;
 
-    return periods.map((period) => (
-      <>
-        <td
-          key={period.key}
-          className={canDrill ? drillableClass : undefined}
-          onClick={
-            canDrill
-              ? () =>
-                  onCellClick!(
-                    line,
-                    period.key,
-                    period.label,
-                    "actual",
-                    line.amounts[period.key] ?? 0
-                  )
-              : undefined
-          }
-        >
-          {renderAmount(line, period.key)}
-        </td>
-        {showBudget && (
-          <>
-            <td
-              key={`${period.key}-budget`}
-              className={canDrill ? drillableClass : undefined}
-              onClick={
-                canDrill
-                  ? () =>
-                      onCellClick!(
-                        line,
-                        period.key,
-                        period.label,
-                        "budget",
-                        line.budgetAmounts?.[period.key] ?? 0
-                      )
-                  : undefined
-              }
-            >
-              {renderBudgetAmount(line, period.key)}
-            </td>
-            <td key={`${period.key}-var`}>
-              {renderVariance(line, period.key)}
-            </td>
-          </>
-        )}
-      </>
-    ));
+    return periods.map((period) => {
+      const isTotalCol = period.isTotal;
+      const borderCls = isTotalCol ? totalBorderClass : "";
+      const drillCls = canDrill ? drillableClass : "";
+      const actualCls = [borderCls, drillCls].filter(Boolean).join(" ") || undefined;
+
+      return (
+        <>
+          <td
+            key={period.key}
+            className={actualCls}
+            onClick={
+              canDrill
+                ? () =>
+                    onCellClick!(
+                      line,
+                      period.key,
+                      period.label,
+                      "actual",
+                      line.amounts[period.key] ?? 0
+                    )
+                : undefined
+            }
+          >
+            {renderAmount(line, period.key)}
+          </td>
+          {showBudget && (
+            <>
+              <td
+                key={`${period.key}-budget`}
+                className={canDrill ? drillableClass : undefined}
+                onClick={
+                  canDrill
+                    ? () =>
+                        onCellClick!(
+                          line,
+                          period.key,
+                          period.label,
+                          "budget",
+                          line.budgetAmounts?.[period.key] ?? 0
+                        )
+                    : undefined
+                }
+              >
+                {renderBudgetAmount(line, period.key)}
+              </td>
+              <td key={`${period.key}-var`}>
+                {renderVariance(line, period.key)}
+              </td>
+            </>
+          )}
+        </>
+      );
+    });
   }
 
   return (
@@ -286,7 +297,10 @@ export function StatementTable({
             <th className="min-w-[280px]"></th>
             {periods.map((period) => (
               <>
-                <th key={period.key} className="min-w-[110px]">
+                <th
+                  key={period.key}
+                  className={`min-w-[110px]${period.isTotal ? ` ${totalBorderClass} font-bold` : ""}`}
+                >
                   {period.label}
                 </th>
                 {showBudget && (
@@ -491,9 +505,10 @@ export function StatementTable({
                   {periods.map((period) => {
                     const diff = (totalAssets.amounts[period.key] ?? 0) - (totalLE.amounts[period.key] ?? 0);
                     const isOff = Math.abs(diff) >= 0.5;
+                    const checkBorderCls = period.isTotal ? ` ${totalBorderClass}` : "";
                     return (
                       <>
-                        <td key={period.key} className={isOff ? "text-red-600 font-medium" : "text-muted-foreground"}>
+                        <td key={period.key} className={`${isOff ? "text-red-600 font-medium" : "text-muted-foreground"}${checkBorderCls}`}>
                           {isOff ? formatStatementAmount(diff, true) : "$\u2014"}
                         </td>
                         {showBudget && (

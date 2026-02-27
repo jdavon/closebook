@@ -70,6 +70,7 @@ export default function FinancialModelPage() {
   const [includeYoY, setIncludeYoY] = useState(false);
   const [includeProForma, setIncludeProForma] = useState(false);
   const [includeAllocations, setIncludeAllocations] = useState(false);
+  const [includeTotal, setIncludeTotal] = useState(false);
   const [ebitdaOnly, setEbitdaOnly] = useState(false);
   const [varianceDisplay, setVarianceDisplay] = useState<VarianceDisplayMode>("dollars");
   const [activeTab, setActiveTab] = useState<StatementTab>("all");
@@ -175,6 +176,7 @@ export default function FinancialModelPage() {
     includeYoY,
     includeProForma,
     includeAllocations,
+    includeTotal,
   };
 
   // Only fetch when loadOrg is done and we have the IDs we need
@@ -211,6 +213,7 @@ export default function FinancialModelPage() {
       includeYoY: String(includeYoY),
       includeProForma: String(includeProForma),
       includeAllocations: String(includeAllocations),
+      includeTotal: String(includeTotal),
       statements,
     });
     if (scope === "entity" && selectedEntityId) {
@@ -358,6 +361,7 @@ export default function FinancialModelPage() {
         includeProForma={includeProForma}
         includeAllocations={includeAllocations}
         ebitdaOnly={ebitdaOnly}
+        includeTotal={includeTotal}
         onStartYearChange={setStartYear}
         onStartMonthChange={setStartMonth}
         onEndYearChange={setEndYear}
@@ -368,6 +372,7 @@ export default function FinancialModelPage() {
         onIncludeProFormaChange={setIncludeProForma}
         onIncludeAllocationsChange={setIncludeAllocations}
         onEbitdaOnlyChange={setEbitdaOnly}
+        onIncludeTotalChange={setIncludeTotal}
         varianceDisplay={varianceDisplay}
         onVarianceDisplayChange={setVarianceDisplay}
         onExport={handleExport}

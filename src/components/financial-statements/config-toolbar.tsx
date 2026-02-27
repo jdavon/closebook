@@ -41,6 +41,7 @@ interface ConfigToolbarProps {
   includeProForma?: boolean;
   includeAllocations?: boolean;
   ebitdaOnly?: boolean;
+  includeTotal?: boolean;
   onStartYearChange: (year: number) => void;
   onStartMonthChange: (month: number) => void;
   onEndYearChange: (year: number) => void;
@@ -51,6 +52,7 @@ interface ConfigToolbarProps {
   onIncludeProFormaChange?: (val: boolean) => void;
   onIncludeAllocationsChange?: (val: boolean) => void;
   onEbitdaOnlyChange?: (val: boolean) => void;
+  onIncludeTotalChange?: (val: boolean) => void;
   varianceDisplay?: VarianceDisplayMode;
   onVarianceDisplayChange?: (mode: VarianceDisplayMode) => void;
   onExport: () => void;
@@ -78,6 +80,7 @@ export function ConfigToolbar({
   includeProForma,
   includeAllocations,
   ebitdaOnly,
+  includeTotal,
   onStartYearChange,
   onStartMonthChange,
   onEndYearChange,
@@ -88,6 +91,7 @@ export function ConfigToolbar({
   onIncludeProFormaChange,
   onIncludeAllocationsChange,
   onEbitdaOnlyChange,
+  onIncludeTotalChange,
   varianceDisplay = "dollars",
   onVarianceDisplayChange,
   onExport,
@@ -244,6 +248,17 @@ export function ConfigToolbar({
               }
             />
             EBITDA Only
+          </label>
+        )}
+        {onIncludeTotalChange && (
+          <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+            <Checkbox
+              checked={includeTotal ?? false}
+              onCheckedChange={(checked) =>
+                onIncludeTotalChange(checked === true)
+              }
+            />
+            Total
           </label>
         )}
         {(includeBudget || includeYoY) && onVarianceDisplayChange && (

@@ -305,20 +305,23 @@ function aggregateBudgetByBucket(
 
 interface RawProFormaAdjustment {
   master_account_id: string;
+  offset_master_account_id: string | null;
   period_year: number;
   period_month: number;
   amount: number;
+  description: string;
 }
 
 /**
- * Inject pro forma adjustments into consolidatedBalances.
- * Each adjustment adds to net_change (and ending_balance) for the
- * matching master account + period. If no existing balance row exists
- * for that account/period, a new one is created.
+ * Inject pro forma adjustments into consolidatedBalances (double-entry).
+ * Each adjustment adds +amount to the primary master account and
+ * -amount to the offset master account (when specified) for the
+ * matching period. If no existing balance row exists for an
+ * account/period, a new one is created.
  */
 function injectProFormaAdjustments(
   consolidatedBalances: RawGLBalance[],
-  adjustments: RawProFormaAdjustment[],
+  adjustments: Array<{ master_account_id: string; period_year: number; period_month: number; amount: number; offset_master_account_id?: string | null }>,
   entityId: string
 ): void {
   const balIndex = new Map<string, RawGLBalance>();
@@ -326,24 +329,34 @@ function injectProFormaAdjustments(
     balIndex.set(`${b.account_id}-${b.period_year}-${b.period_month}`, b);
   }
 
-  for (const adj of adjustments) {
-    const key = `${adj.master_account_id}-${adj.period_year}-${adj.period_month}`;
+  function injectAmount(accountId: string, year: number, month: number, amount: number) {
+    const key = `${accountId}-${year}-${month}`;
     const existing = balIndex.get(key);
     if (existing) {
-      existing.net_change += Number(adj.amount);
-      existing.ending_balance += Number(adj.amount);
+      existing.net_change += amount;
+      existing.ending_balance += amount;
     } else {
       const newBal: RawGLBalance = {
-        account_id: adj.master_account_id,
+        account_id: accountId,
         entity_id: entityId,
-        period_year: Number(adj.period_year),
-        period_month: Number(adj.period_month),
+        period_year: year,
+        period_month: month,
         beginning_balance: 0,
-        ending_balance: Number(adj.amount),
-        net_change: Number(adj.amount),
+        ending_balance: amount,
+        net_change: amount,
       };
       consolidatedBalances.push(newBal);
       balIndex.set(key, newBal);
+    }
+  }
+
+  for (const adj of adjustments) {
+    const amount = Number(adj.amount);
+    // Primary side
+    injectAmount(adj.master_account_id, Number(adj.period_year), Number(adj.period_month), amount);
+    // Offset side (double-entry counterpart)
+    if (adj.offset_master_account_id) {
+      injectAmount(adj.offset_master_account_id, Number(adj.period_year), Number(adj.period_month), -amount);
     }
   }
 }
@@ -358,6 +371,7 @@ interface RawAllocationAdjustment {
   master_account_id: string;
   destination_master_account_id: string | null;
   amount: number;
+  description: string;
   schedule_type: string;
   period_year: number | null;
   period_month: number | null;
@@ -1000,6 +1014,121 @@ function injectNetIncomeIntoBalanceSheet(
 }
 
 // ---------------------------------------------------------------------------
+// Cash flow supplemental section types and helpers
+// ---------------------------------------------------------------------------
+
+/** A single adjustment entry for the cash flow supplemental section */
+interface CashFlowSupplementalEntry {
+  description: string;
+  primaryAccountId: string;
+  offsetAccountId: string;
+  periodYear: number;
+  periodMonth: number;
+  amount: number;
+}
+
+/**
+ * Compute the net cash impact of a double-entry adjustment.
+ * If either account is a Bank (cash) type, there is a real cash impact.
+ * Otherwise the adjustment is non-cash and the net impact is $0.
+ */
+function computeNetCashImpact(
+  amount: number,
+  primaryAccountType: string,
+  offsetAccountType: string
+): number {
+  const primaryIsBank = CASH_ACCOUNT_TYPES.includes(primaryAccountType);
+  const offsetIsBank = CASH_ACCOUNT_TYPES.includes(offsetAccountType);
+
+  if (primaryIsBank && offsetIsBank) return 0;
+  if (primaryIsBank) return amount;      // Debit to cash = cash increases
+  if (offsetIsBank) return -amount;      // Credit to cash = cash decreases
+  return 0;                              // Neither is cash — non-cash adjustment
+}
+
+/**
+ * Build supplemental entries for intra-entity reclass allocations.
+ * Inter-entity transfers net to zero at consolidated level and are omitted.
+ */
+function buildAllocationSupplementalEntries(
+  allocRows: RawAllocationAdjustment[],
+  buckets: PeriodBucket[]
+): CashFlowSupplementalEntry[] {
+  const entries: CashFlowSupplementalEntry[] = [];
+
+  for (const alloc of allocRows) {
+    // Only include intra-entity reclass (same entity, different accounts)
+    if (!alloc.destination_master_account_id) continue;
+    if (alloc.source_entity_id !== alloc.destination_entity_id) continue;
+
+    const totalAmount = Number(alloc.amount);
+
+    // Determine which months this allocation covers
+    if (alloc.schedule_type === "single_month") {
+      if (alloc.period_year == null || alloc.period_month == null) continue;
+
+      if (alloc.is_repeating && alloc.repeat_end_year != null && alloc.repeat_end_month != null) {
+        const totalMonths =
+          (alloc.repeat_end_year - alloc.period_year) * 12 +
+          (alloc.repeat_end_month - alloc.period_month) + 1;
+        if (totalMonths < 1) continue;
+        let y = alloc.period_year;
+        let m = alloc.period_month;
+        for (let i = 0; i < totalMonths; i++) {
+          entries.push({
+            description: alloc.description,
+            primaryAccountId: alloc.master_account_id,
+            offsetAccountId: alloc.destination_master_account_id,
+            periodYear: y,
+            periodMonth: m,
+            amount: totalAmount,
+          });
+          m++;
+          if (m > 12) { m = 1; y++; }
+        }
+      } else {
+        entries.push({
+          description: alloc.description,
+          primaryAccountId: alloc.master_account_id,
+          offsetAccountId: alloc.destination_master_account_id,
+          periodYear: alloc.period_year,
+          periodMonth: alloc.period_month,
+          amount: totalAmount,
+        });
+      }
+    } else if (alloc.schedule_type === "monthly_spread") {
+      if (
+        alloc.start_year == null || alloc.start_month == null ||
+        alloc.end_year == null || alloc.end_month == null
+      ) continue;
+
+      const totalMonths =
+        (alloc.end_year - alloc.start_year) * 12 +
+        (alloc.end_month - alloc.start_month) + 1;
+      if (totalMonths < 1) continue;
+
+      const monthlyAmount = totalAmount / totalMonths;
+      let y = alloc.start_year;
+      let m = alloc.start_month;
+      for (let i = 0; i < totalMonths; i++) {
+        entries.push({
+          description: alloc.description,
+          primaryAccountId: alloc.master_account_id,
+          offsetAccountId: alloc.destination_master_account_id,
+          periodYear: y,
+          periodMonth: m,
+          amount: monthlyAmount,
+        });
+        m++;
+        if (m > 12) { m = 1; y++; }
+      }
+    }
+  }
+
+  return entries;
+}
+
+// ---------------------------------------------------------------------------
 // Helper: build cash flow statement (indirect method)
 // ---------------------------------------------------------------------------
 
@@ -1011,7 +1140,8 @@ function buildCashFlowStatement(
   netIncomeByBucket: Record<string, number>,
   pyAggregated?: Map<string, BucketedAmounts>,
   pyDepreciationByBucket?: Record<string, number>,
-  pyNetIncomeByBucket?: Record<string, number>
+  pyNetIncomeByBucket?: Record<string, number>,
+  supplementalEntries?: CashFlowSupplementalEntry[]
 ): StatementData {
   const sections: StatementSection[] = [];
   const hasPY = !!pyAggregated;
@@ -1422,6 +1552,86 @@ function buildCashFlowStatement(
     },
   });
 
+  // --- PRO FORMA / ALLOCATION SUPPLEMENTAL SECTION ---
+  if (supplementalEntries && supplementalEntries.length > 0) {
+    const accountTypeMap = new Map(accounts.map((a) => [a.id, a.accountType]));
+    const supplementalLines: LineItem[] = [];
+
+    // Group entries by description to aggregate amounts into buckets
+    const grouped = new Map<string, { entry: CashFlowSupplementalEntry; amounts: Record<string, number> }>();
+
+    for (const entry of supplementalEntries) {
+      const primaryType = accountTypeMap.get(entry.primaryAccountId);
+      const offsetType = accountTypeMap.get(entry.offsetAccountId);
+      if (!primaryType || !offsetType) continue;
+
+      const cashImpact = computeNetCashImpact(entry.amount, primaryType, offsetType);
+
+      // Find which bucket this entry falls into
+      for (const bucket of buckets) {
+        const inBucket = bucket.months.some(
+          (m) => m.year === entry.periodYear && m.month === entry.periodMonth
+        );
+        if (!inBucket) continue;
+
+        const groupKey = `${entry.description}|${entry.primaryAccountId}|${entry.offsetAccountId}`;
+        let group = grouped.get(groupKey);
+        if (!group) {
+          group = { entry, amounts: {} };
+          for (const b of buckets) group.amounts[b.key] = 0;
+          grouped.set(groupKey, group);
+        }
+        group.amounts[bucket.key] += cashImpact;
+      }
+    }
+
+    for (const [, group] of grouped) {
+      // Skip entries with zero impact in all buckets
+      const hasAnyAmount = Object.values(group.amounts).some((v) => v !== 0);
+      if (!hasAnyAmount) continue;
+
+      supplementalLines.push({
+        id: `cf-pf-${group.entry.primaryAccountId}-${group.entry.offsetAccountId}`,
+        label: group.entry.description,
+        amounts: group.amounts,
+        indent: 1,
+        isTotal: false,
+        isGrandTotal: false,
+        isHeader: false,
+        isSeparator: false,
+        showDollarSign: false,
+        drillDownMeta: { type: "none" },
+      });
+    }
+
+    if (supplementalLines.length > 0) {
+      const pfTotal: Record<string, number> = {};
+      for (const bucket of buckets) {
+        pfTotal[bucket.key] = supplementalLines.reduce(
+          (sum, line) => sum + (line.amounts[bucket.key] ?? 0),
+          0
+        );
+      }
+
+      sections.push({
+        id: "cf-pro-forma",
+        title: "PRO FORMA ADJUSTMENTS",
+        lines: supplementalLines,
+        subtotalLine: {
+          id: "cf-pro-forma-total",
+          label: "Net pro forma cash impact",
+          amounts: pfTotal,
+          indent: 0,
+          isTotal: true,
+          isGrandTotal: false,
+          isHeader: false,
+          isSeparator: false,
+          showDollarSign: true,
+        },
+      });
+    }
+  }
+
   return {
     id: "cash_flow",
     title: "Statement of Cash Flows",
@@ -1593,11 +1803,12 @@ async function buildConsolidatedStatements(params: ConsolidatedStatementsParams)
   }
 
   // Pro Forma Adjustments (paginated to avoid row-limit truncation)
+  let proFormaRows: RawProFormaAdjustment[] = [];
   if (includeProForma) {
-    const proFormaRows = await fetchAllPaginated<RawProFormaAdjustment>((offset, limit) =>
+    proFormaRows = await fetchAllPaginated<RawProFormaAdjustment>((offset, limit) =>
       (admin as any)
         .from("pro_forma_adjustments")
-        .select("master_account_id, period_year, period_month, amount")
+        .select("master_account_id, offset_master_account_id, period_year, period_month, amount, description")
         .eq("organization_id", organizationId)
         .eq("is_excluded", false)
         .range(offset, offset + limit - 1)
@@ -1613,11 +1824,12 @@ async function buildConsolidatedStatements(params: ConsolidatedStatementsParams)
   }
 
   // Allocation Adjustments (org/RE scope — net zero at consolidated level, paginated)
+  let allocReclassEntries: CashFlowSupplementalEntry[] = [];
   if (includeAllocations) {
     const allocRows = await fetchAllPaginated<RawAllocationAdjustment>((offset, limit) =>
       (admin as any)
         .from("allocation_adjustments")
-        .select("source_entity_id, destination_entity_id, master_account_id, destination_master_account_id, amount, schedule_type, period_year, period_month, start_year, start_month, end_year, end_month, is_repeating, repeat_end_year, repeat_end_month")
+        .select("source_entity_id, destination_entity_id, master_account_id, destination_master_account_id, amount, description, schedule_type, period_year, period_month, start_year, start_month, end_year, end_month, is_repeating, repeat_end_year, repeat_end_month")
         .eq("organization_id", organizationId)
         .eq("is_excluded", false)
         .range(offset, offset + limit - 1)
@@ -1631,6 +1843,10 @@ async function buildConsolidatedStatements(params: ConsolidatedStatementsParams)
       const entityIdSet = new Set(entityIds);
       const filtered = expanded.filter((e) => entityIdSet.has(e.entity_id));
       injectAllocationAdjustments(consolidatedBalances, filtered, "consolidated");
+
+      // Build supplemental entries for intra-entity reclass allocations
+      // (inter-entity transfers net to zero at consolidated and are omitted)
+      allocReclassEntries = buildAllocationSupplementalEntries(allocRows, buckets);
     }
   }
 
@@ -1793,6 +2009,21 @@ async function buildConsolidatedStatements(params: ConsolidatedStatementsParams)
     pyAggregated
   );
 
+  // Build supplemental entries for cash flow pro forma section
+  const cfSupplementalEntries: CashFlowSupplementalEntry[] = [
+    ...proFormaRows
+      .filter((pf) => pf.offset_master_account_id)
+      .map((pf) => ({
+        description: pf.description,
+        primaryAccountId: pf.master_account_id,
+        offsetAccountId: pf.offset_master_account_id!,
+        periodYear: Number(pf.period_year),
+        periodMonth: Number(pf.period_month),
+        amount: Number(pf.amount),
+      })),
+    ...allocReclassEntries,
+  ];
+
   const cashFlowStatement = buildCashFlowStatement(
     consolidatedAccounts,
     aggregated,
@@ -1801,7 +2032,8 @@ async function buildConsolidatedStatements(params: ConsolidatedStatementsParams)
     netIncomeByBucket,
     includeYoY ? pyAggregated : undefined,
     includeYoY ? pyDepreciationByBucket : undefined,
-    includeYoY ? pyNetIncomeByBucket : undefined
+    includeYoY ? pyNetIncomeByBucket : undefined,
+    cfSupplementalEntries.length > 0 ? cfSupplementalEntries : undefined
   );
 
   const periods: Period[] = buckets.map((b) => ({
@@ -1811,6 +2043,7 @@ async function buildConsolidatedStatements(params: ConsolidatedStatementsParams)
     startMonth: b.startMonth,
     endMonth: b.endMonth,
     endYear: b.endYear,
+    ...(b.key === "TOTAL" ? { isTotal: true } : {}),
   }));
 
   return {
@@ -1849,6 +2082,7 @@ export async function GET(request: Request) {
   const includeYoY = searchParams.get("includeYoY") === "true";
   const includeProForma = searchParams.get("includeProForma") === "true";
   const includeAllocations = searchParams.get("includeAllocations") === "true";
+  const includeTotal = searchParams.get("includeTotal") === "true";
 
   if (scope === "entity" && !entityId) {
     return NextResponse.json(
@@ -1880,6 +2114,20 @@ export async function GET(request: Request) {
       { error: "No periods in the specified range" },
       { status: 400 }
     );
+  }
+
+  // Append a synthetic "Total" bucket that spans all months when requested
+  if (includeTotal && buckets.length > 1) {
+    const allBucketMonths = buckets.flatMap((b) => b.months);
+    buckets.push({
+      key: "TOTAL",
+      label: "Total",
+      year: endYear,
+      startMonth: buckets[0].startMonth,
+      endMonth: buckets[buckets.length - 1].endMonth,
+      endYear,
+      months: allBucketMonths,
+    });
   }
 
   // Collect all months we need to query
@@ -2036,33 +2284,35 @@ export async function GET(request: Request) {
     }
 
     // --- Pro Forma Adjustments (entity scope) ---
+    let entityProFormaRows: RawProFormaAdjustment[] = [];
     if (includeProForma) {
       // Paginated to avoid PostgREST row-limit truncation
-      const proFormaRows = await fetchAllPaginated<RawProFormaAdjustment>((offset, limit) =>
+      entityProFormaRows = await fetchAllPaginated<RawProFormaAdjustment>((offset, limit) =>
         (admin as any)
           .from("pro_forma_adjustments")
-          .select("master_account_id, period_year, period_month, amount")
+          .select("master_account_id, offset_master_account_id, period_year, period_month, amount, description")
           .eq("entity_id", entityId!)
           .eq("is_excluded", false)
           .range(offset, offset + limit - 1)
       );
 
-      if (proFormaRows.length > 0) {
+      if (entityProFormaRows.length > 0) {
         injectProFormaAdjustments(
           consolidatedBalances,
-          proFormaRows,
+          entityProFormaRows,
           entityId!
         );
       }
     }
 
     // --- Allocation Adjustments (entity scope) ---
+    let entityAllocReclassEntries: CashFlowSupplementalEntry[] = [];
     if (includeAllocations) {
       // Fetch allocations where this entity is source or destination (paginated)
       const allocRows = await fetchAllPaginated<RawAllocationAdjustment>((offset, limit) =>
         (admin as any)
           .from("allocation_adjustments")
-          .select("source_entity_id, destination_entity_id, master_account_id, destination_master_account_id, amount, schedule_type, period_year, period_month, start_year, start_month, end_year, end_month, is_repeating, repeat_end_year, repeat_end_month")
+          .select("source_entity_id, destination_entity_id, master_account_id, destination_master_account_id, amount, description, schedule_type, period_year, period_month, start_year, start_month, end_year, end_month, is_repeating, repeat_end_year, repeat_end_month")
           .or(`source_entity_id.eq.${entityId!},destination_entity_id.eq.${entityId!}`)
           .eq("is_excluded", false)
           .range(offset, offset + limit - 1)
@@ -2075,6 +2325,8 @@ export async function GET(request: Request) {
         if (entityEntries.length > 0) {
           injectAllocationAdjustments(consolidatedBalances, entityEntries, entityId!);
         }
+        // Build supplemental entries for intra-entity reclass allocations
+        entityAllocReclassEntries = buildAllocationSupplementalEntries(allocRows, buckets);
       }
     }
 
@@ -2259,6 +2511,21 @@ export async function GET(request: Request) {
       pyAggregated
     );
 
+    // Build supplemental entries for cash flow pro forma section
+    const entityCfSupplementalEntries: CashFlowSupplementalEntry[] = [
+      ...entityProFormaRows
+        .filter((pf) => pf.offset_master_account_id)
+        .map((pf) => ({
+          description: pf.description,
+          primaryAccountId: pf.master_account_id,
+          offsetAccountId: pf.offset_master_account_id!,
+          periodYear: Number(pf.period_year),
+          periodMonth: Number(pf.period_month),
+          amount: Number(pf.amount),
+        })),
+      ...entityAllocReclassEntries,
+    ];
+
     // Build Cash Flow Statement
     const cashFlowStatement = buildCashFlowStatement(
       consolidatedAccounts,
@@ -2268,7 +2535,8 @@ export async function GET(request: Request) {
       netIncomeByBucket,
       includeYoY ? pyAggregated : undefined,
       includeYoY ? pyDepreciationByBucket : undefined,
-      includeYoY ? pyNetIncomeByBucket : undefined
+      includeYoY ? pyNetIncomeByBucket : undefined,
+      entityCfSupplementalEntries.length > 0 ? entityCfSupplementalEntries : undefined
     );
 
     // Build periods array
@@ -2279,6 +2547,7 @@ export async function GET(request: Request) {
       startMonth: b.startMonth,
       endMonth: b.endMonth,
       endYear: b.endYear,
+      ...(b.key === "TOTAL" ? { isTotal: true } : {}),
     }));
 
     const response = {
