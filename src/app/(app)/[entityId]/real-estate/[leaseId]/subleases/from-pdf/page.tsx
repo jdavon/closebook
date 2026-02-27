@@ -21,19 +21,19 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { ArrowLeft, Upload, RefreshCw, Check, X } from "lucide-react";
 import { formatCurrency } from "@/lib/utils/dates";
-import { generateLeasePaymentSchedule } from "@/lib/utils/lease-payments";
-import type { PropertyTaxFrequency } from "@/lib/types/database";
+import { generateSubleasePaymentSchedule } from "@/lib/utils/sublease-payments";
 
 /**
- * Upload a PDF lease and let AI extract all fields. Review and create the lease.
+ * Upload a PDF sublease agreement and let AI extract all fields.
+ * Review and edit before creating the sublease.
  */
-export default function LeaseFromPDFPage() {
+export default function SubleaseFromPDFPage() {
   const params = useParams();
   const entityId = params.entityId as string;
+  const leaseId = params.leaseId as string;
   const router = useRouter();
   const supabase = createClient();
 
@@ -74,109 +74,66 @@ export default function LeaseFromPDFPage() {
     const formData = new FormData();
     formData.append("file", file);
     formData.append("entityId", entityId);
+    formData.append("leaseId", leaseId);
 
     try {
-      const res = await fetch("/api/leases/abstract", {
+      const res = await fetch("/api/subleases/abstract", {
         method: "POST",
         body: formData,
       });
+      const data = await res.json();
 
       if (!res.ok) {
-        let errorMsg = `Server error (${res.status})`;
-        try {
-          const data = await res.json();
-          errorMsg = data.error || errorMsg;
-        } catch {
-          // Response wasn't JSON (e.g., HTML error page)
-          const text = await res.text().catch(() => "");
-          console.error("Non-JSON error response:", res.status, text.slice(0, 500));
-        }
-        toast.error(errorMsg);
+        toast.error(data.error || "Extraction failed");
         setExtracting(false);
         e.target.value = "";
         return;
       }
 
-      const data = await res.json();
       setExtractedData(data.extracted);
       setFileName(data.file_name);
       setFilePath(data.file_path);
       setFileSize(data.file_size_bytes);
       toast.success("AI extraction complete — review and edit below");
-    } catch (err) {
-      console.error("Extraction fetch error:", err);
-      toast.error(
-        err instanceof TypeError
-          ? "Network error — check your connection or server logs"
-          : `Extraction failed: ${err instanceof Error ? err.message : "Unknown error"}`
-      );
+    } catch {
+      toast.error("Network error during extraction");
     }
     setExtracting(false);
     e.target.value = "";
   }
 
-  async function handleCreateLease() {
+  async function handleCreateSublease() {
     if (!extractedData) return;
     setCreating(true);
 
     try {
-      // 1. Create or find property
-      const { data: property, error: propError } = await supabase
-        .from("properties")
+      // 1. Insert sublease
+      const { data: sublease, error: subleaseError } = await supabase
+        .from("subleases")
         .insert({
+          lease_id: leaseId,
           entity_id: entityId,
-          property_name: getVal("property_name") || getVal("lease_name") || "Unnamed Property",
-          address_line1: getVal("address_line1"),
-          address_line2: getVal("address_line2"),
-          city: getVal("city"),
-          state: getVal("state"),
-          zip_code: getVal("zip_code"),
-          property_type: getVal("property_type") || "office",
-          total_square_footage: getVal("total_square_footage"),
-          rentable_square_footage: getVal("rentable_square_footage"),
-          usable_square_footage: getVal("usable_square_footage"),
-        })
-        .select("id")
-        .single();
-
-      if (propError) {
-        toast.error(`Failed to create property: ${propError.message}`);
-        setCreating(false);
-        return;
-      }
-
-      // 2. Create lease
-      const { data: lease, error: leaseError } = await supabase
-        .from("leases")
-        .insert({
-          entity_id: entityId,
-          property_id: property.id,
-          lease_name: getVal("lease_name") || "Untitled Lease",
-          lessor_name: getVal("lessor_name"),
-          lessor_contact_info: getVal("lessor_contact_info"),
-          lease_type: getVal("lease_type") || "operating",
+          sublease_name: getVal("sublease_name") || "Untitled Sublease",
+          subtenant_name: getVal("subtenant_name") || "Unknown Subtenant",
+          subtenant_contact_info: getVal("subtenant_contact_info"),
           status: "active",
           commencement_date: getVal("commencement_date"),
           rent_commencement_date: getVal("rent_commencement_date"),
           expiration_date: getVal("expiration_date"),
-          lease_term_months: getVal("lease_term_months") || 12,
+          sublease_term_months: getVal("sublease_term_months") || 12,
+          subleased_square_footage: getVal("subleased_square_footage"),
+          floor_suite: getVal("floor_suite"),
           base_rent_monthly: getVal("base_rent_monthly") || 0,
           rent_per_sf: getVal("rent_per_sf"),
-          security_deposit: getVal("security_deposit") || 0,
-          tenant_improvement_allowance: getVal("tenant_improvement_allowance") || 0,
+          security_deposit_held: getVal("security_deposit_held") || 0,
           rent_abatement_months: getVal("rent_abatement_months") || 0,
           rent_abatement_amount: getVal("rent_abatement_amount") || 0,
-          discount_rate: getVal("discount_rate") || 0,
-          initial_direct_costs: getVal("initial_direct_costs") || 0,
-          lease_incentives_received: 0,
-          prepaid_rent: 0,
-          cam_monthly: getVal("cam_monthly") || 0,
-          insurance_monthly: getVal("insurance_monthly") || 0,
-          property_tax_annual: getVal("property_tax_annual") || 0,
-          property_tax_frequency: getVal("property_tax_frequency") || "monthly",
-          utilities_monthly: getVal("utilities_monthly") || 0,
-          other_monthly_costs: getVal("other_monthly_costs") || 0,
-          other_monthly_costs_description: getVal("other_monthly_costs_description"),
+          cam_recovery_monthly: getVal("cam_recovery_monthly") || 0,
+          insurance_recovery_monthly: getVal("insurance_recovery_monthly") || 0,
+          property_tax_recovery_monthly: getVal("property_tax_recovery_monthly") || 0,
+          utilities_recovery_monthly: getVal("utilities_recovery_monthly") || 0,
+          other_recovery_monthly: getVal("other_recovery_monthly") || 0,
+          other_recovery_description: getVal("other_recovery_description"),
           maintenance_type: getVal("maintenance_type") || "gross",
           permitted_use: getVal("permitted_use"),
           notes: getVal("notes"),
@@ -184,18 +141,18 @@ export default function LeaseFromPDFPage() {
         .select("id")
         .single();
 
-      if (leaseError) {
-        toast.error(`Failed to create lease: ${leaseError.message}`);
+      if (subleaseError) {
+        toast.error(`Failed to create sublease: ${subleaseError.message}`);
         setCreating(false);
         return;
       }
 
-      // 3. Insert escalations
+      // 2. Insert escalations
       const escalations = extractedData.escalations || [];
       for (const esc of escalations) {
         if (esc.effective_date) {
-          await supabase.from("lease_escalations").insert({
-            lease_id: lease.id,
+          await supabase.from("sublease_escalations").insert({
+            sublease_id: sublease.id,
             escalation_type: esc.escalation_type || "fixed_percentage",
             effective_date: esc.effective_date,
             percentage_increase: esc.percentage_increase,
@@ -205,11 +162,11 @@ export default function LeaseFromPDFPage() {
         }
       }
 
-      // 4. Insert options
+      // 3. Insert options
       const options = extractedData.options || [];
       for (const opt of options) {
-        await supabase.from("lease_options").insert({
-          lease_id: lease.id,
+        await supabase.from("sublease_options").insert({
+          sublease_id: sublease.id,
           option_type: opt.option_type || "renewal",
           exercise_deadline: opt.exercise_deadline,
           notice_required_days: opt.notice_required_days,
@@ -217,16 +174,16 @@ export default function LeaseFromPDFPage() {
           option_rent_terms: opt.option_rent_terms,
           option_price: opt.option_price,
           penalty_amount: opt.penalty_amount,
-          is_reasonably_certain: false,
+          is_exercised: false,
         });
       }
 
-      // 5. Insert critical dates
+      // 4. Insert critical dates
       const criticalDates = extractedData.critical_dates || [];
       for (const cd of criticalDates) {
         if (cd.critical_date) {
-          await supabase.from("lease_critical_dates").insert({
-            lease_id: lease.id,
+          await supabase.from("sublease_critical_dates").insert({
+            sublease_id: sublease.id,
             date_type: cd.date_type || "custom",
             critical_date: cd.critical_date,
             description: cd.description,
@@ -235,20 +192,19 @@ export default function LeaseFromPDFPage() {
         }
       }
 
-      // 6. Generate payment schedule
+      // 5. Generate payment schedule
       if (getVal("commencement_date") && getVal("expiration_date")) {
-        const schedule = generateLeasePaymentSchedule(
+        const schedule = generateSubleasePaymentSchedule(
           {
             commencement_date: getVal("commencement_date"),
             rent_commencement_date: getVal("rent_commencement_date"),
             expiration_date: getVal("expiration_date"),
             base_rent_monthly: getVal("base_rent_monthly") || 0,
-            cam_monthly: getVal("cam_monthly") || 0,
-            insurance_monthly: getVal("insurance_monthly") || 0,
-            property_tax_annual: getVal("property_tax_annual") || 0,
-            property_tax_frequency: (getVal("property_tax_frequency") || "monthly") as PropertyTaxFrequency,
-            utilities_monthly: getVal("utilities_monthly") || 0,
-            other_monthly_costs: getVal("other_monthly_costs") || 0,
+            cam_recovery_monthly: getVal("cam_recovery_monthly") || 0,
+            insurance_recovery_monthly: getVal("insurance_recovery_monthly") || 0,
+            property_tax_recovery_monthly: getVal("property_tax_recovery_monthly") || 0,
+            utilities_recovery_monthly: getVal("utilities_recovery_monthly") || 0,
+            other_recovery_monthly: getVal("other_recovery_monthly") || 0,
             rent_abatement_months: getVal("rent_abatement_months") || 0,
             rent_abatement_amount: getVal("rent_abatement_amount") || 0,
           },
@@ -263,33 +219,33 @@ export default function LeaseFromPDFPage() {
 
         if (schedule.length > 0) {
           const rows = schedule.map((entry) => ({
-            lease_id: lease.id,
+            sublease_id: sublease.id,
             period_year: entry.period_year,
             period_month: entry.period_month,
             payment_type: entry.payment_type,
             scheduled_amount: entry.scheduled_amount,
           }));
           for (let i = 0; i < rows.length; i += 500) {
-            await supabase.from("lease_payments").insert(rows.slice(i, i + 500));
+            await supabase.from("sublease_payments").insert(rows.slice(i, i + 500));
           }
         }
       }
 
-      // 7. Save the uploaded document record
+      // 6. Save the uploaded document record
       if (filePath) {
-        await supabase.from("lease_documents").insert({
-          lease_id: lease.id,
-          document_type: "original_lease",
+        await supabase.from("sublease_documents").insert({
+          sublease_id: sublease.id,
+          document_type: "sublease_agreement",
           file_name: fileName,
           file_path: filePath,
           file_size_bytes: fileSize,
         });
       }
 
-      toast.success("Lease created from PDF");
-      router.push(`/${entityId}/real-estate/${lease.id}`);
-    } catch (err) {
-      toast.error("Failed to create lease");
+      toast.success("Sublease created from PDF");
+      router.push(`/${entityId}/real-estate/${leaseId}?tab=subleases`);
+    } catch {
+      toast.error("Failed to create sublease");
     }
     setCreating(false);
   }
@@ -297,24 +253,19 @@ export default function LeaseFromPDFPage() {
   // Field groups for the review form
   const fieldGroups = [
     {
-      title: "Lease Identification",
+      title: "Sublease Identification",
       fields: [
-        { key: "lease_name", label: "Lease Name", type: "text" },
-        { key: "lessor_name", label: "Lessor Name", type: "text" },
-        { key: "lease_type", label: "Lease Type", type: "text" },
+        { key: "sublease_name", label: "Sublease Name", type: "text" },
+        { key: "subtenant_name", label: "Subtenant Name", type: "text" },
+        { key: "subtenant_contact_info", label: "Subtenant Contact", type: "text" },
         { key: "maintenance_type", label: "Maintenance Type", type: "text" },
       ],
     },
     {
-      title: "Property",
+      title: "Space",
       fields: [
-        { key: "property_name", label: "Property Name", type: "text" },
-        { key: "address_line1", label: "Address", type: "text" },
-        { key: "city", label: "City", type: "text" },
-        { key: "state", label: "State", type: "text" },
-        { key: "zip_code", label: "Zip", type: "text" },
-        { key: "property_type", label: "Property Type", type: "text" },
-        { key: "rentable_square_footage", label: "Rentable SF", type: "number" },
+        { key: "subleased_square_footage", label: "Subleased SF", type: "number" },
+        { key: "floor_suite", label: "Floor / Suite", type: "text" },
       ],
     },
     {
@@ -323,28 +274,27 @@ export default function LeaseFromPDFPage() {
         { key: "commencement_date", label: "Commencement", type: "date" },
         { key: "rent_commencement_date", label: "Rent Commencement", type: "date" },
         { key: "expiration_date", label: "Expiration", type: "date" },
-        { key: "lease_term_months", label: "Term (months)", type: "number" },
+        { key: "sublease_term_months", label: "Term (months)", type: "number" },
       ],
     },
     {
-      title: "Financial Terms",
+      title: "Income Terms",
       fields: [
         { key: "base_rent_monthly", label: "Base Rent (monthly)", type: "number" },
-        { key: "rent_per_sf", label: "Rent per SF", type: "number" },
-        { key: "security_deposit", label: "Security Deposit", type: "number" },
-        { key: "tenant_improvement_allowance", label: "TI Allowance", type: "number" },
+        { key: "rent_per_sf", label: "Rent per SF (annual)", type: "number" },
+        { key: "security_deposit_held", label: "Security Deposit Held", type: "number" },
         { key: "rent_abatement_months", label: "Abatement Months", type: "number" },
-        { key: "discount_rate", label: "Discount Rate (IBR)", type: "number" },
+        { key: "rent_abatement_amount", label: "Abatement Amount", type: "number" },
       ],
     },
     {
-      title: "Operating Costs",
+      title: "Operating Cost Recoveries",
       fields: [
-        { key: "cam_monthly", label: "CAM (monthly)", type: "number" },
-        { key: "insurance_monthly", label: "Insurance (monthly)", type: "number" },
-        { key: "property_tax_annual", label: "Property Tax (annual)", type: "number" },
-        { key: "utilities_monthly", label: "Utilities (monthly)", type: "number" },
-        { key: "other_monthly_costs", label: "Other (monthly)", type: "number" },
+        { key: "cam_recovery_monthly", label: "CAM Recovery (monthly)", type: "number" },
+        { key: "insurance_recovery_monthly", label: "Insurance Recovery (monthly)", type: "number" },
+        { key: "property_tax_recovery_monthly", label: "Property Tax Recovery (monthly)", type: "number" },
+        { key: "utilities_recovery_monthly", label: "Utilities Recovery (monthly)", type: "number" },
+        { key: "other_recovery_monthly", label: "Other Recovery (monthly)", type: "number" },
       ],
     },
   ];
@@ -355,7 +305,7 @@ export default function LeaseFromPDFPage() {
         <Button
           variant="ghost"
           size="sm"
-          onClick={() => router.push(`/${entityId}/real-estate`)}
+          onClick={() => router.push(`/${entityId}/real-estate/${leaseId}?tab=subleases`)}
         >
           <ArrowLeft className="mr-2 h-4 w-4" />
           Back
@@ -364,10 +314,10 @@ export default function LeaseFromPDFPage() {
 
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">
-          Create Lease from PDF
+          Create Sublease from PDF
         </h1>
         <p className="text-sm text-muted-foreground">
-          Upload a lease agreement PDF and let AI extract the key terms.
+          Upload a sublease agreement PDF and let AI extract the key terms.
           Review and edit before creating.
         </p>
       </div>
@@ -376,9 +326,9 @@ export default function LeaseFromPDFPage() {
       {!extractedData && (
         <Card>
           <CardHeader>
-            <CardTitle>Upload Lease Document</CardTitle>
+            <CardTitle>Upload Sublease Document</CardTitle>
             <CardDescription>
-              Select a PDF lease agreement. AI will extract all relevant fields
+              Select a PDF sublease agreement. AI will extract all relevant fields
               for your review.
             </CardDescription>
           </CardHeader>
@@ -395,7 +345,7 @@ export default function LeaseFromPDFPage() {
                     {extracting ? (
                       <>
                         <RefreshCw className="mr-2 h-5 w-5 animate-spin" />
-                        Analyzing lease...
+                        Analyzing sublease...
                       </>
                     ) : (
                       <>
@@ -439,7 +389,7 @@ export default function LeaseFromPDFPage() {
             <h2 className="text-lg font-semibold">Review Extracted Data</h2>
             <div className="flex items-center gap-2">
               <Button
-                onClick={handleCreateLease}
+                onClick={handleCreateSublease}
                 disabled={creating}
               >
                 {creating ? (
@@ -450,7 +400,7 @@ export default function LeaseFromPDFPage() {
                 ) : (
                   <>
                     <Check className="mr-2 h-4 w-4" />
-                    Create Lease
+                    Create Sublease
                   </>
                 )}
               </Button>
@@ -570,17 +520,17 @@ export default function LeaseFromPDFPage() {
                             {String(opt.option_type || "").replace(/_/g, " ")}
                           </TableCell>
                           <TableCell>
-                            {(opt.exercise_deadline as string) || "—"}
+                            {(opt.exercise_deadline as string) || "\u2014"}
                           </TableCell>
                           <TableCell>
                             {opt.notice_required_days
                               ? `${opt.notice_required_days} days`
-                              : "—"}
+                              : "\u2014"}
                           </TableCell>
                           <TableCell>
                             {opt.option_term_months
                               ? `${opt.option_term_months} mo`
-                              : "—"}
+                              : "\u2014"}
                           </TableCell>
                         </TableRow>
                       )
@@ -616,7 +566,7 @@ export default function LeaseFromPDFPage() {
                           </TableCell>
                           <TableCell>{cd.critical_date as string}</TableCell>
                           <TableCell className="text-muted-foreground">
-                            {(cd.description as string) || "—"}
+                            {(cd.description as string) || "\u2014"}
                           </TableCell>
                         </TableRow>
                       )
@@ -639,10 +589,10 @@ export default function LeaseFromPDFPage() {
               Start Over
             </Button>
             <Button
-              onClick={handleCreateLease}
+              onClick={handleCreateSublease}
               disabled={creating}
             >
-              {creating ? "Creating..." : "Create Lease"}
+              {creating ? "Creating..." : "Create Sublease"}
             </Button>
           </div>
         </>

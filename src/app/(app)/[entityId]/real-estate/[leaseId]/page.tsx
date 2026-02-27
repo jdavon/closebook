@@ -1996,12 +1996,20 @@ export default function LeaseDetailPage() {
                     Subtenants renting space under this lease — track income, escalations, and critical dates
                   </CardDescription>
                 </div>
-                <Link href={`/${entityId}/real-estate/${leaseId}/subleases/new`}>
-                  <Button size="sm">
-                    <Plus className="mr-2 h-4 w-4" />
-                    New Sublease
-                  </Button>
-                </Link>
+                <div className="flex items-center gap-2">
+                  <Link href={`/${entityId}/real-estate/${leaseId}/subleases/from-pdf`}>
+                    <Button size="sm" variant="outline">
+                      <Upload className="mr-2 h-4 w-4" />
+                      Create from PDF
+                    </Button>
+                  </Link>
+                  <Link href={`/${entityId}/real-estate/${leaseId}/subleases/new`}>
+                    <Button size="sm">
+                      <Plus className="mr-2 h-4 w-4" />
+                      New Sublease
+                    </Button>
+                  </Link>
+                </div>
               </div>
             </CardHeader>
             <CardContent>

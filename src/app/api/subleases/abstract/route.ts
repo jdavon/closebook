@@ -2,63 +2,46 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import Anthropic from "@anthropic-ai/sdk";
 
-// Allow up to 60 seconds for AI extraction (default is 10-15s on Vercel)
-export const maxDuration = 60;
-
 /**
- * POST /api/leases/abstract
- * Accepts a PDF lease document, sends it to Claude for structured extraction,
- * and returns the extracted lease fields for user review.
+ * POST /api/subleases/abstract
+ * Accepts a PDF sublease document, sends it to Claude for structured extraction,
+ * and returns the extracted sublease fields for user review.
  *
- * Form data: file (PDF), entityId
+ * Form data: file (PDF), entityId, leaseId
  */
 
-const EXTRACTION_PROMPT = `You are a commercial real estate lease abstraction expert. Analyze the attached lease document and extract all relevant fields into a structured JSON object.
+const EXTRACTION_PROMPT = `You are a commercial real estate sublease abstraction expert. Analyze the attached sublease agreement and extract all relevant fields into a structured JSON object. This is a SUBLEASE — meaning the entity uploading this document is the sublessor (master tenant) and the other party is the subtenant.
 
 Return ONLY a valid JSON object (no markdown, no explanation) with the following fields. Use null for any field you cannot find or are uncertain about.
 
 {
-  "lease_name": "string — short identifier for this lease (e.g., 'Office Lease - 123 Main St')",
-  "lessor_name": "string — landlord / lessor name",
-  "lessor_contact_info": "string — landlord contact details if found",
+  "sublease_name": "string — short identifier for this sublease (e.g., 'Suite 200 - Acme Corp')",
+  "subtenant_name": "string — subtenant / sub-lessee name",
+  "subtenant_contact_info": "string or null — subtenant contact details if found",
 
-  "property_name": "string — building or property name",
-  "address_line1": "string — street address",
-  "address_line2": "string or null — suite/unit",
-  "city": "string",
-  "state": "string — two-letter state code",
-  "zip_code": "string",
-  "property_type": "one of: office, retail, warehouse, industrial, mixed_use, land, other",
-  "total_square_footage": "number or null",
-  "rentable_square_footage": "number or null",
-  "usable_square_footage": "number or null",
+  "subleased_square_footage": "number or null — square footage of subleased space",
+  "floor_suite": "string or null — floor number, suite, or unit identifier",
 
-  "lease_type": "one of: operating, finance — default to operating if unclear",
   "commencement_date": "YYYY-MM-DD",
   "rent_commencement_date": "YYYY-MM-DD or null — if different from commencement",
   "expiration_date": "YYYY-MM-DD",
-  "lease_term_months": "number — total months",
+  "sublease_term_months": "number — total months of sublease term",
 
-  "base_rent_monthly": "number — monthly base rent amount",
+  "base_rent_monthly": "number — monthly base rent the subtenant pays us",
   "rent_per_sf": "number or null — annual rent per square foot if stated",
-  "security_deposit": "number — 0 if not stated",
-  "tenant_improvement_allowance": "number — 0 if not stated",
-  "rent_abatement_months": "number — 0 if no free rent period",
+  "security_deposit_held": "number — security deposit we hold from subtenant, 0 if not stated",
+  "rent_abatement_months": "number — 0 if no free rent period for the subtenant",
   "rent_abatement_amount": "number — monthly amount during abatement, 0 if none",
 
-  "cam_monthly": "number — common area maintenance per month, 0 if not stated",
-  "insurance_monthly": "number — insurance per month, 0 if not stated",
-  "property_tax_annual": "number — annual property tax, 0 if not stated",
-  "property_tax_frequency": "one of: monthly, semi_annual, annual — default monthly",
-  "utilities_monthly": "number — 0 if not stated or tenant-paid directly",
-  "other_monthly_costs": "number — any other regular monthly charges, 0 if none",
-  "other_monthly_costs_description": "string or null — description of other costs",
+  "cam_recovery_monthly": "number — CAM pass-through recovery per month, 0 if not stated",
+  "insurance_recovery_monthly": "number — insurance pass-through per month, 0 if not stated",
+  "property_tax_recovery_monthly": "number — property tax recovery per month, 0 if not stated",
+  "utilities_recovery_monthly": "number — utilities recovery per month, 0 if not stated",
+  "other_recovery_monthly": "number — any other monthly recovery charges, 0 if none",
+  "other_recovery_description": "string or null — description of other recovery charges",
 
   "maintenance_type": "one of: triple_net, gross, modified_gross",
-  "permitted_use": "string or null — permitted use clause",
-
-  "discount_rate": "number or null — if an incremental borrowing rate is mentioned, as decimal (e.g., 0.065 for 6.5%)",
-  "initial_direct_costs": "number — 0 if not stated",
+  "permitted_use": "string or null — permitted use clause for the subleased space",
 
   "escalations": [
     {
@@ -72,11 +55,11 @@ Return ONLY a valid JSON object (no markdown, no explanation) with the following
 
   "options": [
     {
-      "option_type": "one of: renewal, termination, purchase, expansion",
+      "option_type": "one of: renewal, termination, expansion, contraction",
       "exercise_deadline": "YYYY-MM-DD or null",
       "notice_required_days": "number or null",
       "option_term_months": "number or null",
-      "option_rent_terms": "string or null — description of rent during option",
+      "option_rent_terms": "string or null — description of rent during option period",
       "option_price": "number or null",
       "penalty_amount": "number or null"
     }
@@ -84,13 +67,13 @@ Return ONLY a valid JSON object (no markdown, no explanation) with the following
 
   "critical_dates": [
     {
-      "date_type": "one of: lease_expiration, renewal_deadline, termination_notice, rent_escalation, rent_review, cam_reconciliation, insurance_renewal, custom",
+      "date_type": "one of: sublease_expiration, renewal_deadline, termination_notice, rent_escalation, rent_review, insurance_renewal, custom",
       "critical_date": "YYYY-MM-DD",
       "description": "string"
     }
   ],
 
-  "notes": "string or null — any additional important terms, clauses, or observations",
+  "notes": "string or null — any additional important terms, clauses, or observations about this sublease",
   "confidence_notes": "string — brief note about extraction confidence and any fields you were uncertain about"
 }
 
@@ -98,9 +81,10 @@ Important:
 - All monetary amounts should be numbers (not strings), without dollar signs or commas.
 - Dates must be in YYYY-MM-DD format.
 - Percentages should be as decimals (3% = 0.03).
-- If the lease has annual escalations, create one entry per escalation with the effective date.
-- For triple net (NNN) leases, operating costs are typically estimated and reconciled annually.
-- Include important critical dates like expiration, renewal deadlines, and escalation dates.`;
+- If the sublease has annual escalations, create one entry per escalation with the effective date.
+- For triple net (NNN) subleases, operating cost recoveries are typically estimated and reconciled annually.
+- Include important critical dates like expiration, renewal deadlines, and escalation dates.
+- Remember: the amounts represent INCOME to us (we are the sublessor collecting from the subtenant).`;
 
 export async function POST(request: NextRequest) {
   const supabase = await createClient();
@@ -123,10 +107,11 @@ export async function POST(request: NextRequest) {
   const formData = await request.formData();
   const file = formData.get("file") as File | null;
   const entityId = formData.get("entityId") as string;
+  const leaseId = formData.get("leaseId") as string;
 
-  if (!file || !entityId) {
+  if (!file || !entityId || !leaseId) {
     return NextResponse.json(
-      { error: "Missing required fields: file, entityId" },
+      { error: "Missing required fields: file, entityId, leaseId" },
       { status: 400 }
     );
   }
@@ -197,7 +182,7 @@ export async function POST(request: NextRequest) {
 
     // Store the PDF in Supabase Storage for reference
     const timestamp = Date.now();
-    const storagePath = `${entityId}/leases/${timestamp}_${file.name}`;
+    const storagePath = `${entityId}/subleases/${timestamp}_${file.name}`;
     await supabase.storage
       .from("lease-documents")
       .upload(storagePath, Buffer.from(buffer), {
@@ -216,7 +201,6 @@ export async function POST(request: NextRequest) {
       },
     });
   } catch (err: unknown) {
-    console.error("Lease extraction error:", err);
     const errorMessage =
       err instanceof Error ? err.message : "Unknown error during extraction";
     return NextResponse.json(
