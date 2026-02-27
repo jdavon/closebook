@@ -77,24 +77,45 @@ export default function LeaseFromPDFPage() {
     setOverrides({});
 
     try {
-      // 1. Upload PDF directly to Supabase Storage (bypasses Vercel payload limit)
+      // 1. Get a signed upload URL from the server (uses admin client, bypasses RLS)
       const timestamp = Date.now();
       const storagePath = `${entityId}/leases/${timestamp}_${file.name}`;
-      const { error: uploadError } = await supabase.storage
-        .from("lease-documents")
-        .upload(storagePath, file, {
-          contentType: "application/pdf",
-          upsert: false,
-        });
+      const urlRes = await fetch("/api/storage/signed-upload-url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bucket: "lease-documents", path: storagePath }),
+      });
 
-      if (uploadError) {
-        toast.error(`Upload failed: ${uploadError.message}`);
+      if (!urlRes.ok) {
+        const urlData = await urlRes.json().catch(() => ({}));
+        toast.error(urlData.error || "Failed to get upload URL");
         setExtracting(false);
         e.target.value = "";
         return;
       }
 
-      // 2. Call API with just the storage path (small JSON payload)
+      const { signedUrl, token } = await urlRes.json();
+
+      // 2. Upload PDF directly to Supabase Storage using the signed URL
+      const uploadRes = await fetch(signedUrl, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/pdf",
+          ...(token ? { "x-upsert": "false" } : {}),
+        },
+        body: file,
+      });
+
+      if (!uploadRes.ok) {
+        const uploadText = await uploadRes.text().catch(() => "");
+        console.error("Storage upload failed:", uploadRes.status, uploadText);
+        toast.error("Failed to upload PDF to storage");
+        setExtracting(false);
+        e.target.value = "";
+        return;
+      }
+
+      // 3. Call API with just the storage path (small JSON payload)
       const res = await fetch("/api/leases/abstract", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
