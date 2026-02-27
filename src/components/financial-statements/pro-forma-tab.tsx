@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { fetchAllPaginated } from "@/lib/utils/paginated-fetch";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import {
   Table,
@@ -108,6 +109,7 @@ export function ProFormaTab({
   // Form fields
   const [formEntityId, setFormEntityId] = useState<string>("");
   const [formMasterAccountId, setFormMasterAccountId] = useState<string>("");
+  const [formOffsetMasterAccountId, setFormOffsetMasterAccountId] = useState<string>("");
   const [formYear, setFormYear] = useState(endYear);
   const [formMonth, setFormMonth] = useState(endMonth);
   const [formAmount, setFormAmount] = useState("");
@@ -120,38 +122,44 @@ export function ProFormaTab({
     setLoading(true);
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let query = (supabase as any)
-      .from("pro_forma_adjustments")
-      .select(
-        `
-        *,
-        entities!inner(name, code),
-        master_accounts!inner(name, account_number)
-      `
-      )
-      .eq("organization_id", organizationId)
-      .order("period_year", { ascending: true })
-      .order("period_month", { ascending: true });
+    let data: any[];
+    try {
+      data = await fetchAllPaginated<any>((offset, limit) => {
+        let q = (supabase as any)
+          .from("pro_forma_adjustments")
+          .select(
+            `
+            *,
+            entities!inner(name, code),
+            master_accounts!master_account_id!inner(name, account_number),
+            offset_account:master_accounts!offset_master_account_id(name, account_number)
+          `
+          )
+          .eq("organization_id", organizationId)
+          .order("period_year", { ascending: true })
+          .order("period_month", { ascending: true });
 
-    if (scope === "entity" && selectedEntityId) {
-      query = query.eq("entity_id", selectedEntityId);
-    }
+        if (scope === "entity" && selectedEntityId) {
+          q = q.eq("entity_id", selectedEntityId);
+        }
 
-    const { data, error } = await query;
-
-    if (error) {
+        return q.range(offset, offset + limit - 1);
+      });
+    } catch {
       toast.error("Failed to load adjustments");
       setLoading(false);
       return;
     }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const mapped = (data ?? []).map((row: any) => ({
+    const mapped = data.map((row: any) => ({
       ...row,
       entity_name: row.entities?.name,
       entity_code: row.entities?.code,
       master_account_name: row.master_accounts?.name,
       master_account_number: row.master_accounts?.account_number,
+      offset_master_account_name: row.offset_account?.name ?? null,
+      offset_master_account_number: row.offset_account?.account_number ?? null,
     }));
 
     setAdjustments(mapped);
@@ -185,6 +193,7 @@ export function ProFormaTab({
       scope === "entity" && selectedEntityId ? selectedEntityId : ""
     );
     setFormMasterAccountId("");
+    setFormOffsetMasterAccountId("");
     setFormYear(endYear);
     setFormMonth(endMonth);
     setFormAmount("");
@@ -203,6 +212,7 @@ export function ProFormaTab({
     setEditingId(adj.id);
     setFormEntityId(adj.entity_id);
     setFormMasterAccountId(adj.master_account_id);
+    setFormOffsetMasterAccountId(adj.offset_master_account_id ?? "");
     setFormYear(adj.period_year);
     setFormMonth(adj.period_month);
     setFormAmount(String(adj.amount));
@@ -218,6 +228,11 @@ export function ProFormaTab({
       return;
     }
 
+    if (!formOffsetMasterAccountId && !editingId) {
+      toast.error("Offset account is required for new adjustments");
+      return;
+    }
+
     const amount = parseFloat(formAmount);
     if (isNaN(amount)) {
       toast.error("Amount must be a valid number");
@@ -230,6 +245,7 @@ export function ProFormaTab({
       organization_id: organizationId,
       entity_id: formEntityId,
       master_account_id: formMasterAccountId,
+      offset_master_account_id: formOffsetMasterAccountId || null,
       period_year: formYear,
       period_month: formMonth,
       amount,
@@ -356,6 +372,7 @@ export function ProFormaTab({
                       <TableHead className="w-[140px]">Entity</TableHead>
                     )}
                     <TableHead className="w-[200px]">Master Account</TableHead>
+                    <TableHead className="w-[200px]">Offset Account</TableHead>
                     <TableHead className="w-[100px]">Period</TableHead>
                     <TableHead className="w-[120px] text-right">
                       Amount
@@ -386,6 +403,20 @@ export function ProFormaTab({
                           {adj.master_account_number}
                         </span>{" "}
                         — {adj.master_account_name}
+                      </TableCell>
+                      <TableCell className="text-xs">
+                        {adj.offset_master_account_number ? (
+                          <>
+                            <span className="font-medium">
+                              {adj.offset_master_account_number}
+                            </span>{" "}
+                            — {adj.offset_master_account_name}
+                          </>
+                        ) : (
+                          <Badge variant="outline" className="text-[10px] text-amber-600 border-amber-300">
+                            Single-entry
+                          </Badge>
+                        )}
                       </TableCell>
                       <TableCell className="text-xs">
                         {formatPeriod(adj.period_year, adj.period_month)}
@@ -494,6 +525,41 @@ export function ProFormaTab({
                   ))}
                 </SelectContent>
               </Select>
+            </div>
+
+            {/* Offset Account */}
+            <div className="space-y-1.5">
+              <Label className="text-xs">
+                Offset Account
+                {!editingId && <span className="text-destructive ml-0.5">*</span>}
+              </Label>
+              <Select
+                value={formOffsetMasterAccountId}
+                onValueChange={setFormOffsetMasterAccountId}
+              >
+                <SelectTrigger className="h-8 text-xs">
+                  <SelectValue placeholder="Select offset account..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {masterAccounts
+                    .filter((ma) => ma.id !== formMasterAccountId)
+                    .map((ma) => (
+                      <SelectItem key={ma.id} value={ma.id}>
+                        {ma.account_number} — {ma.name}
+                        <Badge
+                          variant="outline"
+                          className="ml-2 text-[10px] py-0"
+                        >
+                          {ma.classification}
+                        </Badge>
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+              <p className="text-[11px] text-muted-foreground">
+                The balancing entry. Receives the opposite sign (-amount). E.g.,
+                if debiting an expense, credit a liability or cash account.
+              </p>
             </div>
 
             {/* Period */}
