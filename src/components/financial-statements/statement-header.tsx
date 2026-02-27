@@ -39,7 +39,7 @@ export function StatementHeader({
       </div>
       <div className="text-sm font-bold uppercase tracking-wide">
         {statementTitle}
-        {unaudited && " (UNAUDITED)"}
+        {unaudited && " UNAUDITED"}
       </div>
       <div className="text-xs text-muted-foreground italic">
         {periodDescription}
