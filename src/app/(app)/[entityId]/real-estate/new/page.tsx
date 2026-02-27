@@ -235,7 +235,7 @@ export default function NewLeasePage() {
         rent_per_sf: rentPerSF ? parseFloat(rentPerSF) : null,
         security_deposit: parseFloat(securityDeposit) || 0,
         tenant_improvement_allowance: parseFloat(tiAllowance) || 0,
-        rent_abatement_months: parseInt(rentAbatementMonths) || 0,
+        rent_abatement_months: parseFloat(rentAbatementMonths) || 0,
         rent_abatement_amount: parseFloat(rentAbatementAmount) || 0,
         discount_rate: discountRate ? parseFloat(discountRate) : 0,
         initial_direct_costs: parseFloat(initialDirectCosts) || 0,
@@ -283,7 +283,7 @@ export default function NewLeasePage() {
         property_tax_frequency: propertyTaxFrequency,
         utilities_monthly: parseFloat(utilitiesMonthly) || 0,
         other_monthly_costs: parseFloat(otherMonthlyCosts) || 0,
-        rent_abatement_months: parseInt(rentAbatementMonths) || 0,
+        rent_abatement_months: parseFloat(rentAbatementMonths) || 0,
         rent_abatement_amount: parseFloat(rentAbatementAmount) || 0,
       },
       [] // no escalations on initial creation
