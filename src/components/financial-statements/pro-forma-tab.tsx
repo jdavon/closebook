@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { fetchAllPaginated } from "@/lib/utils/paginated-fetch";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -27,6 +27,19 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
@@ -34,7 +47,8 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
-import { Plus, Pencil, Trash2 } from "lucide-react";
+import { Plus, Pencil, Trash2, ChevronsUpDown, Check } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { formatStatementAmount } from "./format-utils";
 import type { Scope, ProFormaAdjustment } from "./types";
 
@@ -65,6 +79,102 @@ interface MasterAccountOption {
   name: string;
   classification: string;
   account_type: string;
+}
+
+// ---------------------------------------------------------------------------
+// Searchable Combobox component for entities and accounts
+// ---------------------------------------------------------------------------
+
+interface ComboboxOption {
+  value: string;
+  label: string;
+  sublabel?: string;
+  badge?: string;
+}
+
+function SearchableCombobox({
+  options,
+  value,
+  onValueChange,
+  placeholder = "Select...",
+  searchPlaceholder = "Search...",
+  emptyMessage = "No results found.",
+  className,
+}: {
+  options: ComboboxOption[];
+  value: string;
+  onValueChange: (value: string) => void;
+  placeholder?: string;
+  searchPlaceholder?: string;
+  emptyMessage?: string;
+  className?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const selected = options.find((o) => o.value === value);
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
+          role="combobox"
+          aria-expanded={open}
+          className={cn(
+            "h-8 w-full justify-between text-xs font-normal",
+            !value && "text-muted-foreground",
+            className
+          )}
+        >
+          <span className="truncate">
+            {selected ? selected.label : placeholder}
+          </span>
+          <ChevronsUpDown className="ml-2 h-3.5 w-3.5 shrink-0 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
+        <Command>
+          <CommandInput
+            placeholder={searchPlaceholder}
+            className="h-8 text-xs"
+          />
+          <CommandList>
+            <CommandEmpty className="text-xs py-4 text-center">
+              {emptyMessage}
+            </CommandEmpty>
+            <CommandGroup>
+              {options.map((option) => (
+                <CommandItem
+                  key={option.value}
+                  value={`${option.label} ${option.sublabel ?? ""}`}
+                  onSelect={() => {
+                    onValueChange(option.value === value ? "" : option.value);
+                    setOpen(false);
+                  }}
+                  className="text-xs"
+                >
+                  <Check
+                    className={cn(
+                      "mr-2 h-3.5 w-3.5 shrink-0",
+                      value === option.value ? "opacity-100" : "opacity-0"
+                    )}
+                  />
+                  <span className="truncate">{option.label}</span>
+                  {option.badge && (
+                    <Badge
+                      variant="outline"
+                      className="ml-auto text-[10px] py-0 shrink-0"
+                    >
+                      {option.badge}
+                    </Badge>
+                  )}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
 }
 
 interface ProFormaTabProps {
@@ -185,6 +295,40 @@ export function ProFormaTab({
     loadAdjustments();
     loadMasterAccounts();
   }, [loadAdjustments, loadMasterAccounts]);
+
+  // Searchable option arrays
+  const entityOptions: ComboboxOption[] = useMemo(
+    () =>
+      entities.map((e) => ({
+        value: e.id,
+        label: `${e.code} — ${e.name}`,
+      })),
+    [entities]
+  );
+
+  const masterAccountOptions: ComboboxOption[] = useMemo(
+    () =>
+      masterAccounts.map((ma) => ({
+        value: ma.id,
+        label: `${ma.account_number} — ${ma.name}`,
+        sublabel: ma.classification,
+        badge: ma.classification,
+      })),
+    [masterAccounts]
+  );
+
+  const offsetAccountOptions: ComboboxOption[] = useMemo(
+    () =>
+      masterAccounts
+        .filter((ma) => ma.id !== formMasterAccountId)
+        .map((ma) => ({
+          value: ma.id,
+          label: `${ma.account_number} — ${ma.name}`,
+          sublabel: ma.classification,
+          badge: ma.classification,
+        })),
+    [masterAccounts, formMasterAccountId]
+  );
 
   // Reset form
   function resetForm() {
@@ -487,44 +631,33 @@ export function ProFormaTab({
             {/* Entity */}
             <div className="space-y-1.5">
               <Label className="text-xs">Entity</Label>
-              <Select value={formEntityId} onValueChange={setFormEntityId}>
-                <SelectTrigger className="h-8 text-xs">
-                  <SelectValue placeholder="Select entity..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {entities.map((e) => (
-                    <SelectItem key={e.id} value={e.id}>
-                      {e.code} — {e.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <SearchableCombobox
+                options={entityOptions}
+                value={formEntityId}
+                onValueChange={setFormEntityId}
+                placeholder="Search and select entity..."
+                searchPlaceholder="Search by name or code..."
+                emptyMessage="No entities found."
+              />
             </div>
 
             {/* Master Account */}
             <div className="space-y-1.5">
               <Label className="text-xs">Master Account</Label>
-              <Select
+              <SearchableCombobox
+                options={masterAccountOptions}
                 value={formMasterAccountId}
-                onValueChange={setFormMasterAccountId}
-              >
-                <SelectTrigger className="h-8 text-xs">
-                  <SelectValue placeholder="Select master account..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {masterAccounts.map((ma) => (
-                    <SelectItem key={ma.id} value={ma.id}>
-                      {ma.account_number} — {ma.name}
-                      <Badge
-                        variant="outline"
-                        className="ml-2 text-[10px] py-0"
-                      >
-                        {ma.classification}
-                      </Badge>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                onValueChange={(val) => {
+                  setFormMasterAccountId(val);
+                  // Clear offset if it matches the new master account
+                  if (val && val === formOffsetMasterAccountId) {
+                    setFormOffsetMasterAccountId("");
+                  }
+                }}
+                placeholder="Search and select master account..."
+                searchPlaceholder="Search by name or number..."
+                emptyMessage="No accounts found."
+              />
             </div>
 
             {/* Offset Account */}
@@ -533,29 +666,14 @@ export function ProFormaTab({
                 Offset Account
                 {!editingId && <span className="text-destructive ml-0.5">*</span>}
               </Label>
-              <Select
+              <SearchableCombobox
+                options={offsetAccountOptions}
                 value={formOffsetMasterAccountId}
                 onValueChange={setFormOffsetMasterAccountId}
-              >
-                <SelectTrigger className="h-8 text-xs">
-                  <SelectValue placeholder="Select offset account..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {masterAccounts
-                    .filter((ma) => ma.id !== formMasterAccountId)
-                    .map((ma) => (
-                      <SelectItem key={ma.id} value={ma.id}>
-                        {ma.account_number} — {ma.name}
-                        <Badge
-                          variant="outline"
-                          className="ml-2 text-[10px] py-0"
-                        >
-                          {ma.classification}
-                        </Badge>
-                      </SelectItem>
-                    ))}
-                </SelectContent>
-              </Select>
+                placeholder="Search and select offset account..."
+                searchPlaceholder="Search by name or number..."
+                emptyMessage="No accounts found."
+              />
               <p className="text-[11px] text-muted-foreground">
                 The balancing entry. Receives the opposite sign (-amount). E.g.,
                 if debiting an expense, credit a liability or cash account.
