@@ -66,37 +66,75 @@ export default function SubleaseFromPDFPage() {
       e.target.value = "";
       return;
     }
+    if (file.size > 25 * 1024 * 1024) {
+      toast.error("File too large. Maximum 25MB.");
+      e.target.value = "";
+      return;
+    }
 
     setExtracting(true);
     setExtractedData(null);
     setOverrides({});
 
-    const formData = new FormData();
-    formData.append("file", file);
-    formData.append("entityId", entityId);
-    formData.append("leaseId", leaseId);
-
     try {
-      const res = await fetch("/api/subleases/abstract", {
-        method: "POST",
-        body: formData,
-      });
-      const data = await res.json();
+      // 1. Upload PDF directly to Supabase Storage (bypasses Vercel payload limit)
+      const timestamp = Date.now();
+      const storagePath = `${entityId}/subleases/${timestamp}_${file.name}`;
+      const { error: uploadError } = await supabase.storage
+        .from("lease-documents")
+        .upload(storagePath, file, {
+          contentType: "application/pdf",
+          upsert: false,
+        });
 
-      if (!res.ok) {
-        toast.error(data.error || "Extraction failed");
+      if (uploadError) {
+        toast.error(`Upload failed: ${uploadError.message}`);
         setExtracting(false);
         e.target.value = "";
         return;
       }
 
+      // 2. Call API with just the storage path (small JSON payload)
+      const res = await fetch("/api/subleases/abstract", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          entityId,
+          leaseId,
+          storagePath,
+          fileName: file.name,
+          fileSize: file.size,
+        }),
+      });
+
+      if (!res.ok) {
+        let errorMsg = `Server error (${res.status})`;
+        try {
+          const data = await res.json();
+          errorMsg = data.error || errorMsg;
+        } catch {
+          const text = await res.text().catch(() => "");
+          console.error("Non-JSON error response:", res.status, text.slice(0, 500));
+        }
+        toast.error(errorMsg);
+        setExtracting(false);
+        e.target.value = "";
+        return;
+      }
+
+      const data = await res.json();
       setExtractedData(data.extracted);
       setFileName(data.file_name);
       setFilePath(data.file_path);
       setFileSize(data.file_size_bytes);
       toast.success("AI extraction complete — review and edit below");
-    } catch {
-      toast.error("Network error during extraction");
+    } catch (err) {
+      console.error("Extraction fetch error:", err);
+      toast.error(
+        err instanceof TypeError
+          ? "Network error — check your connection or server logs"
+          : `Extraction failed: ${err instanceof Error ? err.message : "Unknown error"}`
+      );
     }
     setExtracting(false);
     e.target.value = "";

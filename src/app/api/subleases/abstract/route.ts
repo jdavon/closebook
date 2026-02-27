@@ -2,12 +2,16 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import Anthropic from "@anthropic-ai/sdk";
 
+// Allow up to 60 seconds for AI extraction (default is 10-15s on Vercel)
+export const maxDuration = 60;
+
 /**
  * POST /api/subleases/abstract
- * Accepts a PDF sublease document, sends it to Claude for structured extraction,
- * and returns the extracted sublease fields for user review.
+ * Client uploads PDF to Supabase Storage first, then sends the storage
+ * path here. We download the file server-side and send it to Claude for
+ * structured extraction. This avoids Vercel's serverless payload limit.
  *
- * Form data: file (PDF), entityId, leaseId
+ * JSON body: { entityId, leaseId, storagePath, fileName, fileSize }
  */
 
 const EXTRACTION_PROMPT = `You are a commercial real estate sublease abstraction expert. Analyze the attached sublease agreement and extract all relevant fields into a structured JSON object. This is a SUBLEASE — meaning the entity uploading this document is the sublessor (master tenant) and the other party is the subtenant.
@@ -104,35 +108,36 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const formData = await request.formData();
-  const file = formData.get("file") as File | null;
-  const entityId = formData.get("entityId") as string;
-  const leaseId = formData.get("leaseId") as string;
+  const body = await request.json();
+  const { entityId, leaseId, storagePath, fileName, fileSize } = body as {
+    entityId: string;
+    leaseId: string;
+    storagePath: string;
+    fileName: string;
+    fileSize: number;
+  };
 
-  if (!file || !entityId || !leaseId) {
+  if (!entityId || !leaseId || !storagePath) {
     return NextResponse.json(
-      { error: "Missing required fields: file, entityId, leaseId" },
-      { status: 400 }
-    );
-  }
-
-  if (file.type !== "application/pdf") {
-    return NextResponse.json(
-      { error: "File must be a PDF document" },
-      { status: 400 }
-    );
-  }
-
-  // Max 25MB
-  if (file.size > 25 * 1024 * 1024) {
-    return NextResponse.json(
-      { error: "File too large. Maximum 25MB." },
+      { error: "Missing required fields: entityId, leaseId, storagePath" },
       { status: 400 }
     );
   }
 
   try {
-    const buffer = await file.arrayBuffer();
+    // Download the PDF from Supabase Storage
+    const { data: fileData, error: downloadError } = await supabase.storage
+      .from("lease-documents")
+      .download(storagePath);
+
+    if (downloadError || !fileData) {
+      return NextResponse.json(
+        { error: `Failed to download PDF: ${downloadError?.message || "File not found"}` },
+        { status: 500 }
+      );
+    }
+
+    const buffer = await fileData.arrayBuffer();
     const base64Pdf = Buffer.from(buffer).toString("base64");
 
     const anthropic = new Anthropic({
@@ -180,27 +185,18 @@ export async function POST(request: NextRequest) {
 
     const extracted = JSON.parse(jsonStr);
 
-    // Store the PDF in Supabase Storage for reference
-    const timestamp = Date.now();
-    const storagePath = `${entityId}/subleases/${timestamp}_${file.name}`;
-    await supabase.storage
-      .from("lease-documents")
-      .upload(storagePath, Buffer.from(buffer), {
-        contentType: "application/pdf",
-        upsert: false,
-      });
-
     return NextResponse.json({
       extracted,
-      file_name: file.name,
+      file_name: fileName,
       file_path: storagePath,
-      file_size_bytes: file.size,
+      file_size_bytes: fileSize,
       usage: {
         input_tokens: message.usage.input_tokens,
         output_tokens: message.usage.output_tokens,
       },
     });
   } catch (err: unknown) {
+    console.error("Sublease extraction error:", err);
     const errorMessage =
       err instanceof Error ? err.message : "Unknown error during extraction";
     return NextResponse.json(

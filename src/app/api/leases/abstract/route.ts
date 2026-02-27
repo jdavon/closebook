@@ -7,10 +7,11 @@ export const maxDuration = 60;
 
 /**
  * POST /api/leases/abstract
- * Accepts a PDF lease document, sends it to Claude for structured extraction,
- * and returns the extracted lease fields for user review.
+ * Client uploads the PDF to Supabase Storage first, then sends the storage
+ * path here. We download the file server-side and send it to Claude for
+ * structured extraction. This avoids Vercel's serverless payload limit.
  *
- * Form data: file (PDF), entityId
+ * JSON body: { entityId, storagePath, fileName, fileSize }
  */
 
 const EXTRACTION_PROMPT = `You are a commercial real estate lease abstraction expert. Analyze the attached lease document and extract all relevant fields into a structured JSON object.
@@ -120,34 +121,35 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const formData = await request.formData();
-  const file = formData.get("file") as File | null;
-  const entityId = formData.get("entityId") as string;
+  const body = await request.json();
+  const { entityId, storagePath, fileName, fileSize } = body as {
+    entityId: string;
+    storagePath: string;
+    fileName: string;
+    fileSize: number;
+  };
 
-  if (!file || !entityId) {
+  if (!entityId || !storagePath) {
     return NextResponse.json(
-      { error: "Missing required fields: file, entityId" },
-      { status: 400 }
-    );
-  }
-
-  if (file.type !== "application/pdf") {
-    return NextResponse.json(
-      { error: "File must be a PDF document" },
-      { status: 400 }
-    );
-  }
-
-  // Max 25MB
-  if (file.size > 25 * 1024 * 1024) {
-    return NextResponse.json(
-      { error: "File too large. Maximum 25MB." },
+      { error: "Missing required fields: entityId, storagePath" },
       { status: 400 }
     );
   }
 
   try {
-    const buffer = await file.arrayBuffer();
+    // Download the PDF from Supabase Storage
+    const { data: fileData, error: downloadError } = await supabase.storage
+      .from("lease-documents")
+      .download(storagePath);
+
+    if (downloadError || !fileData) {
+      return NextResponse.json(
+        { error: `Failed to download PDF: ${downloadError?.message || "File not found"}` },
+        { status: 500 }
+      );
+    }
+
+    const buffer = await fileData.arrayBuffer();
     const base64Pdf = Buffer.from(buffer).toString("base64");
 
     const anthropic = new Anthropic({
@@ -195,21 +197,11 @@ export async function POST(request: NextRequest) {
 
     const extracted = JSON.parse(jsonStr);
 
-    // Store the PDF in Supabase Storage for reference
-    const timestamp = Date.now();
-    const storagePath = `${entityId}/leases/${timestamp}_${file.name}`;
-    await supabase.storage
-      .from("lease-documents")
-      .upload(storagePath, Buffer.from(buffer), {
-        contentType: "application/pdf",
-        upsert: false,
-      });
-
     return NextResponse.json({
       extracted,
-      file_name: file.name,
+      file_name: fileName,
       file_path: storagePath,
-      file_size_bytes: file.size,
+      file_size_bytes: fileSize,
       usage: {
         input_tokens: message.usage.input_tokens,
         output_tokens: message.usage.output_tokens,

@@ -66,19 +66,44 @@ export default function LeaseFromPDFPage() {
       e.target.value = "";
       return;
     }
+    if (file.size > 25 * 1024 * 1024) {
+      toast.error("File too large. Maximum 25MB.");
+      e.target.value = "";
+      return;
+    }
 
     setExtracting(true);
     setExtractedData(null);
     setOverrides({});
 
-    const formData = new FormData();
-    formData.append("file", file);
-    formData.append("entityId", entityId);
-
     try {
+      // 1. Upload PDF directly to Supabase Storage (bypasses Vercel payload limit)
+      const timestamp = Date.now();
+      const storagePath = `${entityId}/leases/${timestamp}_${file.name}`;
+      const { error: uploadError } = await supabase.storage
+        .from("lease-documents")
+        .upload(storagePath, file, {
+          contentType: "application/pdf",
+          upsert: false,
+        });
+
+      if (uploadError) {
+        toast.error(`Upload failed: ${uploadError.message}`);
+        setExtracting(false);
+        e.target.value = "";
+        return;
+      }
+
+      // 2. Call API with just the storage path (small JSON payload)
       const res = await fetch("/api/leases/abstract", {
         method: "POST",
-        body: formData,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          entityId,
+          storagePath,
+          fileName: file.name,
+          fileSize: file.size,
+        }),
       });
 
       if (!res.ok) {
@@ -87,7 +112,6 @@ export default function LeaseFromPDFPage() {
           const data = await res.json();
           errorMsg = data.error || errorMsg;
         } catch {
-          // Response wasn't JSON (e.g., HTML error page)
           const text = await res.text().catch(() => "");
           console.error("Non-JSON error response:", res.status, text.slice(0, 500));
         }
