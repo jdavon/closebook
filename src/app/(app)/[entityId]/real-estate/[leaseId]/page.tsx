@@ -2422,8 +2422,14 @@ export default function LeaseDetailPage() {
                       </div>
                     ))}
 
-                    {/* Sample monthly entries (first 3 periods) */}
-                    {asc842Data.schedule.slice(0, 3).map((row) => {
+                    {/* Monthly entries starting from current month */}
+                    {(() => {
+                      const idx = asc842Data.schedule.findIndex(
+                        (r) => r.period_year === current.year && r.period_month === current.month
+                      );
+                      const start = idx >= 0 ? idx : 0;
+                      return asc842Data.schedule.slice(start, start + 3);
+                    })().map((row) => {
                       const monthlyJE = generateMonthlyJournalEntry(
                         row,
                         lease.lease_type as LeaseClassification,
@@ -2490,8 +2496,8 @@ export default function LeaseDetailPage() {
 
                     {asc842Data.schedule.length > 3 && (
                       <p className="text-sm text-muted-foreground text-center pt-2">
-                        Showing first 3 of {asc842Data.schedule.length} monthly
-                        entries. Full entries follow the same pattern.
+                        Showing current and next 2 months of {asc842Data.schedule.length} total
+                        periods.
                       </p>
                     )}
                   </CardContent>
