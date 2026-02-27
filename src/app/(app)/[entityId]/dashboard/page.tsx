@@ -20,7 +20,9 @@ import {
   FileText,
   TableProperties,
 } from "lucide-react";
-import { getPeriodLabel } from "@/lib/utils/dates";
+import { getCurrentPeriod, getPeriodLabel } from "@/lib/utils/dates";
+import { LastMonthPerformance } from "@/components/dashboard/last-month-performance";
+import { ThisMonthProjection } from "@/components/dashboard/this-month-projection";
 
 async function getEntityDashboardData(entityId: string) {
   const supabase = await createClient();
@@ -60,16 +62,12 @@ async function getEntityDashboardData(entityId: string) {
       const pendingReview = tasks.filter(
         (t) => t.status === "pending_review"
       ).length;
-      const notStarted = tasks.filter(
-        (t) => t.status === "not_started"
-      ).length;
 
       taskStats = {
         total,
         completed,
         inProgress,
         pendingReview,
-        notStarted,
         percentage: total > 0 ? Math.round((completed / total) * 100) : 0,
       };
     }
@@ -94,6 +92,8 @@ export default async function EntityDashboardPage({
 
   if (!entity) notFound();
 
+  const { year: currentYear, month: currentMonth } = getCurrentPeriod();
+
   return (
     <div className="space-y-6">
       <div>
@@ -103,6 +103,21 @@ export default async function EntityDashboardPage({
         <p className="text-muted-foreground">{entity.code}</p>
       </div>
 
+      {/* Financial Performance Section */}
+      <div className="grid gap-4 lg:grid-cols-2">
+        <LastMonthPerformance
+          entityId={entityId}
+          currentYear={currentYear}
+          currentMonth={currentMonth}
+        />
+        <ThisMonthProjection
+          entityId={entityId}
+          currentYear={currentYear}
+          currentMonth={currentMonth}
+        />
+      </div>
+
+      {/* Status Cards */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         {/* Close Status */}
         <Card>
