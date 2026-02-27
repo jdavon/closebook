@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { fetchAllPaginated } from "@/lib/utils/paginated-fetch";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -171,18 +172,21 @@ export default function TrialBalancePage() {
 
   const loadBalances = useCallback(async () => {
     setLoading(true);
-    const { data } = await supabase
-      .from("gl_balances")
-      .select(
-        "account_id, ending_balance, debit_total, credit_total, net_change, synced_at, accounts(name, account_number, classification, account_type)"
-      )
-      .eq("entity_id", entityId)
-      .eq("period_year", parseInt(year))
-      .eq("period_month", parseInt(month))
-      .order("accounts(classification)")
-      .order("accounts(account_number)");
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rows = (await fetchAllPaginated<any>((offset, limit) =>
+      (supabase as any)
+        .from("gl_balances")
+        .select(
+          "account_id, ending_balance, debit_total, credit_total, net_change, synced_at, accounts(name, account_number, classification, account_type)"
+        )
+        .eq("entity_id", entityId)
+        .eq("period_year", parseInt(year))
+        .eq("period_month", parseInt(month))
+        .order("accounts(classification)")
+        .order("accounts(account_number)")
+        .range(offset, offset + limit - 1)
+    )) as GLBalance[];
 
-    const rows = (data as unknown as GLBalance[]) ?? [];
     setBalances(rows);
 
     const synced = rows

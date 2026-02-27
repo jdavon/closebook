@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { fetchAllPaginated } from "@/lib/utils/paginated-fetch";
 import * as XLSX from "xlsx";
 
 /**
@@ -59,23 +60,29 @@ export async function GET(request: NextRequest) {
   }
 
   // ── Load entity accounts ─────────────────────────────────────────────
-  const { data: entityAccounts } = await supabase
-    .from("accounts")
-    .select("account_number, name, classification, account_type")
-    .eq("entity_id", entityId)
-    .eq("is_active", true)
-    .order("classification")
-    .order("account_number")
-    .order("name");
+  const entityAccounts = await fetchAllPaginated<any>((offset, limit) =>
+    supabase
+      .from("accounts")
+      .select("account_number, name, classification, account_type")
+      .eq("entity_id", entityId)
+      .eq("is_active", true)
+      .order("classification")
+      .order("account_number")
+      .order("name")
+      .range(offset, offset + limit - 1)
+  );
 
   // ── Load master accounts (for the reference sheet) ───────────────────
-  const { data: masterAccounts } = await supabase
-    .from("master_accounts")
-    .select("account_number, name, classification")
-    .eq("organization_id", orgId)
-    .eq("is_active", true)
-    .order("display_order")
-    .order("account_number");
+  const masterAccounts = await fetchAllPaginated<any>((offset, limit) =>
+    supabase
+      .from("master_accounts")
+      .select("account_number, name, classification")
+      .eq("organization_id", orgId)
+      .eq("is_active", true)
+      .order("display_order")
+      .order("account_number")
+      .range(offset, offset + limit - 1)
+  );
 
   // ── Build workbook ───────────────────────────────────────────────────
   const wb = XLSX.utils.book_new();
@@ -88,7 +95,7 @@ export async function GET(request: NextRequest) {
       "Classification",
       "Master GL Account",
     ],
-    ...(entityAccounts ?? []).map((a) => [
+    ...entityAccounts.map((a) => [
       a.account_number ?? "",
       a.name,
       a.classification,
@@ -102,7 +109,7 @@ export async function GET(request: NextRequest) {
   // Sheet 2 — Master GL Accounts (reference list)
   const refRows = [
     ["Master Account Number", "Master Account Name", "Classification"],
-    ...(masterAccounts ?? []).map((m) => [
+    ...masterAccounts.map((m) => [
       m.account_number,
       m.name,
       m.classification,

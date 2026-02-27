@@ -15,6 +15,7 @@ import {
   BarChart3,
   Settings,
   LogOut,
+  Building,
   Building2,
   LibraryBig,
   RefreshCw,
@@ -135,6 +136,11 @@ export function AppSidebar({ user, entityId: entityIdProp }: AppSidebarProps) {
           title: "Debt Schedule",
           url: `${entityPrefix}/debt`,
           icon: Landmark,
+        },
+        {
+          title: "Real Estate",
+          url: `${entityPrefix}/real-estate`,
+          icon: Building,
         },
         {
           title: "Budget",

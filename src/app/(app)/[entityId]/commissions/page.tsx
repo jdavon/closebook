@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { fetchAllPaginated } from "@/lib/utils/paginated-fetch";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -240,29 +241,35 @@ export default function CommissionsPage() {
     setQboClasses((classData ?? []) as QboClass[]);
 
     // Fetch GL balances for detail expansion (all accounts for this period)
-    const { data: glData } = await supabase
-      .from("gl_balances")
-      .select("account_id, net_change")
-      .eq("entity_id", entityId)
-      .eq("period_year", periodYear)
-      .eq("period_month", periodMonth);
+    const glData = await fetchAllPaginated<any>((offset, limit) =>
+      supabase
+        .from("gl_balances")
+        .select("account_id, net_change")
+        .eq("entity_id", entityId)
+        .eq("period_year", periodYear)
+        .eq("period_month", periodMonth)
+        .range(offset, offset + limit - 1)
+    );
 
     const balanceMap: Record<string, number> = {};
-    for (const row of glData ?? []) {
+    for (const row of glData) {
       balanceMap[row.account_id] = Number(row.net_change ?? 0);
     }
     setDetailBalances(balanceMap);
 
     // Fetch class-level GL balances for detail expansion
-    const { data: classGlData } = await supabase
-      .from("gl_class_balances")
-      .select("account_id, qbo_class_id, net_change")
-      .eq("entity_id", entityId)
-      .eq("period_year", periodYear)
-      .eq("period_month", periodMonth);
+    const classGlData = await fetchAllPaginated<any>((offset, limit) =>
+      supabase
+        .from("gl_class_balances")
+        .select("account_id, qbo_class_id, net_change")
+        .eq("entity_id", entityId)
+        .eq("period_year", periodYear)
+        .eq("period_month", periodMonth)
+        .range(offset, offset + limit - 1)
+    );
 
     const classBalanceMap: Record<string, number> = {};
-    for (const row of classGlData ?? []) {
+    for (const row of classGlData) {
       classBalanceMap[`${row.account_id}__${row.qbo_class_id}`] = Number(
         row.net_change ?? 0
       );

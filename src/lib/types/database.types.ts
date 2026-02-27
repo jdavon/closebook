@@ -2105,6 +2105,475 @@ export type Database = {
           },
         ]
       }
+      properties: {
+        Row: {
+          id: string
+          entity_id: string
+          property_name: string
+          address_line1: string | null
+          address_line2: string | null
+          city: string | null
+          state: string | null
+          zip_code: string | null
+          country: string | null
+          property_type: string
+          total_square_footage: number | null
+          rentable_square_footage: number | null
+          usable_square_footage: number | null
+          notes: string | null
+          created_by: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          entity_id: string
+          property_name: string
+          address_line1?: string | null
+          address_line2?: string | null
+          city?: string | null
+          state?: string | null
+          zip_code?: string | null
+          country?: string | null
+          property_type?: string
+          total_square_footage?: number | null
+          rentable_square_footage?: number | null
+          usable_square_footage?: number | null
+          notes?: string | null
+          created_by?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          entity_id?: string
+          property_name?: string
+          address_line1?: string | null
+          address_line2?: string | null
+          city?: string | null
+          state?: string | null
+          zip_code?: string | null
+          country?: string | null
+          property_type?: string
+          total_square_footage?: number | null
+          rentable_square_footage?: number | null
+          usable_square_footage?: number | null
+          notes?: string | null
+          created_by?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      leases: {
+        Row: {
+          id: string
+          entity_id: string
+          property_id: string
+          lease_name: string
+          lessor_name: string | null
+          lessor_contact_info: string | null
+          lease_type: string
+          status: string
+          commencement_date: string
+          rent_commencement_date: string | null
+          expiration_date: string
+          lease_term_months: number
+          base_rent_monthly: number
+          base_rent_annual: number
+          rent_per_sf: number | null
+          security_deposit: number
+          tenant_improvement_allowance: number
+          rent_abatement_months: number
+          rent_abatement_amount: number
+          discount_rate: number
+          initial_direct_costs: number
+          lease_incentives_received: number
+          prepaid_rent: number
+          fair_value_of_asset: number | null
+          remaining_economic_life_months: number | null
+          cam_monthly: number
+          insurance_monthly: number
+          property_tax_annual: number
+          property_tax_frequency: string
+          utilities_monthly: number
+          other_monthly_costs: number
+          other_monthly_costs_description: string | null
+          maintenance_type: string
+          permitted_use: string | null
+          notes: string | null
+          rou_asset_account_id: string | null
+          lease_liability_account_id: string | null
+          lease_expense_account_id: string | null
+          interest_expense_account_id: string | null
+          cam_expense_account_id: string | null
+          created_by: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          entity_id: string
+          property_id: string
+          lease_name: string
+          lessor_name?: string | null
+          lessor_contact_info?: string | null
+          lease_type?: string
+          status?: string
+          commencement_date: string
+          rent_commencement_date?: string | null
+          expiration_date: string
+          lease_term_months: number
+          base_rent_monthly?: number
+          rent_per_sf?: number | null
+          security_deposit?: number
+          tenant_improvement_allowance?: number
+          rent_abatement_months?: number
+          rent_abatement_amount?: number
+          discount_rate?: number
+          initial_direct_costs?: number
+          lease_incentives_received?: number
+          prepaid_rent?: number
+          fair_value_of_asset?: number | null
+          remaining_economic_life_months?: number | null
+          cam_monthly?: number
+          insurance_monthly?: number
+          property_tax_annual?: number
+          property_tax_frequency?: string
+          utilities_monthly?: number
+          other_monthly_costs?: number
+          other_monthly_costs_description?: string | null
+          maintenance_type?: string
+          permitted_use?: string | null
+          notes?: string | null
+          rou_asset_account_id?: string | null
+          lease_liability_account_id?: string | null
+          lease_expense_account_id?: string | null
+          interest_expense_account_id?: string | null
+          cam_expense_account_id?: string | null
+          created_by?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          entity_id?: string
+          property_id?: string
+          lease_name?: string
+          lessor_name?: string | null
+          lessor_contact_info?: string | null
+          lease_type?: string
+          status?: string
+          commencement_date?: string
+          rent_commencement_date?: string | null
+          expiration_date?: string
+          lease_term_months?: number
+          base_rent_monthly?: number
+          rent_per_sf?: number | null
+          security_deposit?: number
+          tenant_improvement_allowance?: number
+          rent_abatement_months?: number
+          rent_abatement_amount?: number
+          discount_rate?: number
+          initial_direct_costs?: number
+          lease_incentives_received?: number
+          prepaid_rent?: number
+          fair_value_of_asset?: number | null
+          remaining_economic_life_months?: number | null
+          cam_monthly?: number
+          insurance_monthly?: number
+          property_tax_annual?: number
+          property_tax_frequency?: string
+          utilities_monthly?: number
+          other_monthly_costs?: number
+          other_monthly_costs_description?: string | null
+          maintenance_type?: string
+          permitted_use?: string | null
+          notes?: string | null
+          rou_asset_account_id?: string | null
+          lease_liability_account_id?: string | null
+          lease_expense_account_id?: string | null
+          interest_expense_account_id?: string | null
+          cam_expense_account_id?: string | null
+          created_by?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      lease_payments: {
+        Row: {
+          id: string
+          lease_id: string
+          period_year: number
+          period_month: number
+          payment_type: string
+          scheduled_amount: number
+          actual_amount: number | null
+          is_paid: boolean
+          payment_date: string | null
+          notes: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          lease_id: string
+          period_year: number
+          period_month: number
+          payment_type: string
+          scheduled_amount?: number
+          actual_amount?: number | null
+          is_paid?: boolean
+          payment_date?: string | null
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          lease_id?: string
+          period_year?: number
+          period_month?: number
+          payment_type?: string
+          scheduled_amount?: number
+          actual_amount?: number | null
+          is_paid?: boolean
+          payment_date?: string | null
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      lease_escalations: {
+        Row: {
+          id: string
+          lease_id: string
+          escalation_type: string
+          effective_date: string
+          percentage_increase: number | null
+          amount_increase: number | null
+          cpi_index_name: string | null
+          cpi_cap: number | null
+          cpi_floor: number | null
+          frequency: string
+          notes: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          lease_id: string
+          escalation_type: string
+          effective_date: string
+          percentage_increase?: number | null
+          amount_increase?: number | null
+          cpi_index_name?: string | null
+          cpi_cap?: number | null
+          cpi_floor?: number | null
+          frequency?: string
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          lease_id?: string
+          escalation_type?: string
+          effective_date?: string
+          percentage_increase?: number | null
+          amount_increase?: number | null
+          cpi_index_name?: string | null
+          cpi_cap?: number | null
+          cpi_floor?: number | null
+          frequency?: string
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      lease_options: {
+        Row: {
+          id: string
+          lease_id: string
+          option_type: string
+          exercise_deadline: string | null
+          notice_required_days: number | null
+          option_term_months: number | null
+          option_rent_terms: string | null
+          option_price: number | null
+          penalty_amount: number | null
+          is_reasonably_certain: boolean
+          is_exercised: boolean
+          exercised_date: string | null
+          notes: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          lease_id: string
+          option_type: string
+          exercise_deadline?: string | null
+          notice_required_days?: number | null
+          option_term_months?: number | null
+          option_rent_terms?: string | null
+          option_price?: number | null
+          penalty_amount?: number | null
+          is_reasonably_certain?: boolean
+          is_exercised?: boolean
+          exercised_date?: string | null
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          lease_id?: string
+          option_type?: string
+          exercise_deadline?: string | null
+          notice_required_days?: number | null
+          option_term_months?: number | null
+          option_rent_terms?: string | null
+          option_price?: number | null
+          penalty_amount?: number | null
+          is_reasonably_certain?: boolean
+          is_exercised?: boolean
+          exercised_date?: string | null
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      lease_amendments: {
+        Row: {
+          id: string
+          lease_id: string
+          amendment_number: number
+          effective_date: string
+          description: string | null
+          changed_fields: Record<string, unknown> | null
+          previous_values: Record<string, unknown> | null
+          new_values: Record<string, unknown> | null
+          notes: string | null
+          created_by: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          lease_id: string
+          amendment_number: number
+          effective_date: string
+          description?: string | null
+          changed_fields?: Record<string, unknown> | null
+          previous_values?: Record<string, unknown> | null
+          new_values?: Record<string, unknown> | null
+          notes?: string | null
+          created_by?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          lease_id?: string
+          amendment_number?: number
+          effective_date?: string
+          description?: string | null
+          changed_fields?: Record<string, unknown> | null
+          previous_values?: Record<string, unknown> | null
+          new_values?: Record<string, unknown> | null
+          notes?: string | null
+          created_by?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      lease_critical_dates: {
+        Row: {
+          id: string
+          lease_id: string
+          date_type: string
+          critical_date: string
+          alert_days_before: number
+          description: string | null
+          is_resolved: boolean
+          resolved_date: string | null
+          resolved_by: string | null
+          notes: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          lease_id: string
+          date_type: string
+          critical_date: string
+          alert_days_before?: number
+          description?: string | null
+          is_resolved?: boolean
+          resolved_date?: string | null
+          resolved_by?: string | null
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          lease_id?: string
+          date_type?: string
+          critical_date?: string
+          alert_days_before?: number
+          description?: string | null
+          is_resolved?: boolean
+          resolved_date?: string | null
+          resolved_by?: string | null
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      lease_documents: {
+        Row: {
+          id: string
+          lease_id: string
+          document_type: string
+          file_name: string
+          file_path: string
+          file_size_bytes: number | null
+          uploaded_by: string | null
+          notes: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          lease_id: string
+          document_type?: string
+          file_name: string
+          file_path: string
+          file_size_bytes?: number | null
+          uploaded_by?: string | null
+          notes?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          lease_id?: string
+          document_type?: string
+          file_name?: string
+          file_path?: string
+          file_size_bytes?: number | null
+          uploaded_by?: string | null
+          notes?: string | null
+          created_at?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never

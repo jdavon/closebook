@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { fetchAllPaginated } from "@/lib/utils/paginated-fetch";
 import { findMasterForEntityAccount } from "@/lib/config/master-gl-template";
 
 /**
@@ -64,12 +65,16 @@ export async function POST(request: Request) {
   }
 
   // ── 2. Load existing master accounts ─────────────────────────────────
-  const { data: masterAccounts } = await supabase
-    .from("master_accounts")
-    .select("id, account_number, name")
-    .eq("organization_id", orgId);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const masterAccounts = await fetchAllPaginated<any>((offset, limit) =>
+    supabase
+      .from("master_accounts")
+      .select("id, account_number, name")
+      .eq("organization_id", orgId)
+      .range(offset, offset + limit - 1)
+  );
 
-  if (!masterAccounts || masterAccounts.length === 0) {
+  if (masterAccounts.length === 0) {
     return NextResponse.json(
       { error: "No master accounts found. Create them first." },
       { status: 400 }
@@ -82,12 +87,16 @@ export async function POST(request: Request) {
   );
 
   // ── 3. Load entity accounts ──────────────────────────────────────────
-  const { data: entityAccounts } = await supabase
-    .from("accounts")
-    .select("id, account_number, name, account_type")
-    .eq("entity_id", entityId);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const entityAccounts = await fetchAllPaginated<any>((offset, limit) =>
+    supabase
+      .from("accounts")
+      .select("id, account_number, name, account_type")
+      .eq("entity_id", entityId)
+      .range(offset, offset + limit - 1)
+  );
 
-  if (!entityAccounts || entityAccounts.length === 0) {
+  if (entityAccounts.length === 0) {
     return NextResponse.json({
       mappingsCreated: 0,
       unmapped: [],

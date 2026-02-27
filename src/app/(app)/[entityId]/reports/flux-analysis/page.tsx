@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { fetchAllPaginated } from "@/lib/utils/paginated-fetch";
 import {
   Card,
   CardContent,
@@ -59,32 +60,38 @@ export default function FluxAnalysisPage() {
     const currentM = parseInt(month);
     const priorPeriod = getPriorPeriod(currentY, currentM);
 
-    const [currentResult, priorResult] = await Promise.all([
-      supabase
-        .from("gl_balances")
-        .select("account_id, ending_balance, accounts(name, account_number, classification)")
-        .eq("entity_id", entityId)
-        .eq("period_year", currentY)
-        .eq("period_month", currentM),
-      supabase
-        .from("gl_balances")
-        .select("account_id, ending_balance")
-        .eq("entity_id", entityId)
-        .eq("period_year", priorPeriod.year)
-        .eq("period_month", priorPeriod.month),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const [currentData, priorData] = await Promise.all([
+      fetchAllPaginated<any>((offset, limit) =>
+        (supabase as any)
+          .from("gl_balances")
+          .select("account_id, ending_balance, accounts(name, account_number, classification)")
+          .eq("entity_id", entityId)
+          .eq("period_year", currentY)
+          .eq("period_month", currentM)
+          .range(offset, offset + limit - 1)
+      ) as Promise<Array<{
+        account_id: string; ending_balance: number;
+        accounts: { name: string; account_number: string | null; classification: string };
+      }>>,
+      fetchAllPaginated<any>((offset, limit) =>
+        supabase
+          .from("gl_balances")
+          .select("account_id, ending_balance")
+          .eq("entity_id", entityId)
+          .eq("period_year", priorPeriod.year)
+          .eq("period_month", priorPeriod.month)
+          .range(offset, offset + limit - 1)
+      ),
     ]);
 
     const priorMap = new Map<string, number>();
-    for (const row of priorResult.data ?? []) {
+    for (const row of priorData) {
       priorMap.set(row.account_id, row.ending_balance);
     }
 
     const fluxRows: FluxRow[] = [];
-    for (const row of (currentResult.data as unknown as Array<{
-      account_id: string;
-      ending_balance: number;
-      accounts: { name: string; account_number: string | null; classification: string };
-    }>) ?? []) {
+    for (const row of currentData) {
       const priorBalance = priorMap.get(row.account_id) ?? 0;
       const dollarChange = row.ending_balance - priorBalance;
       const percentChange =

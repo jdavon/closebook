@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getPeriodsInRange, type PeriodBucket } from "@/lib/utils/dates";
+import { fetchAllPaginated } from "@/lib/utils/paginated-fetch";
 import {
   INCOME_STATEMENT_SECTIONS,
   INCOME_STATEMENT_COMPUTED,
@@ -256,25 +257,30 @@ export async function GET(request: Request) {
   // ---------------------------------------------------------------------------
 
   // Get master account info
-  const { data: masterAccounts } = await admin
-    .from("master_accounts")
-    .select("id, name, account_number, classification")
-    .in("id", allMasterAccountIds);
+  const masterAccounts = await fetchAllPaginated<any>((offset, limit) =>
+    admin
+      .from("master_accounts")
+      .select("id, name, account_number, classification")
+      .in("id", allMasterAccountIds)
+      .range(offset, offset + limit - 1)
+  );
 
   const maMap = new Map<string, { name: string; account_number: string | null; classification: string }>();
-  for (const ma of masterAccounts ?? []) {
+  for (const ma of masterAccounts) {
     maMap.set(ma.id, { name: ma.name, account_number: ma.account_number, classification: ma.classification });
   }
 
   // Get mappings: master_account -> entity accounts (filtered to scope entities)
-  const { data: mappings } = await admin
-    .from("master_account_mappings")
-    .select("master_account_id, entity_id, account_id")
-    .in("master_account_id", allMasterAccountIds)
-    .in("entity_id", scopeEntityIds)
-    .limit(10000);
+  const mappings = await fetchAllPaginated<any>((offset, limit) =>
+    admin
+      .from("master_account_mappings")
+      .select("master_account_id, entity_id, account_id")
+      .in("master_account_id", allMasterAccountIds)
+      .in("entity_id", scopeEntityIds)
+      .range(offset, offset + limit - 1)
+  );
 
-  const mappedAccountIds = (mappings ?? []).map((m: { account_id: string }) => m.account_id);
+  const mappedAccountIds = mappings.map((m: { account_id: string }) => m.account_id);
 
   if (mappedAccountIds.length === 0) {
     return NextResponse.json({
@@ -345,14 +351,16 @@ export async function GET(request: Request) {
 
     if (versionIds.length > 0) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data: budgetAmounts } = await (admin as any)
-        .from("budget_amounts")
-        .select("budget_version_id, account_id, period_year, period_month, amount")
-        .in("budget_version_id", versionIds)
-        .in("account_id", mappedAccountIds)
-        .in("period_year", uniqueYears)
-        .in("period_month", uniqueMonthNums)
-        .limit(10000);
+      const budgetAmounts = await fetchAllPaginated<any>((offset, limit) =>
+        (admin as any)
+          .from("budget_amounts")
+          .select("budget_version_id, account_id, period_year, period_month, amount")
+          .in("budget_version_id", versionIds)
+          .in("account_id", mappedAccountIds)
+          .in("period_year", uniqueYears)
+          .in("period_month", uniqueMonthNums)
+          .range(offset, offset + limit - 1)
+      );
 
       // Build a version -> entity lookup
       const versionToEntity = new Map<string, string>();
@@ -362,7 +370,7 @@ export async function GET(request: Request) {
 
       // Aggregate budget amounts by (master_account_id, entity_id)
       const budgetAgg = new Map<string, number>();
-      for (const ba of budgetAmounts ?? []) {
+      for (const ba of budgetAmounts) {
         const key = `${ba.period_year}-${String(ba.period_month).padStart(2, "0")}`;
         if (!monthSet.has(key)) continue;
 
@@ -406,13 +414,15 @@ export async function GET(request: Request) {
   }
 
   // --- Actual column: fetch GL balances ---
-  const { data: glRows } = await admin
-    .from("gl_balances")
-    .select("account_id, entity_id, period_year, period_month, beginning_balance, ending_balance, net_change")
-    .in("account_id", mappedAccountIds)
-    .in("period_year", uniqueYears)
-    .in("period_month", uniqueMonthNums)
-    .limit(10000);
+  const glRows = await fetchAllPaginated<any>((offset, limit) =>
+    admin
+      .from("gl_balances")
+      .select("account_id, entity_id, period_year, period_month, beginning_balance, ending_balance, net_change")
+      .in("account_id", mappedAccountIds)
+      .in("period_year", uniqueYears)
+      .in("period_month", uniqueMonthNums)
+      .range(offset, offset + limit - 1)
+  );
 
   // Filter to exact months and aggregate by (master_account_id, entity_id, account_id)
   const glAgg = new Map<string, number>();
@@ -420,7 +430,7 @@ export async function GET(request: Request) {
   const cfBeginAgg = new Map<string, number>();
   const cfEndAgg = new Map<string, number>();
 
-  for (const row of glRows ?? []) {
+  for (const row of glRows) {
     const key = `${row.period_year}-${String(row.period_month).padStart(2, "0")}`;
     if (!monthSet.has(key)) continue;
 
@@ -596,19 +606,25 @@ async function buildDrillDownResponse(
 
   if (includeProForma) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data: proFormaRows } = await (admin as any)
-      .from("pro_forma_adjustments")
-      .select(`
-        id, entity_id, master_account_id, period_year, period_month, amount, description,
-        entities!inner(name, code)
-      `)
-      .eq("organization_id", organizationId)
-      .in("master_account_id", allMasterAccountIds)
-      .eq("is_excluded", false)
-      .in("period_year", [...new Set(targetMonths.map((m) => m.year))])
-      .in("period_month", [...new Set(targetMonths.map((m) => m.month))]);
+    const masterAccountIdSet = new Set(allMasterAccountIds);
+    const maIdListPF = allMasterAccountIds.join(",");
+    // Fetch adjustments where either primary or offset account is in scope
+    const proFormaRows = await fetchAllPaginated<any>((offset, limit) =>
+      (admin as any)
+        .from("pro_forma_adjustments")
+        .select(`
+          id, entity_id, master_account_id, offset_master_account_id, period_year, period_month, amount, description,
+          entities!inner(name, code)
+        `)
+        .eq("organization_id", organizationId)
+        .or(`master_account_id.in.(${maIdListPF}),offset_master_account_id.in.(${maIdListPF})`)
+        .eq("is_excluded", false)
+        .in("period_year", [...new Set(targetMonths.map((m) => m.year))])
+        .in("period_month", [...new Set(targetMonths.map((m) => m.month))])
+        .range(offset, offset + limit - 1)
+    );
 
-    for (const pf of proFormaRows ?? []) {
+    for (const pf of proFormaRows) {
       const monthKey = `${pf.period_year}-${String(pf.period_month).padStart(2, "0")}`;
       const monthSet = new Set(
         targetMonths.map((m) => `${m.year}-${String(m.month).padStart(2, "0")}`)
@@ -617,14 +633,30 @@ async function buildDrillDownResponse(
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const entity = pf.entities as any;
-      adjustments.push({
-        type: "pro_forma",
-        entityName: entity?.name ?? "",
-        entityCode: entity?.code ?? "",
-        description: pf.description,
-        amount: Number(pf.amount),
-      });
-      grandTotal += Number(pf.amount);
+
+      // Primary side: if the primary account is in the drilled-down set
+      if (masterAccountIdSet.has(pf.master_account_id)) {
+        adjustments.push({
+          type: "pro_forma",
+          entityName: entity?.name ?? "",
+          entityCode: entity?.code ?? "",
+          description: pf.description,
+          amount: Number(pf.amount),
+        });
+        grandTotal += Number(pf.amount);
+      }
+
+      // Offset side: if the offset account is in the drilled-down set
+      if (pf.offset_master_account_id && masterAccountIdSet.has(pf.offset_master_account_id)) {
+        adjustments.push({
+          type: "pro_forma",
+          entityName: entity?.name ?? "",
+          entityCode: entity?.code ?? "",
+          description: `${pf.description} (offset)`,
+          amount: -Number(pf.amount),
+        });
+        grandTotal -= Number(pf.amount);
+      }
     }
   }
 
@@ -633,22 +665,25 @@ async function buildDrillDownResponse(
     // (either as source account or as reclass destination account)
     const maIdList = allMasterAccountIds.join(",");
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data: allocRows } = await (admin as any)
-      .from("allocation_adjustments")
-      .select(`
-        id, source_entity_id, destination_entity_id, master_account_id,
-        destination_master_account_id,
-        amount, description, schedule_type, period_year, period_month,
-        start_year, start_month, end_year, end_month, is_repeating,
-        repeat_end_year, repeat_end_month,
-        source:entities!allocation_adjustments_source_entity_id_fkey(name, code),
-        destination:entities!allocation_adjustments_destination_entity_id_fkey(name, code)
-      `)
-      .eq("organization_id", organizationId)
-      .or(`master_account_id.in.(${maIdList}),destination_master_account_id.in.(${maIdList})`)
-      .eq("is_excluded", false);
+    const allocRows = await fetchAllPaginated<any>((offset, limit) =>
+      (admin as any)
+        .from("allocation_adjustments")
+        .select(`
+          id, source_entity_id, destination_entity_id, master_account_id,
+          destination_master_account_id,
+          amount, description, schedule_type, period_year, period_month,
+          start_year, start_month, end_year, end_month, is_repeating,
+          repeat_end_year, repeat_end_month,
+          source:entities!allocation_adjustments_source_entity_id_fkey(name, code),
+          destination:entities!allocation_adjustments_destination_entity_id_fkey(name, code)
+        `)
+        .eq("organization_id", organizationId)
+        .or(`master_account_id.in.(${maIdList}),destination_master_account_id.in.(${maIdList})`)
+        .eq("is_excluded", false)
+        .range(offset, offset + limit - 1)
+    );
 
-    for (const alloc of allocRows ?? []) {
+    for (const alloc of allocRows) {
       // Check if this allocation applies to the target months
       const appliesInPeriod = targetMonths.some((m) => {
         if (alloc.schedule_type === "single_month") {

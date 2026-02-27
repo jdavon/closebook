@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { fetchAllPaginated } from "@/lib/utils/paginated-fetch";
 
 export async function GET() {
   const supabase = await createClient();
@@ -25,18 +26,16 @@ export async function GET() {
     );
   }
 
-  const { data: accounts, error } = await supabase
-    .from("master_accounts")
-    .select("*")
-    .eq("organization_id", membership.organization_id)
-    .order("classification")
-    .order("display_order")
-    .order("account_number")
-    .limit(5000);
-
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
-  }
+  const accounts = await fetchAllPaginated<any>((offset, limit) =>
+    supabase
+      .from("master_accounts")
+      .select("*")
+      .eq("organization_id", membership.organization_id)
+      .order("classification")
+      .order("display_order")
+      .order("account_number")
+      .range(offset, offset + limit - 1)
+  );
 
   return NextResponse.json({ accounts });
 }

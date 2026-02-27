@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { fetchAllPaginated } from "@/lib/utils/paginated-fetch";
 import {
   INCOME_STATEMENT_SECTIONS,
   INCOME_STATEMENT_COMPUTED,
@@ -82,15 +83,18 @@ export async function GET(request: Request) {
     }
 
     // Fetch budget amounts (now keyed by master_account_id)
-    const { data: amounts } = await admin
-      .from("budget_amounts")
-      .select("master_account_id, period_month, amount")
-      .eq("budget_version_id", versionId);
+    const amounts = await fetchAllPaginated<any>((offset, limit) =>
+      admin
+        .from("budget_amounts")
+        .select("master_account_id, period_month, amount")
+        .eq("budget_version_id", versionId)
+        .range(offset, offset + limit - 1)
+    );
 
     // Collect unique master account IDs
     const masterAccountIds = [
       ...new Set(
-        (amounts ?? []).map(
+        amounts.map(
           (a: { master_account_id: string }) => a.master_account_id
         )
       ),
@@ -110,14 +114,17 @@ export async function GET(request: Request) {
     }
 
     // Fetch Master GL accounts
-    const { data: masterAccounts } = await admin
-      .from("master_accounts")
-      .select("id, name, account_number, classification, account_type")
-      .in("id", masterAccountIds)
-      .order("account_number");
+    const masterAccounts = await fetchAllPaginated<any>((offset, limit) =>
+      admin
+        .from("master_accounts")
+        .select("id, name, account_number, classification, account_type")
+        .in("id", masterAccountIds)
+        .order("account_number")
+        .range(offset, offset + limit - 1)
+    );
 
     const accountMap = new Map<string, MasterAccount>();
-    for (const a of masterAccounts ?? []) {
+    for (const a of masterAccounts) {
       accountMap.set(a.id, {
         id: a.id,
         name: a.name,

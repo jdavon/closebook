@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { fetchAllPaginated } from "@/lib/utils/paginated-fetch";
 import {
   Card,
   CardContent,
@@ -258,20 +259,22 @@ export default function MasterGLPage() {
   const loadEntities = useCallback(async () => {
     if (!organizationId) return;
 
-    const { data } = await supabase
-      .from("entities")
-      .select("id, name, code")
-      .eq("organization_id", organizationId)
-      .eq("is_active", true)
-      .order("name")
-      .limit(5000);
+    const data = await fetchAllPaginated<any>((offset, limit) =>
+      supabase
+        .from("entities")
+        .select("id, name, code")
+        .eq("organization_id", organizationId)
+        .eq("is_active", true)
+        .order("name")
+        .range(offset, offset + limit - 1)
+    );
 
-    if (data) {
-      setEntities(data);
-      // Load accounts for each entity
-      const accountsByEntity: Record<string, EntityAccount[]> = {};
-      for (const entity of data) {
-        const { data: accounts } = await supabase
+    setEntities(data);
+    // Load accounts for each entity
+    const accountsByEntity: Record<string, EntityAccount[]> = {};
+    for (const entity of data) {
+      const accounts = await fetchAllPaginated<EntityAccount>((offset, limit) =>
+        supabase
           .from("accounts")
           .select(
             "id, entity_id, name, account_number, classification, account_type, current_balance"
@@ -281,11 +284,11 @@ export default function MasterGLPage() {
           .order("classification")
           .order("account_number")
           .order("name")
-          .limit(5000);
-        accountsByEntity[entity.id] = (accounts as EntityAccount[]) ?? [];
-      }
-      setEntityAccounts(accountsByEntity);
+          .range(offset, offset + limit - 1)
+      );
+      accountsByEntity[entity.id] = accounts;
     }
+    setEntityAccounts(accountsByEntity);
   }, [supabase, organizationId]);
 
   const loadUnmappedMonthly = useCallback(async () => {

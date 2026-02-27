@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { fetchAllPaginated } from "@/lib/utils/paginated-fetch";
 
 export async function GET(request: Request) {
   const supabase = await createClient();
@@ -46,34 +47,32 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Entity not found" }, { status: 404 });
   }
 
-  // Build query
-  let query = supabase
-    .from("tb_unmatched_rows")
-    .select("id, entity_id, period_year, period_month, qbo_account_name, qbo_account_id, debit, credit, resolved_account_id, resolved_at, resolved_by, created_at")
-    .order("period_month", { ascending: true })
-    .order("qbo_account_name", { ascending: true });
+  // Build query with pagination to avoid PostgREST row-limit truncation
+  const rows = await fetchAllPaginated<any>((offset, limit) => {
+    let query = supabase
+      .from("tb_unmatched_rows")
+      .select("id, entity_id, period_year, period_month, qbo_account_name, qbo_account_id, debit, credit, resolved_account_id, resolved_at, resolved_by, created_at")
+      .order("period_month", { ascending: true })
+      .order("qbo_account_name", { ascending: true });
 
-  if (entityId) {
-    query = query.eq("entity_id", entityId);
-  } else {
-    query = query.in("entity_id", entityIds);
-  }
+    if (entityId) {
+      query = query.eq("entity_id", entityId);
+    } else {
+      query = query.in("entity_id", entityIds);
+    }
 
-  if (year) {
-    query = query.eq("period_year", parseInt(year));
-  }
+    if (year) {
+      query = query.eq("period_year", parseInt(year));
+    }
 
-  if (month) {
-    query = query.eq("period_month", parseInt(month));
-  }
+    if (month) {
+      query = query.eq("period_month", parseInt(month));
+    }
 
-  const { data: rows, error } = await query;
+    return query.range(offset, offset + limit - 1);
+  });
 
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
-  }
-
-  const unmatchedRows = (rows ?? []).map((row) => {
+  const unmatchedRows = rows.map((row) => {
     const entity = entityMap.get(row.entity_id);
     return {
       id: row.id,

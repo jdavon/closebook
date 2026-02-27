@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { fetchAllPaginated } from "@/lib/utils/paginated-fetch";
 import {
   Card,
   CardContent,
@@ -49,16 +50,20 @@ export default function KpiDashboardPage() {
   const currentPeriod = getCurrentPeriod();
 
   const loadKpis = useCallback(async () => {
-    const { data } = await supabase
-      .from("kpi_values")
-      .select(
-        "period_year, period_month, value, kpi_definitions(id, name, description, format, target_value)"
-      )
-      .eq("entity_id", entityId)
-      .order("period_year", { ascending: false })
-      .order("period_month", { ascending: false });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const data = (await fetchAllPaginated<any>((offset, limit) =>
+      (supabase as any)
+        .from("kpi_values")
+        .select(
+          "period_year, period_month, value, kpi_definitions(id, name, description, format, target_value)"
+        )
+        .eq("entity_id", entityId)
+        .order("period_year", { ascending: false })
+        .order("period_month", { ascending: false })
+        .range(offset, offset + limit - 1)
+    )) as KpiValue[];
 
-    if (!data || data.length === 0) {
+    if (data.length === 0) {
       setKpis([]);
       setLoading(false);
       return;
@@ -66,7 +71,7 @@ export default function KpiDashboardPage() {
 
     // Group by KPI definition
     const kpiMap = new Map<string, KpiValue[]>();
-    for (const item of data as unknown as KpiValue[]) {
+    for (const item of data) {
       const defId = item.kpi_definitions.id;
       if (!kpiMap.has(defId)) kpiMap.set(defId, []);
       kpiMap.get(defId)!.push(item);

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { fetchAllPaginated } from "@/lib/utils/paginated-fetch";
 
 export async function GET(request: Request) {
   const supabase = await createClient();
@@ -45,15 +46,14 @@ export async function GET(request: Request) {
   // page silently excludes them via its INNER JOIN.
   const entityIds = entities.map((e) => e.id);
 
-  const { data: balances, error } = await supabase
-    .from("gl_balances")
-    .select("entity_id, period_year, period_month, debit_total, credit_total, account_id, accounts!inner(id)")
-    .in("entity_id", entityIds)
-    .eq("period_year", year);
-
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
-  }
+  const balances = await fetchAllPaginated<any>((offset, limit) =>
+    supabase
+      .from("gl_balances")
+      .select("entity_id, period_year, period_month, debit_total, credit_total, account_id, accounts!inner(id)")
+      .in("entity_id", entityIds)
+      .eq("period_year", year)
+      .range(offset, offset + limit - 1)
+  );
 
   // Aggregate: sum debits and credits per entity per month
   const aggregated: Record<
@@ -61,7 +61,7 @@ export async function GET(request: Request) {
     Record<number, { totalDebits: number; totalCredits: number; accountCount: number }>
   > = {};
 
-  for (const row of balances ?? []) {
+  for (const row of balances) {
     const key = row.entity_id;
     if (!aggregated[key]) aggregated[key] = {};
     if (!aggregated[key][row.period_month]) {
@@ -74,16 +74,19 @@ export async function GET(request: Request) {
   }
 
   // Query unmatched rows (unresolved only)
-  const { data: unmatchedData } = await supabase
-    .from("tb_unmatched_rows")
-    .select("entity_id, period_month")
-    .in("entity_id", entityIds)
-    .eq("period_year", year)
-    .is("resolved_account_id", null);
+  const unmatchedData = await fetchAllPaginated<any>((offset, limit) =>
+    supabase
+      .from("tb_unmatched_rows")
+      .select("entity_id, period_month")
+      .in("entity_id", entityIds)
+      .eq("period_year", year)
+      .is("resolved_account_id", null)
+      .range(offset, offset + limit - 1)
+  );
 
   // Aggregate unmatched counts per entity per month
   const unmatchedCounts: Record<string, Record<number, number>> = {};
-  for (const row of unmatchedData ?? []) {
+  for (const row of unmatchedData) {
     if (!unmatchedCounts[row.entity_id]) unmatchedCounts[row.entity_id] = {};
     unmatchedCounts[row.entity_id][row.period_month] =
       (unmatchedCounts[row.entity_id][row.period_month] ?? 0) + 1;

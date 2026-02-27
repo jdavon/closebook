@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { fetchAllPaginated } from "@/lib/utils/paginated-fetch";
 import {
   Card,
   CardContent,
@@ -115,21 +116,24 @@ export default function AccountsPage() {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
 
   const loadAccounts = useCallback(async () => {
-    let query = supabase
-      .from("accounts")
-      .select("*")
-      .eq("entity_id", entityId)
-      .order("classification")
-      .order("account_type")
-      .order("account_number")
-      .order("name");
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const data = await fetchAllPaginated<any>((offset, limit) => {
+      let query = supabase
+        .from("accounts")
+        .select("*")
+        .eq("entity_id", entityId)
+        .order("classification")
+        .order("account_type")
+        .order("account_number")
+        .order("name");
 
-    if (!showInactive) {
-      query = query.eq("is_active", true);
-    }
+      if (!showInactive) {
+        query = query.eq("is_active", true);
+      }
 
-    const { data } = await query;
-    setAccounts((data as Account[]) ?? []);
+      return query.range(offset, offset + limit - 1);
+    });
+    setAccounts(data as Account[]);
     setLoading(false);
   }, [supabase, entityId, showInactive]);
 

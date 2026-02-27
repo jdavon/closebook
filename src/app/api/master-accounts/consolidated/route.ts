@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { fetchAllMappings, fetchAllAccounts } from "@/lib/utils/paginated-fetch";
+import { fetchAllMappings, fetchAllAccounts, fetchAllPaginated } from "@/lib/utils/paginated-fetch";
 
 // ---------------------------------------------------------------------------
 // Paginated GL balance fetcher.
@@ -110,22 +110,21 @@ export async function GET(request: Request) {
   const adminClient = createAdminClient();
 
   // Get all master accounts for the organization
-  const { data: masterAccounts, error: maError } = await adminClient
-    .from("master_accounts")
-    .select("*")
-    .eq("organization_id", organizationId)
-    .eq("is_active", true)
-    .order("classification")
-    .order("display_order")
-    .order("account_number")
-    .limit(5000);
-
-  if (maError) {
-    return NextResponse.json({ error: maError.message }, { status: 500 });
-  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const masterAccounts = await fetchAllPaginated<any>((offset, limit) =>
+    adminClient
+      .from("master_accounts")
+      .select("*")
+      .eq("organization_id", organizationId)
+      .eq("is_active", true)
+      .order("classification")
+      .order("display_order")
+      .order("account_number")
+      .range(offset, offset + limit - 1)
+  );
 
   // Get all mappings for this organization's master accounts
-  const masterAccountIds = (masterAccounts ?? []).map((ma) => ma.id);
+  const masterAccountIds = masterAccounts.map((ma) => ma.id);
 
   if (masterAccountIds.length === 0) {
     return NextResponse.json({
@@ -149,7 +148,7 @@ export async function GET(request: Request) {
   );
 
   // Get GL balances for the mapped accounts in the specified period (paginated)
-  const accountIds = (mappings ?? []).map((m) => m.account_id);
+  const accountIds = mappings.map((m) => m.account_id);
 
   let glBalances: ConsolidatedGLBalance[] = [];
 
@@ -163,12 +162,14 @@ export async function GET(request: Request) {
   }
 
   // Get entities for entity names
-  const { data: entities } = await adminClient
-    .from("entities")
-    .select("id, name, code")
-    .eq("organization_id", organizationId)
-    .eq("is_active", true)
-    .limit(5000);
+  const entities = await fetchAllPaginated<any>((offset, limit) =>
+    adminClient
+      .from("entities")
+      .select("id, name, code")
+      .eq("organization_id", organizationId)
+      .eq("is_active", true)
+      .range(offset, offset + limit - 1)
+  );
 
   // Build consolidated data: for each master account, sum the balances
   // of all mapped entity accounts
@@ -223,7 +224,7 @@ export async function GET(request: Request) {
     (entities ?? []).map((e) => [e.id, e])
   );
 
-  const consolidated = (masterAccounts ?? []).map((ma) => {
+  const consolidated = masterAccounts.map((ma) => {
     const accountMappings = mappingsByMaster.get(ma.id) ?? [];
     let totalEndingBalance = 0;
     let totalDebitTotal = 0;

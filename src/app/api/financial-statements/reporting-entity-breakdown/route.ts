@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getPeriodsInRange } from "@/lib/utils/dates";
-import { fetchAllMappings } from "@/lib/utils/paginated-fetch";
+import { fetchAllMappings, fetchAllPaginated } from "@/lib/utils/paginated-fetch";
 import {
   INCOME_STATEMENT_SECTIONS,
   INCOME_STATEMENT_COMPUTED,
@@ -763,15 +763,19 @@ export async function GET(request: Request) {
   // Pro forma adjustments
   if (includeProForma) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data: proFormaRows } = await (admin as any)
-      .from("pro_forma_adjustments")
-      .select(
-        "master_account_id, entity_id, period_year, period_month, amount"
-      )
-      .eq("organization_id", organizationId)
-      .eq("is_excluded", false);
+    const proFormaRows = await fetchAllPaginated<{
+      master_account_id: string; entity_id: string;
+      period_year: number; period_month: number; amount: number;
+    }>((offset, limit) =>
+      (admin as any)
+        .from("pro_forma_adjustments")
+        .select("master_account_id, entity_id, period_year, period_month, amount")
+        .eq("organization_id", organizationId)
+        .eq("is_excluded", false)
+        .range(offset, offset + limit - 1)
+    );
 
-    if (proFormaRows && proFormaRows.length > 0) {
+    if (proFormaRows.length > 0) {
       // Build entity_id -> reporting_entity_id lookup
       const entityToRE = new Map<string, string[]>();
       for (const [reId, memberIds] of reMemberMap) {
@@ -822,13 +826,16 @@ export async function GET(request: Request) {
   // Allocation adjustments
   if (includeAllocations) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data: allocRows } = await (admin as any)
-      .from("allocation_adjustments")
-      .select("source_entity_id, destination_entity_id, master_account_id, destination_master_account_id, amount, schedule_type, period_year, period_month, start_year, start_month, end_year, end_month, is_repeating, repeat_end_year, repeat_end_month")
-      .eq("organization_id", organizationId)
-      .eq("is_excluded", false);
+    const allocRows = await fetchAllPaginated<any>((offset, limit) =>
+      (admin as any)
+        .from("allocation_adjustments")
+        .select("source_entity_id, destination_entity_id, master_account_id, destination_master_account_id, amount, schedule_type, period_year, period_month, start_year, start_month, end_year, end_month, is_repeating, repeat_end_year, repeat_end_month")
+        .eq("organization_id", organizationId)
+        .eq("is_excluded", false)
+        .range(offset, offset + limit - 1)
+    );
 
-    if (allocRows && allocRows.length > 0) {
+    if (allocRows.length > 0) {
       // Build entity_id -> reporting_entity_id lookup (same as pro forma above)
       const entityToRE = new Map<string, string[]>();
       for (const [reId, memberIds] of reMemberMap) {

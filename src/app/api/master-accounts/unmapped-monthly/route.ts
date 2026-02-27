@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { fetchAllMappings, fetchAllAccounts } from "@/lib/utils/paginated-fetch";
+import { fetchAllMappings, fetchAllAccounts, fetchAllPaginated } from "@/lib/utils/paginated-fetch";
 
 export async function GET(request: Request) {
   const supabase = await createClient();
@@ -41,14 +41,16 @@ export async function GET(request: Request) {
   const adminClient = createAdminClient();
 
   // Get all entities for this organization
-  const { data: entities } = await adminClient
-    .from("entities")
-    .select("id, name, code")
-    .eq("organization_id", organizationId)
-    .eq("is_active", true)
-    .limit(5000);
+  const entities = await fetchAllPaginated<any>((offset, limit) =>
+    adminClient
+      .from("entities")
+      .select("id, name, code")
+      .eq("organization_id", organizationId)
+      .eq("is_active", true)
+      .range(offset, offset + limit - 1)
+  );
 
-  if (!entities || entities.length === 0) {
+  if (entities.length === 0) {
     return NextResponse.json({ unmappedAccounts: [] });
   }
 
@@ -56,14 +58,16 @@ export async function GET(request: Request) {
   const entityMap = new Map(entities.map((e) => [e.id, e]));
 
   // Get all master accounts for the org to find mappings
-  const { data: masterAccounts } = await adminClient
-    .from("master_accounts")
-    .select("id")
-    .eq("organization_id", organizationId)
-    .eq("is_active", true)
-    .limit(5000);
+  const masterAccounts = await fetchAllPaginated<any>((offset, limit) =>
+    adminClient
+      .from("master_accounts")
+      .select("id")
+      .eq("organization_id", organizationId)
+      .eq("is_active", true)
+      .range(offset, offset + limit - 1)
+  );
 
-  const masterAccountIds = (masterAccounts ?? []).map((ma) => ma.id);
+  const masterAccountIds = masterAccounts.map((ma) => ma.id);
 
   // Get all mapped account IDs (paginated to avoid PostgREST max_rows truncation)
   let mappedAccountIds = new Set<string>();
@@ -84,7 +88,7 @@ export async function GET(request: Request) {
   );
 
   // Filter to unmapped accounts
-  const unmapped = (allAccounts ?? []).filter(
+  const unmapped = allAccounts.filter(
     (a) => !mappedAccountIds.has(a.id)
   );
 
@@ -95,7 +99,7 @@ export async function GET(request: Request) {
   // Fetch GL balances for all unmapped accounts for the given year (all 12 months)
   const unmappedIds = unmapped.map((a) => a.id);
 
-  // Batch in chunks to avoid URL length issues
+  // Batch in chunks to avoid URL length issues, paginate within each chunk
   const CHUNK_SIZE = 500;
   const allBalances: Array<{
     account_id: string;
@@ -105,14 +109,16 @@ export async function GET(request: Request) {
 
   for (let i = 0; i < unmappedIds.length; i += CHUNK_SIZE) {
     const chunk = unmappedIds.slice(i, i + CHUNK_SIZE);
-    const { data: balances } = await adminClient
-      .from("gl_balances")
-      .select("account_id, period_month, ending_balance")
-      .in("account_id", chunk)
-      .eq("period_year", periodYear)
-      .limit(10000);
+    const balances = await fetchAllPaginated<any>((offset, limit) =>
+      adminClient
+        .from("gl_balances")
+        .select("account_id, period_month, ending_balance")
+        .in("account_id", chunk)
+        .eq("period_year", periodYear)
+        .range(offset, offset + limit - 1)
+    );
 
-    for (const b of balances ?? []) {
+    for (const b of balances) {
       allBalances.push({
         account_id: b.account_id,
         period_month: b.period_month,

@@ -97,3 +97,54 @@ export type CommissionAccountRole = "revenue" | "expense";
 export type ClassFilterMode = "all" | "include" | "exclude";
 
 export type BudgetStatus = "draft" | "approved" | "archived";
+
+// -- Real Estate Lease Management --
+
+export type PropertyType =
+  | "office"
+  | "retail"
+  | "warehouse"
+  | "industrial"
+  | "mixed_use"
+  | "land"
+  | "other";
+
+export type LeaseType = "operating" | "finance";
+
+export type LeaseStatus = "draft" | "active" | "expired" | "terminated";
+
+export type MaintenanceType = "triple_net" | "gross" | "modified_gross";
+
+export type PropertyTaxFrequency = "monthly" | "semi_annual" | "annual";
+
+export type PaymentType =
+  | "base_rent"
+  | "cam"
+  | "property_tax"
+  | "insurance"
+  | "utilities"
+  | "other";
+
+export type EscalationType = "fixed_percentage" | "fixed_amount" | "cpi";
+
+export type EscalationFrequency = "annual" | "biennial" | "at_renewal";
+
+export type OptionType = "renewal" | "termination" | "purchase" | "expansion";
+
+export type CriticalDateType =
+  | "lease_expiration"
+  | "renewal_deadline"
+  | "termination_notice"
+  | "rent_escalation"
+  | "rent_review"
+  | "cam_reconciliation"
+  | "insurance_renewal"
+  | "custom";
+
+export type LeaseDocumentType =
+  | "original_lease"
+  | "amendment"
+  | "addendum"
+  | "correspondence"
+  | "insurance_cert"
+  | "other";
