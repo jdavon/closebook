@@ -2207,6 +2207,8 @@ export type Database = {
           lease_expense_account_id: string | null
           interest_expense_account_id: string | null
           cam_expense_account_id: string | null
+          asc842_adjustment_account_id: string | null
+          cash_ap_account_id: string | null
           created_by: string | null
           created_at: string
           updated_at: string
@@ -2251,6 +2253,8 @@ export type Database = {
           lease_expense_account_id?: string | null
           interest_expense_account_id?: string | null
           cam_expense_account_id?: string | null
+          asc842_adjustment_account_id?: string | null
+          cash_ap_account_id?: string | null
           created_by?: string | null
           created_at?: string
           updated_at?: string
@@ -2295,6 +2299,8 @@ export type Database = {
           lease_expense_account_id?: string | null
           interest_expense_account_id?: string | null
           cam_expense_account_id?: string | null
+          asc842_adjustment_account_id?: string | null
+          cash_ap_account_id?: string | null
           created_by?: string | null
           created_at?: string
           updated_at?: string

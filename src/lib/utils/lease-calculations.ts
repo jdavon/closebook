@@ -45,11 +45,26 @@ export interface ASC842Summary {
   total_amortization_expense: number;
 }
 
+export interface JournalEntryLine {
+  account: string;
+  accountId?: string;
+  amount: number;
+}
+
 export interface ASC842JournalEntry {
   date: string;
   description: string;
-  debits: { account: string; amount: number }[];
-  credits: { account: string; amount: number }[];
+  debits: JournalEntryLine[];
+  credits: JournalEntryLine[];
+}
+
+export interface LeaseAccountMapping {
+  rouAssetAccountId?: string;
+  leaseLiabilityAccountId?: string;
+  leaseExpenseAccountId?: string;
+  interestExpenseAccountId?: string;
+  asc842AdjustmentAccountId?: string;
+  cashApAccountId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -255,7 +270,8 @@ export function generateASC842Schedule(
  * Generate the initial recognition journal entries at commencement date.
  */
 export function generateInitialJournalEntries(
-  lease: LeaseForASC842
+  lease: LeaseForASC842,
+  accounts?: LeaseAccountMapping
 ): ASC842JournalEntry[] {
   const liability = calculateLeaseLiability(lease);
   const rou = calculateROUAsset(lease);
@@ -267,8 +283,8 @@ export function generateInitialJournalEntries(
   const entry1: ASC842JournalEntry = {
     date: lease.commencement_date,
     description: "Initial recognition of ROU asset and lease liability",
-    debits: [{ account: "ROU Asset", amount: rou }],
-    credits: [{ account: "Lease Liability", amount: liability }],
+    debits: [{ account: "ROU Asset", accountId: accounts?.rouAssetAccountId, amount: rou }],
+    credits: [{ account: "Lease Liability", accountId: accounts?.leaseLiabilityAccountId, amount: liability }],
   };
 
   // If there are IDC, prepaid rent, or incentives, add offsetting entries
@@ -278,10 +294,11 @@ export function generateInitialJournalEntries(
     lease.lease_incentives_received;
 
   if (netCashAdjustment > 0) {
-    entry1.credits.push({ account: "Cash", amount: round2(netCashAdjustment) });
+    entry1.credits.push({ account: "Cash", accountId: accounts?.cashApAccountId, amount: round2(netCashAdjustment) });
   } else if (netCashAdjustment < 0) {
     entry1.debits.push({
       account: "Cash",
+      accountId: accounts?.cashApAccountId,
       amount: round2(Math.abs(netCashAdjustment)),
     });
   }
@@ -293,45 +310,132 @@ export function generateInitialJournalEntries(
 
 /**
  * Generate a monthly journal entry from a schedule row.
- * Operating: Dr Lease Expense, Cr Cash (for payment), with liability & ROU adjustments
- * Finance: Dr Interest Expense + Dr Amortization Expense, Cr Cash + liability/ROU adjustments
+ * Operating: Splits expense into cash rent (actual payment) and ASC 842
+ *            non-cash adjustment (straight-line minus cash). Includes
+ *            Lease Liability debit and Cash/AP credit for a balanced entry.
+ * Finance:   Dr Interest Expense + Dr Amortization Expense + Dr Lease Liability,
+ *            Cr ROU Asset + Cr Cash/AP.
  */
 export function generateMonthlyJournalEntry(
   entry: ASC842ScheduleEntry,
-  leaseType: LeaseClassification
+  leaseType: LeaseClassification,
+  accounts?: LeaseAccountMapping
 ): ASC842JournalEntry {
   const date = `${entry.period_year}-${String(entry.period_month).padStart(2, "0")}-01`;
 
   if (leaseType === "operating") {
-    // Operating lease: single straight-line expense
+    const asc842Adjustment = round2(entry.total_expense - entry.lease_payment);
+    const debits: JournalEntryLine[] = [];
+    const credits: JournalEntryLine[] = [];
+
+    // Debit: Rent Expense (cash portion = actual payment)
+    if (entry.lease_payment !== 0) {
+      debits.push({
+        account: "Rent Expense",
+        accountId: accounts?.leaseExpenseAccountId,
+        amount: entry.lease_payment,
+      });
+    }
+
+    // Debit or Credit: ASC 842 Adjustment (non-cash straight-line difference)
+    if (asc842Adjustment > 0) {
+      debits.push({
+        account: "ASC 842 Adjustment",
+        accountId: accounts?.asc842AdjustmentAccountId,
+        amount: asc842Adjustment,
+      });
+    } else if (asc842Adjustment < 0) {
+      credits.push({
+        account: "ASC 842 Adjustment",
+        accountId: accounts?.asc842AdjustmentAccountId,
+        amount: Math.abs(asc842Adjustment),
+      });
+    }
+
+    // Debit: Lease Liability (principal reduction)
+    if (entry.principal_reduction !== 0) {
+      debits.push({
+        account: "Lease Liability",
+        accountId: accounts?.leaseLiabilityAccountId,
+        amount: entry.principal_reduction,
+      });
+    }
+
+    // Credit: ROU Asset (amortization)
+    if (entry.amortization_expense !== 0) {
+      credits.push({
+        account: "ROU Asset",
+        accountId: accounts?.rouAssetAccountId,
+        amount: entry.amortization_expense,
+      });
+    }
+
+    // Credit: Cash/AP (actual payment)
+    if (entry.lease_payment !== 0) {
+      credits.push({
+        account: "Cash / AP",
+        accountId: accounts?.cashApAccountId,
+        amount: entry.lease_payment,
+      });
+    }
+
     return {
       date,
       description: `Period ${entry.period} operating lease expense`,
-      debits: [
-        { account: "Lease Expense", amount: entry.total_expense },
-      ],
-      credits: [
-        { account: "ROU Asset", amount: entry.amortization_expense },
-        { account: "Lease Liability", amount: entry.principal_reduction },
-        ...(entry.lease_payment !== entry.interest_expense + entry.principal_reduction
-          ? []
-          : []),
-      ],
+      debits,
+      credits,
     };
   }
 
   // Finance lease: separate interest + amortization
+  const debits: JournalEntryLine[] = [];
+  const credits: JournalEntryLine[] = [];
+
+  if (entry.interest_expense !== 0) {
+    debits.push({
+      account: "Interest Expense",
+      accountId: accounts?.interestExpenseAccountId,
+      amount: entry.interest_expense,
+    });
+  }
+
+  if (entry.amortization_expense !== 0) {
+    debits.push({
+      account: "Amortization Expense",
+      accountId: accounts?.leaseExpenseAccountId,
+      amount: entry.amortization_expense,
+    });
+  }
+
+  if (entry.principal_reduction !== 0) {
+    debits.push({
+      account: "Lease Liability",
+      accountId: accounts?.leaseLiabilityAccountId,
+      amount: entry.principal_reduction,
+    });
+  }
+
+  if (entry.amortization_expense !== 0) {
+    credits.push({
+      account: "ROU Asset",
+      accountId: accounts?.rouAssetAccountId,
+      amount: entry.amortization_expense,
+    });
+  }
+
+  if (entry.lease_payment !== 0) {
+    credits.push({
+      account: "Cash / AP",
+      accountId: accounts?.cashApAccountId,
+      amount: entry.lease_payment,
+    });
+  }
+
   return {
     date,
     description: `Period ${entry.period} finance lease expense`,
-    debits: [
-      { account: "Interest Expense", amount: entry.interest_expense },
-      { account: "Amortization Expense", amount: entry.amortization_expense },
-    ],
-    credits: [
-      { account: "ROU Asset", amount: entry.amortization_expense },
-      { account: "Lease Liability", amount: entry.principal_reduction },
-    ],
+    debits,
+    credits,
   };
 }
 

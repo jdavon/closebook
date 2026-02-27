@@ -117,6 +117,8 @@ export default function NewLeasePage() {
   const [leaseExpenseAccountId, setLeaseExpenseAccountId] = useState("");
   const [interestExpenseAccountId, setInterestExpenseAccountId] = useState("");
   const [camExpenseAccountId, setCamExpenseAccountId] = useState("");
+  const [asc842AdjustmentAccountId, setAsc842AdjustmentAccountId] = useState("");
+  const [cashApAccountId, setCashApAccountId] = useState("");
 
   // Notes
   const [notes, setNotes] = useState("");
@@ -260,6 +262,8 @@ export default function NewLeasePage() {
         lease_expense_account_id: leaseExpenseAccountId || null,
         interest_expense_account_id: interestExpenseAccountId || null,
         cam_expense_account_id: camExpenseAccountId || null,
+        asc842_adjustment_account_id: asc842AdjustmentAccountId || null,
+        cash_ap_account_id: cashApAccountId || null,
       })
       .select()
       .single();
@@ -320,6 +324,9 @@ export default function NewLeasePage() {
   );
   const expenseAccounts = accounts.filter(
     (a) => a.classification === "Expense"
+  );
+  const cashApAccounts = accounts.filter(
+    (a) => a.classification === "Asset" || a.classification === "Liability"
   );
 
   function renderAccountSelect(
@@ -1045,6 +1052,20 @@ export default function NewLeasePage() {
                   camExpenseAccountId,
                   setCamExpenseAccountId,
                   expenseAccounts
+                )}
+                {renderAccountSelect(
+                  "ASC 842 Adjustment Account",
+                  "asc842AdjustmentAccount",
+                  asc842AdjustmentAccountId,
+                  setAsc842AdjustmentAccountId,
+                  expenseAccounts
+                )}
+                {renderAccountSelect(
+                  "Cash / AP Account",
+                  "cashApAccount",
+                  cashApAccountId,
+                  setCashApAccountId,
+                  cashApAccounts
                 )}
 
                 <div className="space-y-2 pt-4">

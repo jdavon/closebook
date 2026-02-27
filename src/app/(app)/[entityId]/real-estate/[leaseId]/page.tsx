@@ -81,6 +81,7 @@ import type {
   ASC842Summary,
   ASC842JournalEntry,
   LeaseClassification,
+  LeaseAccountMapping,
 } from "@/lib/utils/lease-calculations";
 import type {
   LeaseStatus,
@@ -139,6 +140,8 @@ interface LeaseData {
   lease_expense_account_id: string | null;
   interest_expense_account_id: string | null;
   cam_expense_account_id: string | null;
+  asc842_adjustment_account_id: string | null;
+  cash_ap_account_id: string | null;
   properties: {
     property_name: string;
     address_line1: string | null;
@@ -374,6 +377,8 @@ export default function LeaseDetailPage() {
   const [leaseExpenseAccountId, setLeaseExpenseAccountId] = useState("");
   const [interestExpenseAccountId, setInterestExpenseAccountId] = useState("");
   const [camExpenseAccountId, setCamExpenseAccountId] = useState("");
+  const [asc842AdjustmentAccountId, setAsc842AdjustmentAccountId] = useState("");
+  const [cashApAccountId, setCashApAccountId] = useState("");
 
   // GL account combobox open states
   const [glPopoverOpen, setGlPopoverOpen] = useState<Record<string, boolean>>({});
@@ -434,6 +439,7 @@ export default function LeaseDetailPage() {
         maintenance_type, permitted_use, notes,
         rou_asset_account_id, lease_liability_account_id, lease_expense_account_id,
         interest_expense_account_id, cam_expense_account_id,
+        asc842_adjustment_account_id, cash_ap_account_id,
         properties(property_name, address_line1, city, state, rentable_square_footage)`
       )
       .eq("id", leaseId)
@@ -505,6 +511,8 @@ export default function LeaseDetailPage() {
       setLeaseExpenseAccountId(l.lease_expense_account_id ?? "");
       setInterestExpenseAccountId(l.interest_expense_account_id ?? "");
       setCamExpenseAccountId(l.cam_expense_account_id ?? "");
+      setAsc842AdjustmentAccountId(l.asc842_adjustment_account_id ?? "");
+      setCashApAccountId(l.cash_ap_account_id ?? "");
     }
 
     setPayments((paymentsResult.data as unknown as PaymentRow[]) ?? []);
@@ -534,6 +542,8 @@ export default function LeaseDetailPage() {
         lease_expense_account_id: leaseExpenseAccountId || null,
         interest_expense_account_id: interestExpenseAccountId || null,
         cam_expense_account_id: camExpenseAccountId || null,
+        asc842_adjustment_account_id: asc842AdjustmentAccountId || null,
+        cash_ap_account_id: cashApAccountId || null,
       })
       .eq("id", leaseId);
 
@@ -931,6 +941,9 @@ export default function LeaseDetailPage() {
   const assetAccounts = accounts.filter((a) => a.classification === "Asset");
   const liabilityAccounts = accounts.filter((a) => a.classification === "Liability");
   const expenseAccounts = accounts.filter((a) => a.classification === "Expense");
+  const cashApAccounts = accounts.filter(
+    (a) => a.classification === "Asset" || a.classification === "Liability"
+  );
 
   // ASC 842 computed schedule
   const asc842Data = (() => {
@@ -1002,16 +1015,26 @@ export default function LeaseDetailPage() {
     if (!lease || lease.discount_rate <= 0 || lease.lease_term_months <= 0) {
       return [];
     }
-    return generateInitialJournalEntries({
-      lease_type: lease.lease_type as LeaseClassification,
-      lease_term_months: lease.lease_term_months,
-      discount_rate: lease.discount_rate,
-      commencement_date: lease.commencement_date,
-      initial_direct_costs: lease.initial_direct_costs,
-      lease_incentives_received: lease.lease_incentives_received,
-      prepaid_rent: lease.prepaid_rent,
-      base_rent_monthly: lease.base_rent_monthly,
-    });
+    return generateInitialJournalEntries(
+      {
+        lease_type: lease.lease_type as LeaseClassification,
+        lease_term_months: lease.lease_term_months,
+        discount_rate: lease.discount_rate,
+        commencement_date: lease.commencement_date,
+        initial_direct_costs: lease.initial_direct_costs,
+        lease_incentives_received: lease.lease_incentives_received,
+        prepaid_rent: lease.prepaid_rent,
+        base_rent_monthly: lease.base_rent_monthly,
+      },
+      {
+        rouAssetAccountId: lease.rou_asset_account_id ?? undefined,
+        leaseLiabilityAccountId: lease.lease_liability_account_id ?? undefined,
+        leaseExpenseAccountId: lease.lease_expense_account_id ?? undefined,
+        interestExpenseAccountId: lease.interest_expense_account_id ?? undefined,
+        asc842AdjustmentAccountId: lease.asc842_adjustment_account_id ?? undefined,
+        cashApAccountId: lease.cash_ap_account_id ?? undefined,
+      }
+    );
   })();
 
   function renderAccountSelect(
@@ -1307,6 +1330,20 @@ export default function LeaseDetailPage() {
                   camExpenseAccountId,
                   setCamExpenseAccountId,
                   expenseAccounts
+                )}
+                {renderAccountSelect(
+                  "ASC 842 Adjustment",
+                  "asc842Adjustment",
+                  asc842AdjustmentAccountId,
+                  setAsc842AdjustmentAccountId,
+                  expenseAccounts
+                )}
+                {renderAccountSelect(
+                  "Cash / AP",
+                  "cashAp",
+                  cashApAccountId,
+                  setCashApAccountId,
+                  cashApAccounts
                 )}
               </CardContent>
             </Card>
@@ -2320,7 +2357,15 @@ export default function LeaseDetailPage() {
                     {asc842Data.schedule.slice(0, 3).map((row) => {
                       const monthlyJE = generateMonthlyJournalEntry(
                         row,
-                        lease.lease_type as LeaseClassification
+                        lease.lease_type as LeaseClassification,
+                        {
+                          rouAssetAccountId: lease.rou_asset_account_id ?? undefined,
+                          leaseLiabilityAccountId: lease.lease_liability_account_id ?? undefined,
+                          leaseExpenseAccountId: lease.lease_expense_account_id ?? undefined,
+                          interestExpenseAccountId: lease.interest_expense_account_id ?? undefined,
+                          asc842AdjustmentAccountId: lease.asc842_adjustment_account_id ?? undefined,
+                          cashApAccountId: lease.cash_ap_account_id ?? undefined,
+                        }
                       );
                       return (
                         <div key={row.period} className="space-y-2">
