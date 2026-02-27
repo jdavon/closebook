@@ -50,7 +50,9 @@ import {
   Calendar,
   Check,
   FileText,
+  Users,
 } from "lucide-react";
+import Link from "next/link";
 import {
   formatCurrency,
   formatPercentage,
@@ -80,6 +82,7 @@ import type {
   OptionType,
   CriticalDateType,
   LeaseDocumentType,
+  SubleaseStatus,
 } from "@/lib/types/database";
 
 // --- Interfaces ---
@@ -205,6 +208,24 @@ interface AmendmentRow {
   created_at: string;
 }
 
+interface SubleaseListItem {
+  id: string;
+  sublease_name: string;
+  subtenant_name: string;
+  status: SubleaseStatus;
+  commencement_date: string;
+  expiration_date: string;
+  sublease_term_months: number;
+  base_rent_monthly: number;
+  cam_recovery_monthly: number;
+  insurance_recovery_monthly: number;
+  property_tax_recovery_monthly: number;
+  utilities_recovery_monthly: number;
+  other_recovery_monthly: number;
+  subleased_square_footage: number | null;
+  floor_suite: string | null;
+}
+
 interface Account {
   id: string;
   name: string;
@@ -278,6 +299,34 @@ const DOC_TYPE_LABELS: Record<LeaseDocumentType, string> = {
   other: "Other",
 };
 
+const SUBLEASE_STATUS_LABELS: Record<SubleaseStatus, string> = {
+  draft: "Draft",
+  active: "Active",
+  expired: "Expired",
+  terminated: "Terminated",
+};
+
+const SUBLEASE_STATUS_VARIANTS: Record<
+  SubleaseStatus,
+  "default" | "secondary" | "outline" | "destructive"
+> = {
+  draft: "outline",
+  active: "default",
+  expired: "secondary",
+  terminated: "destructive",
+};
+
+function subleaseMonthlyIncome(s: SubleaseListItem): number {
+  return (
+    s.base_rent_monthly +
+    s.cam_recovery_monthly +
+    s.insurance_recovery_monthly +
+    s.property_tax_recovery_monthly +
+    s.utilities_recovery_monthly +
+    s.other_recovery_monthly
+  );
+}
+
 // --- Component ---
 
 export default function LeaseDetailPage() {
@@ -302,6 +351,7 @@ export default function LeaseDetailPage() {
   const [criticalDates, setCriticalDates] = useState<CriticalDateRow[]>([]);
   const [documents, setDocuments] = useState<DocumentRow[]>([]);
   const [amendments, setAmendments] = useState<AmendmentRow[]>([]);
+  const [subleases, setSubleases] = useState<SubleaseListItem[]>([]);
 
   // Payment period selector
   const [periodYear, setPeriodYear] = useState(current.year);
@@ -421,6 +471,18 @@ export default function LeaseDetailPage() {
       .order("account_number")
       .order("name");
 
+    const subleasesResult = await supabase
+      .from("subleases")
+      .select(
+        `id, sublease_name, subtenant_name, status,
+        commencement_date, expiration_date, sublease_term_months,
+        base_rent_monthly, cam_recovery_monthly, insurance_recovery_monthly,
+        property_tax_recovery_monthly, utilities_recovery_monthly, other_recovery_monthly,
+        subleased_square_footage, floor_suite`
+      )
+      .eq("lease_id", leaseId)
+      .order("sublease_name");
+
     if (leaseResult.data) {
       const l = leaseResult.data as unknown as LeaseData;
       setLease(l);
@@ -437,6 +499,7 @@ export default function LeaseDetailPage() {
     setCriticalDates((criticalDatesResult.data as unknown as CriticalDateRow[]) ?? []);
     setDocuments((documentsResult.data as unknown as DocumentRow[]) ?? []);
     setAmendments((amendmentsResult.data as unknown as AmendmentRow[]) ?? []);
+    setSubleases((subleasesResult.data as unknown as SubleaseListItem[]) ?? []);
     setAccounts((accountsResult.data as Account[]) ?? []);
     setLoading(false);
   }, [supabase, leaseId, entityId, periodYear, periodMonth]);
@@ -1077,6 +1140,10 @@ export default function LeaseDetailPage() {
           <TabsTrigger value="escalations">Escalations</TabsTrigger>
           <TabsTrigger value="options">Options</TabsTrigger>
           <TabsTrigger value="dates">Critical Dates</TabsTrigger>
+          <TabsTrigger value="subleases">
+            <Users className="mr-1 h-3.5 w-3.5" />
+            Subleases
+          </TabsTrigger>
           <TabsTrigger value="asc842">ASC 842</TabsTrigger>
           <TabsTrigger value="documents">Documents</TabsTrigger>
           <TabsTrigger value="amendments">Amendments</TabsTrigger>
@@ -1796,6 +1863,118 @@ export default function LeaseDetailPage() {
                     ))}
                   </TableBody>
                 </Table>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* === Subleases Tab === */}
+        <TabsContent value="subleases">
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle>Subleases</CardTitle>
+                  <CardDescription>
+                    Subtenants renting space under this lease — track income, escalations, and critical dates
+                  </CardDescription>
+                </div>
+                <Link href={`/${entityId}/real-estate/${leaseId}/subleases/new`}>
+                  <Button size="sm">
+                    <Plus className="mr-2 h-4 w-4" />
+                    New Sublease
+                  </Button>
+                </Link>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {subleases.length === 0 ? (
+                <div className="text-center py-8">
+                  <Users className="mx-auto h-12 w-12 text-muted-foreground/40" />
+                  <p className="mt-2 text-sm text-muted-foreground">
+                    No subleases yet. Add a sublease to track rental income from subtenants.
+                  </p>
+                </div>
+              ) : (
+                <>
+                  {/* Sublease income summary */}
+                  <div className="grid grid-cols-3 gap-4 mb-6">
+                    <div className="rounded-lg border p-3">
+                      <p className="text-xs text-muted-foreground">Active Subleases</p>
+                      <p className="text-2xl font-bold">
+                        {subleases.filter((s) => s.status === "active").length}
+                      </p>
+                    </div>
+                    <div className="rounded-lg border p-3">
+                      <p className="text-xs text-muted-foreground">Monthly Income</p>
+                      <p className="text-2xl font-bold text-green-600">
+                        {formatCurrency(
+                          subleases
+                            .filter((s) => s.status === "active")
+                            .reduce((sum, s) => sum + subleaseMonthlyIncome(s), 0)
+                        )}
+                      </p>
+                    </div>
+                    <div className="rounded-lg border p-3">
+                      <p className="text-xs text-muted-foreground">Subleased SF</p>
+                      <p className="text-2xl font-bold">
+                        {subleases
+                          .filter((s) => s.status === "active")
+                          .reduce((sum, s) => sum + (s.subleased_square_footage ?? 0), 0)
+                          .toLocaleString()}
+                      </p>
+                    </div>
+                  </div>
+
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Sublease</TableHead>
+                        <TableHead>Subtenant</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead>Space</TableHead>
+                        <TableHead className="text-right">Monthly Rent</TableHead>
+                        <TableHead className="text-right">Total Monthly</TableHead>
+                        <TableHead>Expiration</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {subleases.map((s) => (
+                        <TableRow key={s.id}>
+                          <TableCell>
+                            <Link
+                              href={`/${entityId}/real-estate/${leaseId}/subleases/${s.id}`}
+                              className="font-medium text-primary hover:underline"
+                            >
+                              {s.sublease_name}
+                            </Link>
+                          </TableCell>
+                          <TableCell>{s.subtenant_name}</TableCell>
+                          <TableCell>
+                            <Badge variant={SUBLEASE_STATUS_VARIANTS[s.status]}>
+                              {SUBLEASE_STATUS_LABELS[s.status]}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            {s.floor_suite ?? "---"}
+                            {s.subleased_square_footage
+                              ? ` (${s.subleased_square_footage.toLocaleString()} SF)`
+                              : ""}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {formatCurrency(s.base_rent_monthly)}
+                          </TableCell>
+                          <TableCell className="text-right font-medium text-green-600">
+                            {formatCurrency(subleaseMonthlyIncome(s))}
+                          </TableCell>
+                          <TableCell>
+                            {new Date(s.expiration_date + "T00:00:00").toLocaleDateString()}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </>
               )}
             </CardContent>
           </Card>

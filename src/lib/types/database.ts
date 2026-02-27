@@ -148,3 +148,34 @@ export type LeaseDocumentType =
   | "correspondence"
   | "insurance_cert"
   | "other";
+
+// -- Sublease Management --
+
+export type SubleaseStatus = "draft" | "active" | "expired" | "terminated";
+
+export type SubleasePaymentType =
+  | "base_rent"
+  | "cam_recovery"
+  | "property_tax_recovery"
+  | "insurance_recovery"
+  | "utilities_recovery"
+  | "other_recovery";
+
+export type SubleaseOptionType = "renewal" | "termination" | "expansion" | "contraction";
+
+export type SubleaseCriticalDateType =
+  | "sublease_expiration"
+  | "renewal_deadline"
+  | "termination_notice"
+  | "rent_escalation"
+  | "rent_review"
+  | "insurance_renewal"
+  | "custom";
+
+export type SubleaseDocumentType =
+  | "sublease_agreement"
+  | "amendment"
+  | "addendum"
+  | "correspondence"
+  | "insurance_cert"
+  | "other";

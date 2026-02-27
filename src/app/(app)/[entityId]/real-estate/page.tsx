@@ -45,7 +45,7 @@ import {
   calculateLeaseLiability,
   calculateROUAsset,
 } from "@/lib/utils/lease-calculations";
-import type { LeaseStatus, LeaseType, CriticalDateType } from "@/lib/types/database";
+import type { LeaseStatus, LeaseType, CriticalDateType, SubleaseStatus } from "@/lib/types/database";
 
 // --- Interfaces ---
 
@@ -85,6 +85,25 @@ interface CriticalDateItem {
   leases: {
     lease_name: string;
   } | null;
+}
+
+interface SubleaseListItem {
+  id: string;
+  lease_id: string;
+  sublease_name: string;
+  subtenant_name: string;
+  status: SubleaseStatus;
+  commencement_date: string;
+  expiration_date: string;
+  sublease_term_months: number;
+  base_rent_monthly: number;
+  cam_recovery_monthly: number;
+  insurance_recovery_monthly: number;
+  property_tax_recovery_monthly: number;
+  utilities_recovery_monthly: number;
+  other_recovery_monthly: number;
+  subleased_square_footage: number | null;
+  leases: { lease_name: string } | null;
 }
 
 // --- Constants ---
@@ -151,6 +170,17 @@ function urgencyColor(days: number): string {
   return "text-muted-foreground";
 }
 
+function subleaseMonthlyIncome(s: SubleaseListItem): number {
+  return (
+    s.base_rent_monthly +
+    s.cam_recovery_monthly +
+    s.insurance_recovery_monthly +
+    s.property_tax_recovery_monthly +
+    s.utilities_recovery_monthly +
+    s.other_recovery_monthly
+  );
+}
+
 function urgencyBadge(days: number) {
   if (days < 0)
     return <Badge variant="destructive">Overdue</Badge>;
@@ -173,6 +203,7 @@ export default function RealEstatePage() {
   const supabase = createClient();
 
   const [leases, setLeases] = useState<LeaseListItem[]>([]);
+  const [subleases, setSubleases] = useState<SubleaseListItem[]>([]);
   const [criticalDates, setCriticalDates] = useState<CriticalDateItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState<string>("active");
@@ -202,10 +233,25 @@ export default function RealEstatePage() {
       .eq("is_resolved", false)
       .order("critical_date");
 
+    const subleasesQuery = supabase
+      .from("subleases")
+      .select(
+        `id, lease_id, sublease_name, subtenant_name, status,
+        commencement_date, expiration_date, sublease_term_months,
+        base_rent_monthly, cam_recovery_monthly, insurance_recovery_monthly,
+        property_tax_recovery_monthly, utilities_recovery_monthly, other_recovery_monthly,
+        subleased_square_footage,
+        leases(lease_name)`
+      )
+      .eq("entity_id", entityId)
+      .order("sublease_name");
+
     const leasesResult = await leasesQuery;
     const datesResult = await datesQuery;
+    const subleasesResult = await subleasesQuery;
 
     setLeases((leasesResult.data as unknown as LeaseListItem[]) ?? []);
+    setSubleases((subleasesResult.data as unknown as SubleaseListItem[]) ?? []);
     setCriticalDates((datesResult.data as unknown as CriticalDateItem[]) ?? []);
     setLoading(false);
   }, [supabase, entityId]);
@@ -236,6 +282,15 @@ export default function RealEstatePage() {
     0
   );
   const avgCostPerSF = totalSF > 0 ? totalAnnual / totalSF : 0;
+
+  // Sublease income totals
+  const activeSubleases = subleases.filter((s) => s.status === "active");
+  const totalSubleaseMonthlyIncome = activeSubleases.reduce(
+    (s, sub) => s + subleaseMonthlyIncome(sub),
+    0
+  );
+  const totalSubleaseAnnualIncome = totalSubleaseMonthlyIncome * 12;
+  const netMonthly = totalMonthly - totalSubleaseMonthlyIncome;
 
   // Critical dates within alertable range
   const upcomingDates = criticalDates.filter((cd) => {
@@ -356,7 +411,7 @@ export default function RealEstatePage() {
       )}
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-6">
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <Card>
           <CardContent className="pt-6">
             <p className="text-sm text-muted-foreground">Active Leases</p>
@@ -373,6 +428,36 @@ export default function RealEstatePage() {
             </p>
           </CardContent>
         </Card>
+        <Card>
+          <CardContent className="pt-6">
+            <p className="text-sm text-muted-foreground">Sublease Income</p>
+            <p className="text-2xl font-semibold tabular-nums text-green-600">
+              {totalSubleaseMonthlyIncome > 0
+                ? formatCurrency(totalSubleaseMonthlyIncome)
+                : "---"}
+            </p>
+            {activeSubleases.length > 0 && (
+              <p className="text-xs text-muted-foreground mt-1">
+                {activeSubleases.length} active sublease{activeSubleases.length !== 1 ? "s" : ""}
+              </p>
+            )}
+          </CardContent>
+        </Card>
+        <Card className={netMonthly < totalMonthly && totalSubleaseMonthlyIncome > 0 ? "border-green-200" : ""}>
+          <CardContent className="pt-6">
+            <p className="text-sm text-muted-foreground">Net Monthly Cost</p>
+            <p className="text-2xl font-semibold tabular-nums">
+              {formatCurrency(netMonthly)}
+            </p>
+            {totalSubleaseMonthlyIncome > 0 && (
+              <p className="text-xs text-green-600 mt-1">
+                {((totalSubleaseMonthlyIncome / totalMonthly) * 100).toFixed(0)}% offset by subleases
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <Card>
           <CardContent className="pt-6">
             <p className="text-sm text-muted-foreground">Total Annual Cost</p>
@@ -896,7 +981,7 @@ export default function RealEstatePage() {
                           ));
                       })()}
                       <TableRow className="font-semibold border-t-2">
-                        <TableCell>Total</TableCell>
+                        <TableCell>Gross Occupancy Cost</TableCell>
                         <TableCell className="text-right tabular-nums">
                           {formatCurrency(totalMonthly)}
                         </TableCell>
@@ -907,6 +992,38 @@ export default function RealEstatePage() {
                           100.0%
                         </TableCell>
                       </TableRow>
+                      {totalSubleaseMonthlyIncome > 0 && (
+                        <>
+                          <TableRow className="text-green-600">
+                            <TableCell className="font-medium">Less: Sublease Income</TableCell>
+                            <TableCell className="text-right tabular-nums">
+                              ({formatCurrency(totalSubleaseMonthlyIncome)})
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums">
+                              ({formatCurrency(totalSubleaseAnnualIncome)})
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums">
+                              {totalMonthly > 0
+                                ? `-${((totalSubleaseMonthlyIncome / totalMonthly) * 100).toFixed(1)}%`
+                                : "---"}
+                            </TableCell>
+                          </TableRow>
+                          <TableRow className="font-semibold border-t-2">
+                            <TableCell>Net Occupancy Cost</TableCell>
+                            <TableCell className="text-right tabular-nums">
+                              {formatCurrency(netMonthly)}
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums">
+                              {formatCurrency(netMonthly * 12)}
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums">
+                              {totalMonthly > 0
+                                ? `${((netMonthly / totalMonthly) * 100).toFixed(1)}%`
+                                : "---"}
+                            </TableCell>
+                          </TableRow>
+                        </>
+                      )}
                     </TableBody>
                   </Table>
                 )}

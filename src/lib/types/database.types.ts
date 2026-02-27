@@ -2574,6 +2574,340 @@ export type Database = {
         }
         Relationships: []
       }
+      subleases: {
+        Row: {
+          id: string
+          lease_id: string
+          entity_id: string
+          sublease_name: string
+          subtenant_name: string
+          subtenant_contact_info: string | null
+          status: string
+          commencement_date: string
+          rent_commencement_date: string | null
+          expiration_date: string
+          sublease_term_months: number
+          subleased_square_footage: number | null
+          floor_suite: string | null
+          base_rent_monthly: number
+          base_rent_annual: number
+          rent_per_sf: number | null
+          security_deposit_held: number
+          rent_abatement_months: number
+          rent_abatement_amount: number
+          cam_recovery_monthly: number
+          insurance_recovery_monthly: number
+          property_tax_recovery_monthly: number
+          utilities_recovery_monthly: number
+          other_recovery_monthly: number
+          other_recovery_description: string | null
+          maintenance_type: string
+          permitted_use: string | null
+          notes: string | null
+          sublease_income_account_id: string | null
+          cam_recovery_account_id: string | null
+          other_income_account_id: string | null
+          created_by: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          lease_id: string
+          entity_id: string
+          sublease_name: string
+          subtenant_name: string
+          subtenant_contact_info?: string | null
+          status?: string
+          commencement_date: string
+          rent_commencement_date?: string | null
+          expiration_date: string
+          sublease_term_months: number
+          subleased_square_footage?: number | null
+          floor_suite?: string | null
+          base_rent_monthly?: number
+          rent_per_sf?: number | null
+          security_deposit_held?: number
+          rent_abatement_months?: number
+          rent_abatement_amount?: number
+          cam_recovery_monthly?: number
+          insurance_recovery_monthly?: number
+          property_tax_recovery_monthly?: number
+          utilities_recovery_monthly?: number
+          other_recovery_monthly?: number
+          other_recovery_description?: string | null
+          maintenance_type?: string
+          permitted_use?: string | null
+          notes?: string | null
+          sublease_income_account_id?: string | null
+          cam_recovery_account_id?: string | null
+          other_income_account_id?: string | null
+          created_by?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          lease_id?: string
+          entity_id?: string
+          sublease_name?: string
+          subtenant_name?: string
+          subtenant_contact_info?: string | null
+          status?: string
+          commencement_date?: string
+          rent_commencement_date?: string | null
+          expiration_date?: string
+          sublease_term_months?: number
+          subleased_square_footage?: number | null
+          floor_suite?: string | null
+          base_rent_monthly?: number
+          rent_per_sf?: number | null
+          security_deposit_held?: number
+          rent_abatement_months?: number
+          rent_abatement_amount?: number
+          cam_recovery_monthly?: number
+          insurance_recovery_monthly?: number
+          property_tax_recovery_monthly?: number
+          utilities_recovery_monthly?: number
+          other_recovery_monthly?: number
+          other_recovery_description?: string | null
+          maintenance_type?: string
+          permitted_use?: string | null
+          notes?: string | null
+          sublease_income_account_id?: string | null
+          cam_recovery_account_id?: string | null
+          other_income_account_id?: string | null
+          created_by?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      sublease_payments: {
+        Row: {
+          id: string
+          sublease_id: string
+          period_year: number
+          period_month: number
+          payment_type: string
+          scheduled_amount: number
+          actual_amount: number | null
+          is_received: boolean
+          received_date: string | null
+          notes: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          sublease_id: string
+          period_year: number
+          period_month: number
+          payment_type: string
+          scheduled_amount?: number
+          actual_amount?: number | null
+          is_received?: boolean
+          received_date?: string | null
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          sublease_id?: string
+          period_year?: number
+          period_month?: number
+          payment_type?: string
+          scheduled_amount?: number
+          actual_amount?: number | null
+          is_received?: boolean
+          received_date?: string | null
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      sublease_escalations: {
+        Row: {
+          id: string
+          sublease_id: string
+          escalation_type: string
+          effective_date: string
+          percentage_increase: number | null
+          amount_increase: number | null
+          cpi_index_name: string | null
+          cpi_cap: number | null
+          cpi_floor: number | null
+          frequency: string
+          notes: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          sublease_id: string
+          escalation_type: string
+          effective_date: string
+          percentage_increase?: number | null
+          amount_increase?: number | null
+          cpi_index_name?: string | null
+          cpi_cap?: number | null
+          cpi_floor?: number | null
+          frequency?: string
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          sublease_id?: string
+          escalation_type?: string
+          effective_date?: string
+          percentage_increase?: number | null
+          amount_increase?: number | null
+          cpi_index_name?: string | null
+          cpi_cap?: number | null
+          cpi_floor?: number | null
+          frequency?: string
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      sublease_options: {
+        Row: {
+          id: string
+          sublease_id: string
+          option_type: string
+          exercise_deadline: string | null
+          notice_required_days: number | null
+          option_term_months: number | null
+          option_rent_terms: string | null
+          option_price: number | null
+          penalty_amount: number | null
+          is_exercised: boolean
+          exercised_date: string | null
+          notes: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          sublease_id: string
+          option_type: string
+          exercise_deadline?: string | null
+          notice_required_days?: number | null
+          option_term_months?: number | null
+          option_rent_terms?: string | null
+          option_price?: number | null
+          penalty_amount?: number | null
+          is_exercised?: boolean
+          exercised_date?: string | null
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          sublease_id?: string
+          option_type?: string
+          exercise_deadline?: string | null
+          notice_required_days?: number | null
+          option_term_months?: number | null
+          option_rent_terms?: string | null
+          option_price?: number | null
+          penalty_amount?: number | null
+          is_exercised?: boolean
+          exercised_date?: string | null
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      sublease_critical_dates: {
+        Row: {
+          id: string
+          sublease_id: string
+          date_type: string
+          critical_date: string
+          alert_days_before: number
+          description: string | null
+          is_resolved: boolean
+          resolved_date: string | null
+          resolved_by: string | null
+          notes: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          sublease_id: string
+          date_type: string
+          critical_date: string
+          alert_days_before?: number
+          description?: string | null
+          is_resolved?: boolean
+          resolved_date?: string | null
+          resolved_by?: string | null
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          sublease_id?: string
+          date_type?: string
+          critical_date?: string
+          alert_days_before?: number
+          description?: string | null
+          is_resolved?: boolean
+          resolved_date?: string | null
+          resolved_by?: string | null
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      sublease_documents: {
+        Row: {
+          id: string
+          sublease_id: string
+          document_type: string
+          file_name: string
+          file_path: string
+          file_size_bytes: number | null
+          uploaded_by: string | null
+          notes: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          sublease_id: string
+          document_type?: string
+          file_name: string
+          file_path: string
+          file_size_bytes?: number | null
+          uploaded_by?: string | null
+          notes?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          sublease_id?: string
+          document_type?: string
+          file_name?: string
+          file_path?: string
+          file_size_bytes?: number | null
+          uploaded_by?: string | null
+          notes?: string | null
+          created_at?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
