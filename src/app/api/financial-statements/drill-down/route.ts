@@ -609,6 +609,7 @@ async function buildDrillDownResponse(
     const masterAccountIdSet = new Set(allMasterAccountIds);
     const maIdListPF = allMasterAccountIds.join(",");
     // Fetch adjustments where either primary or offset account is in scope
+    // AND the adjustment's entity is within the current scope (entity/RE/org)
     const proFormaRows = await fetchAllPaginated<any>((offset, limit) =>
       (admin as any)
         .from("pro_forma_adjustments")
@@ -619,6 +620,7 @@ async function buildDrillDownResponse(
         .eq("organization_id", organizationId)
         .or(`master_account_id.in.(${maIdListPF}),offset_master_account_id.in.(${maIdListPF})`)
         .eq("is_excluded", false)
+        .in("entity_id", scopeEntityIds)
         .in("period_year", [...new Set(targetMonths.map((m) => m.year))])
         .in("period_month", [...new Set(targetMonths.map((m) => m.month))])
         .range(offset, offset + limit - 1)

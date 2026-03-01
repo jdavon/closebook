@@ -205,6 +205,48 @@ function applyEscalations(
 }
 
 /**
+ * Calculate the current monthly rent as of a given date by applying all
+ * escalations with effective_date on or before that date. Escalations
+ * must be sorted by effective_date ascending for correct cumulative application.
+ */
+export function getCurrentRent(
+  baseRentMonthly: number,
+  escalations: EscalationRule[],
+  asOfDate?: Date
+): number {
+  const target = asOfDate ?? new Date();
+  let rent = baseRentMonthly;
+
+  const sorted = [...escalations].sort(
+    (a, b) => a.effective_date.localeCompare(b.effective_date)
+  );
+
+  for (const esc of sorted) {
+    const effDate = parseDate(esc.effective_date);
+    if (!effDate) continue;
+    if (effDate > target) break;
+
+    switch (esc.escalation_type) {
+      case "fixed_percentage":
+        if (esc.percentage_increase != null) {
+          rent = rent * (1 + esc.percentage_increase);
+        }
+        break;
+      case "fixed_amount":
+        if (esc.amount_increase != null) {
+          rent = rent + esc.amount_increase;
+        }
+        break;
+      case "cpi":
+        // CPI-linked escalations require external index data — no change
+        break;
+    }
+  }
+
+  return Math.round(rent * 100) / 100;
+}
+
+/**
  * Calculate the property tax payment for a given month based on frequency.
  * Monthly: 1/12 each month. Semi-annual: 1/2 in June and December. Annual: full in December.
  */

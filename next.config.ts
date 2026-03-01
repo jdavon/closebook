@@ -1,7 +1,10 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  experimental: {
+    // Increase proxy/middleware body buffering limit for PDF uploads (default ~10MB)
+    proxyClientMaxBodySize: "25mb",
+  },
 };
 
 export default nextConfig;

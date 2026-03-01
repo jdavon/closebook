@@ -29,6 +29,15 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -49,10 +58,12 @@ import {
   Upload,
   Calendar,
   Check,
+  ChevronsUpDown,
   FileText,
   Users,
 } from "lucide-react";
 import Link from "next/link";
+import { cn } from "@/lib/utils";
 import {
   formatCurrency,
   formatPercentage,
@@ -70,6 +81,7 @@ import type {
   ASC842Summary,
   ASC842JournalEntry,
   LeaseClassification,
+  LeaseAccountMapping,
 } from "@/lib/utils/lease-calculations";
 import type {
   LeaseStatus,
@@ -128,6 +140,8 @@ interface LeaseData {
   lease_expense_account_id: string | null;
   interest_expense_account_id: string | null;
   cam_expense_account_id: string | null;
+  asc842_adjustment_account_id: string | null;
+  cash_ap_account_id: string | null;
   properties: {
     property_name: string;
     address_line1: string | null;
@@ -363,6 +377,11 @@ export default function LeaseDetailPage() {
   const [leaseExpenseAccountId, setLeaseExpenseAccountId] = useState("");
   const [interestExpenseAccountId, setInterestExpenseAccountId] = useState("");
   const [camExpenseAccountId, setCamExpenseAccountId] = useState("");
+  const [asc842AdjustmentAccountId, setAsc842AdjustmentAccountId] = useState("");
+  const [cashApAccountId, setCashApAccountId] = useState("");
+
+  // GL account combobox open states
+  const [glPopoverOpen, setGlPopoverOpen] = useState<Record<string, boolean>>({});
 
   // Sheet states
   const [escalationSheetOpen, setEscalationSheetOpen] = useState(false);
@@ -394,6 +413,8 @@ export default function LeaseDetailPage() {
 
   // ASC 842 tab state
   const [asc842ShowJournalEntries, setAsc842ShowJournalEntries] = useState(false);
+  const [discountRateInput, setDiscountRateInput] = useState("");
+  const [savingDiscountRate, setSavingDiscountRate] = useState(false);
 
   // Document upload & AI extraction state
   const [uploadingDoc, setUploadingDoc] = useState(false);
@@ -420,6 +441,7 @@ export default function LeaseDetailPage() {
         maintenance_type, permitted_use, notes,
         rou_asset_account_id, lease_liability_account_id, lease_expense_account_id,
         interest_expense_account_id, cam_expense_account_id,
+        asc842_adjustment_account_id, cash_ap_account_id,
         properties(property_name, address_line1, city, state, rentable_square_footage)`
       )
       .eq("id", leaseId)
@@ -491,6 +513,9 @@ export default function LeaseDetailPage() {
       setLeaseExpenseAccountId(l.lease_expense_account_id ?? "");
       setInterestExpenseAccountId(l.interest_expense_account_id ?? "");
       setCamExpenseAccountId(l.cam_expense_account_id ?? "");
+      setAsc842AdjustmentAccountId(l.asc842_adjustment_account_id ?? "");
+      setCashApAccountId(l.cash_ap_account_id ?? "");
+      setDiscountRateInput(l.discount_rate > 0 ? String(l.discount_rate * 100) : "");
     }
 
     setPayments((paymentsResult.data as unknown as PaymentRow[]) ?? []);
@@ -520,12 +545,36 @@ export default function LeaseDetailPage() {
         lease_expense_account_id: leaseExpenseAccountId || null,
         interest_expense_account_id: interestExpenseAccountId || null,
         cam_expense_account_id: camExpenseAccountId || null,
+        asc842_adjustment_account_id: asc842AdjustmentAccountId || null,
+        cash_ap_account_id: cashApAccountId || null,
       })
       .eq("id", leaseId);
 
     if (error) toast.error(error.message);
     else toast.success("GL accounts updated");
     setSaving(false);
+  }
+
+  async function handleSaveDiscountRate() {
+    const pct = parseFloat(discountRateInput);
+    if (isNaN(pct) || pct <= 0) {
+      toast.error("Enter a valid discount rate (e.g. 5.5 for 5.5%)");
+      return;
+    }
+    setSavingDiscountRate(true);
+    const decimalRate = pct / 100;
+    const { error } = await supabase
+      .from("leases")
+      .update({ discount_rate: decimalRate })
+      .eq("id", leaseId);
+
+    if (error) {
+      toast.error(error.message);
+    } else {
+      toast.success("Discount rate updated");
+      loadData();
+    }
+    setSavingDiscountRate(false);
   }
 
   async function handleTogglePaid(paymentId: string, isPaid: boolean) {
@@ -917,6 +966,9 @@ export default function LeaseDetailPage() {
   const assetAccounts = accounts.filter((a) => a.classification === "Asset");
   const liabilityAccounts = accounts.filter((a) => a.classification === "Liability");
   const expenseAccounts = accounts.filter((a) => a.classification === "Expense");
+  const cashApAccounts = accounts.filter(
+    (a) => a.classification === "Asset" || a.classification === "Liability"
+  );
 
   // ASC 842 computed schedule
   const asc842Data = (() => {
@@ -988,16 +1040,26 @@ export default function LeaseDetailPage() {
     if (!lease || lease.discount_rate <= 0 || lease.lease_term_months <= 0) {
       return [];
     }
-    return generateInitialJournalEntries({
-      lease_type: lease.lease_type as LeaseClassification,
-      lease_term_months: lease.lease_term_months,
-      discount_rate: lease.discount_rate,
-      commencement_date: lease.commencement_date,
-      initial_direct_costs: lease.initial_direct_costs,
-      lease_incentives_received: lease.lease_incentives_received,
-      prepaid_rent: lease.prepaid_rent,
-      base_rent_monthly: lease.base_rent_monthly,
-    });
+    return generateInitialJournalEntries(
+      {
+        lease_type: lease.lease_type as LeaseClassification,
+        lease_term_months: lease.lease_term_months,
+        discount_rate: lease.discount_rate,
+        commencement_date: lease.commencement_date,
+        initial_direct_costs: lease.initial_direct_costs,
+        lease_incentives_received: lease.lease_incentives_received,
+        prepaid_rent: lease.prepaid_rent,
+        base_rent_monthly: lease.base_rent_monthly,
+      },
+      {
+        rouAssetAccountId: lease.rou_asset_account_id ?? undefined,
+        leaseLiabilityAccountId: lease.lease_liability_account_id ?? undefined,
+        leaseExpenseAccountId: lease.lease_expense_account_id ?? undefined,
+        interestExpenseAccountId: lease.interest_expense_account_id ?? undefined,
+        asc842AdjustmentAccountId: lease.asc842_adjustment_account_id ?? undefined,
+        cashApAccountId: lease.cash_ap_account_id ?? undefined,
+      }
+    );
   })();
 
   function renderAccountSelect(
@@ -1007,23 +1069,64 @@ export default function LeaseDetailPage() {
     onChange: (v: string) => void,
     accountList: Account[]
   ) {
+    const selected = accountList.find((a) => a.id === value);
+    const open = glPopoverOpen[id] ?? false;
+    const setOpen = (v: boolean) =>
+      setGlPopoverOpen((prev) => ({ ...prev, [id]: v }));
     return (
       <div className="space-y-2">
         <Label htmlFor={id}>{label}</Label>
-        <Select value={value} onValueChange={onChange}>
-          <SelectTrigger id={id}>
-            <SelectValue placeholder="Select account..." />
-          </SelectTrigger>
-          <SelectContent>
-            {accountList.map((account) => (
-              <SelectItem key={account.id} value={account.id}>
-                {account.account_number
-                  ? `${account.account_number} - ${account.name}`
-                  : account.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <Popover open={open} onOpenChange={setOpen}>
+          <PopoverTrigger asChild>
+            <Button
+              id={id}
+              variant="outline"
+              role="combobox"
+              aria-expanded={open}
+              className="w-full justify-between font-normal"
+            >
+              {selected
+                ? selected.account_number
+                  ? `${selected.account_number} - ${selected.name}`
+                  : selected.name
+                : "Select account..."}
+              <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
+            <Command>
+              <CommandInput placeholder="Search accounts..." />
+              <CommandList>
+                <CommandEmpty>No account found.</CommandEmpty>
+                <CommandGroup>
+                  {accountList.map((account) => {
+                    const display = account.account_number
+                      ? `${account.account_number} - ${account.name}`
+                      : account.name;
+                    return (
+                      <CommandItem
+                        key={account.id}
+                        value={display}
+                        onSelect={() => {
+                          onChange(account.id === value ? "" : account.id);
+                          setOpen(false);
+                        }}
+                      >
+                        <Check
+                          className={cn(
+                            "mr-2 h-4 w-4",
+                            value === account.id ? "opacity-100" : "opacity-0"
+                          )}
+                        />
+                        {display}
+                      </CommandItem>
+                    );
+                  })}
+                </CommandGroup>
+              </CommandList>
+            </Command>
+          </PopoverContent>
+        </Popover>
       </div>
     );
   }
@@ -1252,6 +1355,20 @@ export default function LeaseDetailPage() {
                   camExpenseAccountId,
                   setCamExpenseAccountId,
                   expenseAccounts
+                )}
+                {renderAccountSelect(
+                  "ASC 842 Adjustment",
+                  "asc842Adjustment",
+                  asc842AdjustmentAccountId,
+                  setAsc842AdjustmentAccountId,
+                  expenseAccounts
+                )}
+                {renderAccountSelect(
+                  "Cash / AP",
+                  "cashAp",
+                  cashApAccountId,
+                  setCashApAccountId,
+                  cashApAccounts
                 )}
               </CardContent>
             </Card>
@@ -1879,12 +1996,20 @@ export default function LeaseDetailPage() {
                     Subtenants renting space under this lease — track income, escalations, and critical dates
                   </CardDescription>
                 </div>
-                <Link href={`/${entityId}/real-estate/${leaseId}/subleases/new`}>
-                  <Button size="sm">
-                    <Plus className="mr-2 h-4 w-4" />
-                    New Sublease
-                  </Button>
-                </Link>
+                <div className="flex items-center gap-2">
+                  <Link href={`/${entityId}/real-estate/${leaseId}/subleases/from-pdf`}>
+                    <Button size="sm" variant="outline">
+                      <Upload className="mr-2 h-4 w-4" />
+                      Create from PDF
+                    </Button>
+                  </Link>
+                  <Link href={`/${entityId}/real-estate/${leaseId}/subleases/new`}>
+                    <Button size="sm">
+                      <Plus className="mr-2 h-4 w-4" />
+                      New Sublease
+                    </Button>
+                  </Link>
+                </div>
               </div>
             </CardHeader>
             <CardContent>
@@ -1984,16 +2109,60 @@ export default function LeaseDetailPage() {
         <TabsContent value="asc842">
           {!asc842Data ? (
             <Card>
-              <CardContent className="py-8">
-                <p className="text-sm text-muted-foreground text-center">
-                  ASC 842 calculations require a discount rate (IBR) and lease
-                  term to be set. Update the lease&apos;s financial terms to
-                  generate the amortization schedule.
-                </p>
+              <CardHeader>
+                <CardTitle>Set Discount Rate (IBR)</CardTitle>
+                <CardDescription>
+                  ASC 842 calculations require a discount rate to generate the
+                  amortization schedule. Enter your incremental borrowing rate below.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="flex items-end gap-3 max-w-sm">
+                  <div className="flex-1 space-y-2">
+                    <Label htmlFor="discountRateSetup">Discount Rate (%)</Label>
+                    <Input
+                      id="discountRateSetup"
+                      type="number"
+                      step="0.01"
+                      placeholder="e.g. 5.5"
+                      value={discountRateInput}
+                      onChange={(e) => setDiscountRateInput(e.target.value)}
+                    />
+                  </div>
+                  <Button
+                    onClick={handleSaveDiscountRate}
+                    disabled={savingDiscountRate || !discountRateInput}
+                  >
+                    {savingDiscountRate ? "Saving..." : "Generate Schedule"}
+                  </Button>
+                </div>
               </CardContent>
             </Card>
           ) : (
             <div className="space-y-6">
+              {/* Discount Rate adjuster */}
+              <div className="flex items-end gap-3">
+                <div className="space-y-2">
+                  <Label htmlFor="discountRateEdit">Discount Rate / IBR (%)</Label>
+                  <Input
+                    id="discountRateEdit"
+                    type="number"
+                    step="0.01"
+                    className="w-40"
+                    value={discountRateInput}
+                    onChange={(e) => setDiscountRateInput(e.target.value)}
+                  />
+                </div>
+                <Button
+                  size="sm"
+                  onClick={handleSaveDiscountRate}
+                  disabled={savingDiscountRate || !discountRateInput || parseFloat(discountRateInput) === lease.discount_rate * 100}
+                >
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                  {savingDiscountRate ? "Recalculating..." : "Recalculate"}
+                </Button>
+              </div>
+
               {/* Summary cards */}
               <div className="grid grid-cols-2 gap-6 lg:grid-cols-4">
                 <Card>
@@ -2261,11 +2430,25 @@ export default function LeaseDetailPage() {
                       </div>
                     ))}
 
-                    {/* Sample monthly entries (first 3 periods) */}
-                    {asc842Data.schedule.slice(0, 3).map((row) => {
+                    {/* Monthly entries starting from current month */}
+                    {(() => {
+                      const idx = asc842Data.schedule.findIndex(
+                        (r) => r.period_year === current.year && r.period_month === current.month
+                      );
+                      const start = idx >= 0 ? idx : 0;
+                      return asc842Data.schedule.slice(start, start + 3);
+                    })().map((row) => {
                       const monthlyJE = generateMonthlyJournalEntry(
                         row,
-                        lease.lease_type as LeaseClassification
+                        lease.lease_type as LeaseClassification,
+                        {
+                          rouAssetAccountId: lease.rou_asset_account_id ?? undefined,
+                          leaseLiabilityAccountId: lease.lease_liability_account_id ?? undefined,
+                          leaseExpenseAccountId: lease.lease_expense_account_id ?? undefined,
+                          interestExpenseAccountId: lease.interest_expense_account_id ?? undefined,
+                          asc842AdjustmentAccountId: lease.asc842_adjustment_account_id ?? undefined,
+                          cashApAccountId: lease.cash_ap_account_id ?? undefined,
+                        }
                       );
                       return (
                         <div key={row.period} className="space-y-2">
@@ -2321,8 +2504,8 @@ export default function LeaseDetailPage() {
 
                     {asc842Data.schedule.length > 3 && (
                       <p className="text-sm text-muted-foreground text-center pt-2">
-                        Showing first 3 of {asc842Data.schedule.length} monthly
-                        entries. Full entries follow the same pattern.
+                        Showing current and next 2 months of {asc842Data.schedule.length} total
+                        periods.
                       </p>
                     )}
                   </CardContent>

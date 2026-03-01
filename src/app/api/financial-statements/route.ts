@@ -304,6 +304,7 @@ function aggregateBudgetByBucket(
 // ---------------------------------------------------------------------------
 
 interface RawProFormaAdjustment {
+  entity_id: string;
   master_account_id: string;
   offset_master_account_id: string | null;
   period_year: number;
@@ -1021,7 +1022,7 @@ function injectNetIncomeIntoBalanceSheet(
 interface CashFlowSupplementalEntry {
   description: string;
   primaryAccountId: string;
-  offsetAccountId: string;
+  offsetAccountId?: string;
   periodYear: number;
   periodMonth: number;
   amount: number;
@@ -1562,10 +1563,18 @@ function buildCashFlowStatement(
 
     for (const entry of supplementalEntries) {
       const primaryType = accountTypeMap.get(entry.primaryAccountId);
-      const offsetType = accountTypeMap.get(entry.offsetAccountId);
-      if (!primaryType || !offsetType) continue;
+      if (!primaryType) continue;
 
-      const cashImpact = computeNetCashImpact(entry.amount, primaryType, offsetType);
+      let cashImpact: number;
+      if (entry.offsetAccountId) {
+        // Double-entry: compute net cash impact from both accounts
+        const offsetType = accountTypeMap.get(entry.offsetAccountId);
+        if (!offsetType) continue;
+        cashImpact = computeNetCashImpact(entry.amount, primaryType, offsetType);
+      } else {
+        // Single-entry: use the raw amount directly
+        cashImpact = entry.amount;
+      }
 
       // Find which bucket this entry falls into
       for (const bucket of buckets) {
@@ -1574,7 +1583,7 @@ function buildCashFlowStatement(
         );
         if (!inBucket) continue;
 
-        const groupKey = `${entry.description}|${entry.primaryAccountId}|${entry.offsetAccountId}`;
+        const groupKey = `${entry.description}|${entry.primaryAccountId}|${entry.offsetAccountId ?? "single"}`;
         let group = grouped.get(groupKey);
         if (!group) {
           group = { entry, amounts: {} };
@@ -1591,7 +1600,7 @@ function buildCashFlowStatement(
       if (!hasAnyAmount) continue;
 
       supplementalLines.push({
-        id: `cf-pf-${group.entry.primaryAccountId}-${group.entry.offsetAccountId}`,
+        id: `cf-pf-${group.entry.primaryAccountId}-${group.entry.offsetAccountId ?? "single"}`,
         label: group.entry.description,
         amounts: group.amounts,
         indent: 1,
@@ -1808,9 +1817,10 @@ async function buildConsolidatedStatements(params: ConsolidatedStatementsParams)
     proFormaRows = await fetchAllPaginated<RawProFormaAdjustment>((offset, limit) =>
       (admin as any)
         .from("pro_forma_adjustments")
-        .select("master_account_id, offset_master_account_id, period_year, period_month, amount, description")
+        .select("entity_id, master_account_id, offset_master_account_id, period_year, period_month, amount, description")
         .eq("organization_id", organizationId)
         .eq("is_excluded", false)
+        .in("entity_id", entityIds)
         .range(offset, offset + limit - 1)
     );
 
@@ -2012,11 +2022,10 @@ async function buildConsolidatedStatements(params: ConsolidatedStatementsParams)
   // Build supplemental entries for cash flow pro forma section
   const cfSupplementalEntries: CashFlowSupplementalEntry[] = [
     ...proFormaRows
-      .filter((pf) => pf.offset_master_account_id)
       .map((pf) => ({
         description: pf.description,
         primaryAccountId: pf.master_account_id,
-        offsetAccountId: pf.offset_master_account_id!,
+        ...(pf.offset_master_account_id ? { offsetAccountId: pf.offset_master_account_id } : {}),
         periodYear: Number(pf.period_year),
         periodMonth: Number(pf.period_month),
         amount: Number(pf.amount),
@@ -2514,11 +2523,10 @@ export async function GET(request: Request) {
     // Build supplemental entries for cash flow pro forma section
     const entityCfSupplementalEntries: CashFlowSupplementalEntry[] = [
       ...entityProFormaRows
-        .filter((pf) => pf.offset_master_account_id)
         .map((pf) => ({
           description: pf.description,
           primaryAccountId: pf.master_account_id,
-          offsetAccountId: pf.offset_master_account_id!,
+          ...(pf.offset_master_account_id ? { offsetAccountId: pf.offset_master_account_id } : {}),
           periodYear: Number(pf.period_year),
           periodMonth: Number(pf.period_month),
           amount: Number(pf.amount),

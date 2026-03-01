@@ -65,7 +65,7 @@ CREATE TABLE leases (
 
   -- Tenant improvements & incentives
   tenant_improvement_allowance numeric(19,4) DEFAULT 0,
-  rent_abatement_months int DEFAULT 0,
+  rent_abatement_months numeric(5,1) DEFAULT 0,
   rent_abatement_amount numeric(19,4) DEFAULT 0,
 
   -- ASC 842 inputs (Phase 2 will consume these)
