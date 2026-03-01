@@ -208,7 +208,7 @@ export async function POST(request: Request) {
     case "search_rw_customers": {
       // Search RentalWorks for customers by name
       const { RentalWorksClient } = await import(
-        "@/../../src/lib/rentalworks/client"
+        "@/lib/rentalworks/client"
       );
       const rw = new RentalWorksClient(process.env.RW_BASE_URL!);
       await rw.ensureAuth(process.env.RW_USERNAME!, process.env.RW_PASSWORD!);

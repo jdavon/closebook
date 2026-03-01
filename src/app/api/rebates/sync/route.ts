@@ -136,7 +136,7 @@ async function syncCustomerInvoices(
 ) {
   // Import RentalWorks client
   const { RentalWorksClient } = await import(
-    "@/../../src/lib/rentalworks/client"
+    "@/lib/rentalworks/client"
   );
   const rw = new RentalWorksClient(process.env.RW_BASE_URL!);
   await rw.ensureAuth(process.env.RW_USERNAME!, process.env.RW_PASSWORD!);
