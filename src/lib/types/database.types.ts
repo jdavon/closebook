@@ -2920,6 +2920,7 @@ export type Database = {
           entity_id: string
           customer_name: string
           rw_customer_id: string
+          rw_customer_number: string | null
           agreement_type: string
           status: string
           tax_rate: number
@@ -2937,6 +2938,7 @@ export type Database = {
           entity_id: string
           customer_name: string
           rw_customer_id: string
+          rw_customer_number?: string | null
           agreement_type: string
           status?: string
           tax_rate?: number
@@ -2954,6 +2956,7 @@ export type Database = {
           entity_id?: string
           customer_name?: string
           rw_customer_id?: string
+          rw_customer_number?: string | null
           agreement_type?: string
           status?: string
           tax_rate?: number

@@ -65,6 +65,7 @@ export async function POST(request: Request) {
         entity_id: entityId,
         customer_name: customer.customer_name,
         rw_customer_id: customer.rw_customer_id,
+        rw_customer_number: customer.rw_customer_number || null,
         agreement_type: customer.agreement_type,
         status: customer.status || "active",
         tax_rate: customer.tax_rate ?? 9.75,

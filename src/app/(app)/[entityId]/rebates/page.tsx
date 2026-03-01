@@ -56,6 +56,7 @@ interface RebateCustomer {
   id: string;
   customer_name: string;
   rw_customer_id: string;
+  rw_customer_number: string | null;
   agreement_type: string;
   status: string;
   tax_rate: number;
@@ -139,6 +140,7 @@ export default function RebateTrackerPage() {
   );
   const [formName, setFormName] = useState("");
   const [formRwId, setFormRwId] = useState("");
+  const [formRwNumber, setFormRwNumber] = useState("");
   const [formType, setFormType] = useState<string>("commercial");
   const [formTaxRate, setFormTaxRate] = useState("9.75");
   const [formMaxDiscount, setFormMaxDiscount] = useState("");
@@ -270,6 +272,7 @@ export default function RebateTrackerPage() {
   const selectRwCustomer = (c: RWCustomerResult) => {
     setFormName(c.Customer);
     setFormRwId(c.CustomerId);
+    setFormRwNumber(c.CustomerNumber || "");
     setRwSearchResults([]);
     setRwSearchQuery("");
   };
@@ -278,6 +281,7 @@ export default function RebateTrackerPage() {
     setEditingCustomer(null);
     setFormName("");
     setFormRwId("");
+    setFormRwNumber("");
     setFormType("commercial");
     setFormTaxRate("9.75");
     setFormMaxDiscount("");
@@ -313,6 +317,7 @@ export default function RebateTrackerPage() {
     setEditingCustomer(c);
     setFormName(c.customer_name);
     setFormRwId(c.rw_customer_id);
+    setFormRwNumber(c.rw_customer_number || "");
     setFormType(c.agreement_type);
     setFormTaxRate(String(c.tax_rate));
     setFormMaxDiscount(c.max_discount_percent ? String(c.max_discount_percent) : "");
@@ -345,6 +350,7 @@ export default function RebateTrackerPage() {
             id: editingCustomer?.id,
             customer_name: formName,
             rw_customer_id: formRwId,
+            rw_customer_number: formRwNumber || null,
             agreement_type: formType,
             tax_rate: parseFloat(formTaxRate) || 9.75,
             max_discount_percent: formMaxDiscount
@@ -584,7 +590,7 @@ export default function RebateTrackerPage() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Customer</TableHead>
-                  <TableHead>RW ID</TableHead>
+                  <TableHead>Account #</TableHead>
                   <TableHead>Type</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead className="text-right">YTD Revenue</TableHead>
@@ -608,7 +614,7 @@ export default function RebateTrackerPage() {
                       {c.customer_name}
                     </TableCell>
                     <TableCell className="text-muted-foreground">
-                      {c.rw_customer_id}
+                      {c.rw_customer_number || c.rw_customer_id}
                     </TableCell>
                     <TableCell>
                       <Badge
@@ -723,9 +729,11 @@ export default function RebateTrackerPage() {
                         onClick={() => selectRwCustomer(r)}
                       >
                         <span className="font-medium">{r.Customer}</span>
-                        <span className="text-muted-foreground ml-2">
-                          ({r.CustomerId})
-                        </span>
+                        {r.CustomerNumber && (
+                          <span className="text-muted-foreground ml-2">
+                            #{r.CustomerNumber}
+                          </span>
+                        )}
                       </button>
                     ))}
                   </div>
@@ -747,8 +755,14 @@ export default function RebateTrackerPage() {
                 <Input
                   value={formRwId}
                   onChange={(e) => setFormRwId(e.target.value)}
-                  placeholder="e.g., V100005"
+                  placeholder="Auto-filled from search"
+                  readOnly={!!formRwNumber}
                 />
+                {formRwNumber && (
+                  <p className="text-xs text-muted-foreground">
+                    Account #: {formRwNumber}
+                  </p>
+                )}
               </div>
               <div className="space-y-2">
                 <Label>Agreement Type</Label>

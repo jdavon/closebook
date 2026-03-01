@@ -97,6 +97,7 @@ interface CustomerData {
   id: string;
   customer_name: string;
   rw_customer_id: string;
+  rw_customer_number: string | null;
   agreement_type: string;
   status: string;
   tax_rate: number;
@@ -388,7 +389,9 @@ export default function CustomerDetailPage() {
                 {customer.agreement_type}
               </Badge>
               <Badge variant="outline" className="text-muted-foreground">
-                {customer.rw_customer_id}
+                {customer.rw_customer_number
+                  ? `#${customer.rw_customer_number}`
+                  : customer.rw_customer_id}
               </Badge>
             </div>
           </div>
