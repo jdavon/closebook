@@ -834,206 +834,127 @@ export default function RebateTrackerPage() {
                 </Button>
               </div>
               {formTiers.map((tier, idx) => (
-                <Card key={idx} className="p-4">
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div className="flex gap-3 items-center flex-1">
-                        <Input
-                          value={tier.label}
-                          onChange={(e) =>
-                            updateTier(idx, "label", e.target.value)
-                          }
-                          placeholder="Tier label"
-                          className="max-w-[200px]"
-                        />
-                        <div className="flex items-center gap-1 text-sm">
-                          <span className="text-muted-foreground">$</span>
-                          <Input
-                            type="number"
-                            value={tier.threshold_min}
-                            onChange={(e) =>
-                              updateTier(
-                                idx,
-                                "threshold_min",
-                                parseFloat(e.target.value) || 0,
-                              )
-                            }
-                            className="w-28"
-                          />
-                          <span className="text-muted-foreground">to $</span>
-                          <Input
-                            type="number"
-                            value={tier.threshold_max ?? ""}
-                            onChange={(e) =>
-                              updateTier(
-                                idx,
-                                "threshold_max",
-                                e.target.value
-                                  ? parseFloat(e.target.value)
-                                  : null,
-                              )
-                            }
-                            placeholder="No limit"
-                            className="w-28"
-                          />
-                        </div>
-                      </div>
-                      {formTiers.length > 1 && (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => removeTier(idx)}
-                        >
-                          <Trash2 className="h-4 w-4 text-destructive" />
-                        </Button>
-                      )}
+                <Card key={idx} className="overflow-hidden">
+                  {/* Tier Header */}
+                  <div className="flex items-center gap-3 bg-muted/50 px-4 py-2.5 border-b">
+                    <Input
+                      value={tier.label}
+                      onChange={(e) =>
+                        updateTier(idx, "label", e.target.value)
+                      }
+                      placeholder="Tier label"
+                      className="max-w-[160px] h-8 text-sm font-medium bg-background"
+                    />
+                    <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                      <span>$</span>
+                      <Input
+                        type="number"
+                        value={tier.threshold_min}
+                        onChange={(e) =>
+                          updateTier(
+                            idx,
+                            "threshold_min",
+                            parseFloat(e.target.value) || 0,
+                          )
+                        }
+                        className="w-24 h-8 text-sm bg-background"
+                      />
+                      <span>&ndash;</span>
+                      <span>$</span>
+                      <Input
+                        type="number"
+                        value={tier.threshold_max ?? ""}
+                        onChange={(e) =>
+                          updateTier(
+                            idx,
+                            "threshold_max",
+                            e.target.value
+                              ? parseFloat(e.target.value)
+                              : null,
+                          )
+                        }
+                        placeholder="No limit"
+                        className="w-24 h-8 text-sm bg-background"
+                      />
                     </div>
-
-                    {/* Rates grid */}
-                    <div className="grid grid-cols-4 gap-2 text-sm">
-                      <div>
-                        <Label className="text-xs text-muted-foreground">
-                          Pro Supplies %
-                        </Label>
-                        <Input
-                          type="number"
-                          step="0.01"
-                          value={tier.rate_pro_supplies}
-                          onChange={(e) =>
-                            updateTier(
-                              idx,
-                              "rate_pro_supplies",
-                              parseFloat(e.target.value) || 0,
-                            )
-                          }
-                        />
-                      </div>
-                      <div>
-                        <Label className="text-xs text-muted-foreground">
-                          Vehicle %
-                        </Label>
-                        <Input
-                          type="number"
-                          step="0.01"
-                          value={tier.rate_vehicle}
-                          onChange={(e) =>
-                            updateTier(
-                              idx,
-                              "rate_vehicle",
-                              parseFloat(e.target.value) || 0,
-                            )
-                          }
-                        />
-                      </div>
-                      <div>
-                        <Label className="text-xs text-muted-foreground">
-                          G&L %
-                        </Label>
-                        <Input
-                          type="number"
-                          step="0.01"
-                          value={tier.rate_grip_lighting}
-                          onChange={(e) =>
-                            updateTier(
-                              idx,
-                              "rate_grip_lighting",
-                              parseFloat(e.target.value) || 0,
-                            )
-                          }
-                        />
-                      </div>
-                      <div>
-                        <Label className="text-xs text-muted-foreground">
-                          Studio %
-                        </Label>
-                        <Input
-                          type="number"
-                          step="0.01"
-                          value={tier.rate_studio}
-                          onChange={(e) =>
-                            updateTier(
-                              idx,
-                              "rate_studio",
-                              parseFloat(e.target.value) || 0,
-                            )
-                          }
-                        />
-                      </div>
-                    </div>
-
-                    {/* Max discount rates (commercial only) */}
-                    {formType === "commercial" && (
-                      <div className="grid grid-cols-4 gap-2 text-sm">
-                        <div>
-                          <Label className="text-xs text-muted-foreground">
-                            Max Disc PS %
-                          </Label>
-                          <Input
-                            type="number"
-                            step="0.01"
-                            value={tier.max_disc_pro_supplies}
-                            onChange={(e) =>
-                              updateTier(
-                                idx,
-                                "max_disc_pro_supplies",
-                                parseFloat(e.target.value) || 0,
-                              )
-                            }
-                          />
-                        </div>
-                        <div>
-                          <Label className="text-xs text-muted-foreground">
-                            Max Disc Veh %
-                          </Label>
-                          <Input
-                            type="number"
-                            step="0.01"
-                            value={tier.max_disc_vehicle}
-                            onChange={(e) =>
-                              updateTier(
-                                idx,
-                                "max_disc_vehicle",
-                                parseFloat(e.target.value) || 0,
-                              )
-                            }
-                          />
-                        </div>
-                        <div>
-                          <Label className="text-xs text-muted-foreground">
-                            Max Disc G&L %
-                          </Label>
-                          <Input
-                            type="number"
-                            step="0.01"
-                            value={tier.max_disc_grip_lighting}
-                            onChange={(e) =>
-                              updateTier(
-                                idx,
-                                "max_disc_grip_lighting",
-                                parseFloat(e.target.value) || 0,
-                              )
-                            }
-                          />
-                        </div>
-                        <div>
-                          <Label className="text-xs text-muted-foreground">
-                            Max Disc Stu %
-                          </Label>
-                          <Input
-                            type="number"
-                            step="0.01"
-                            value={tier.max_disc_studio}
-                            onChange={(e) =>
-                              updateTier(
-                                idx,
-                                "max_disc_studio",
-                                parseFloat(e.target.value) || 0,
-                              )
-                            }
-                          />
-                        </div>
-                      </div>
+                    <div className="flex-1" />
+                    {formTiers.length > 1 && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 w-8 p-0"
+                        onClick={() => removeTier(idx)}
+                      >
+                        <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                      </Button>
                     )}
+                  </div>
+
+                  {/* Rates Table */}
+                  <div className="px-1">
+                    <Table>
+                      <TableHeader>
+                        <TableRow className="hover:bg-transparent">
+                          <TableHead className="w-[140px] text-xs font-medium h-9">
+                            Equipment Type
+                          </TableHead>
+                          <TableHead className="text-xs font-medium text-center h-9">
+                            Rebate %
+                          </TableHead>
+                          {formType === "commercial" && (
+                            <TableHead className="text-xs font-medium text-center h-9">
+                              Max Disc %
+                            </TableHead>
+                          )}
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {([
+                          { label: "Pro Supplies", rateKey: "rate_pro_supplies", discKey: "max_disc_pro_supplies" },
+                          { label: "Vehicle", rateKey: "rate_vehicle", discKey: "max_disc_vehicle" },
+                          { label: "G&L", rateKey: "rate_grip_lighting", discKey: "max_disc_grip_lighting" },
+                          { label: "Studio", rateKey: "rate_studio", discKey: "max_disc_studio" },
+                        ] as const).map((eq) => (
+                          <TableRow key={eq.rateKey} className="hover:bg-transparent">
+                            <TableCell className="py-1.5 text-sm font-medium">
+                              {eq.label}
+                            </TableCell>
+                            <TableCell className="py-1.5">
+                              <Input
+                                type="number"
+                                step="0.01"
+                                value={tier[eq.rateKey]}
+                                onChange={(e) =>
+                                  updateTier(
+                                    idx,
+                                    eq.rateKey,
+                                    parseFloat(e.target.value) || 0,
+                                  )
+                                }
+                                className="h-8 text-sm text-center w-24 mx-auto"
+                              />
+                            </TableCell>
+                            {formType === "commercial" && (
+                              <TableCell className="py-1.5">
+                                <Input
+                                  type="number"
+                                  step="0.01"
+                                  value={tier[eq.discKey]}
+                                  onChange={(e) =>
+                                    updateTier(
+                                      idx,
+                                      eq.discKey,
+                                      parseFloat(e.target.value) || 0,
+                                    )
+                                  }
+                                  className="h-8 text-sm text-center w-24 mx-auto"
+                                />
+                              </TableCell>
+                            )}
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
                   </div>
                 </Card>
               ))}
