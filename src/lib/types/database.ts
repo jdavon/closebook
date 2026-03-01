@@ -179,3 +179,11 @@ export type SubleaseDocumentType =
   | "correspondence"
   | "insurance_cert"
   | "other";
+
+// -- Rebate Tracker --
+
+export type AgreementType = "commercial" | "freelancer";
+
+export type RebateCustomerStatus = "active" | "inactive";
+
+export type EquipmentType = "pro_supplies" | "vehicle" | "grip_lighting" | "studio";

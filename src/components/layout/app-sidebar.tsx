@@ -25,6 +25,7 @@ import {
   FileText,
   Wallet,
   Layers,
+  HandCoins,
 } from "lucide-react";
 import {
   Sidebar,
@@ -96,6 +97,11 @@ export function AppSidebar({ user, entityId: entityIdProp }: AppSidebarProps) {
           title: "Commissions",
           url: `${entityPrefix}/commissions`,
           icon: Percent,
+        },
+        {
+          title: "Rebate Tracker",
+          url: `${entityPrefix}/rebates`,
+          icon: HandCoins,
         },
       ]
     : [];

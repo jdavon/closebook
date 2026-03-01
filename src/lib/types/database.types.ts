@@ -2207,6 +2207,8 @@ export type Database = {
           lease_expense_account_id: string | null
           interest_expense_account_id: string | null
           cam_expense_account_id: string | null
+          asc842_adjustment_account_id: string | null
+          cash_ap_account_id: string | null
           created_by: string | null
           created_at: string
           updated_at: string
@@ -2251,6 +2253,8 @@ export type Database = {
           lease_expense_account_id?: string | null
           interest_expense_account_id?: string | null
           cam_expense_account_id?: string | null
+          asc842_adjustment_account_id?: string | null
+          cash_ap_account_id?: string | null
           created_by?: string | null
           created_at?: string
           updated_at?: string
@@ -2295,6 +2299,8 @@ export type Database = {
           lease_expense_account_id?: string | null
           interest_expense_account_id?: string | null
           cam_expense_account_id?: string | null
+          asc842_adjustment_account_id?: string | null
+          cash_ap_account_id?: string | null
           created_by?: string | null
           created_at?: string
           updated_at?: string
@@ -2907,6 +2913,428 @@ export type Database = {
           created_at?: string
         }
         Relationships: []
+      }
+      rebate_customers: {
+        Row: {
+          id: string
+          entity_id: string
+          customer_name: string
+          rw_customer_id: string
+          agreement_type: string
+          status: string
+          tax_rate: number
+          max_discount_percent: number | null
+          effective_date: string | null
+          use_global_exclusions: boolean
+          contract_storage_path: string | null
+          notes: string | null
+          created_by: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          entity_id: string
+          customer_name: string
+          rw_customer_id: string
+          agreement_type: string
+          status?: string
+          tax_rate?: number
+          max_discount_percent?: number | null
+          effective_date?: string | null
+          use_global_exclusions?: boolean
+          contract_storage_path?: string | null
+          notes?: string | null
+          created_by?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          entity_id?: string
+          customer_name?: string
+          rw_customer_id?: string
+          agreement_type?: string
+          status?: string
+          tax_rate?: number
+          max_discount_percent?: number | null
+          effective_date?: string | null
+          use_global_exclusions?: boolean
+          contract_storage_path?: string | null
+          notes?: string | null
+          created_by?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "rebate_customers_entity_id_fkey"
+            columns: ["entity_id"]
+            isOneToOne: false
+            referencedRelation: "entities"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "rebate_customers_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          }
+        ]
+      }
+      rebate_tiers: {
+        Row: {
+          id: string
+          rebate_customer_id: string
+          label: string
+          threshold_min: number
+          threshold_max: number | null
+          sort_order: number
+          rate_pro_supplies: number
+          rate_vehicle: number
+          rate_grip_lighting: number
+          rate_studio: number
+          max_disc_pro_supplies: number
+          max_disc_vehicle: number
+          max_disc_grip_lighting: number
+          max_disc_studio: number
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          rebate_customer_id: string
+          label: string
+          threshold_min?: number
+          threshold_max?: number | null
+          sort_order?: number
+          rate_pro_supplies?: number
+          rate_vehicle?: number
+          rate_grip_lighting?: number
+          rate_studio?: number
+          max_disc_pro_supplies?: number
+          max_disc_vehicle?: number
+          max_disc_grip_lighting?: number
+          max_disc_studio?: number
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          rebate_customer_id?: string
+          label?: string
+          threshold_min?: number
+          threshold_max?: number | null
+          sort_order?: number
+          rate_pro_supplies?: number
+          rate_vehicle?: number
+          rate_grip_lighting?: number
+          rate_studio?: number
+          max_disc_pro_supplies?: number
+          max_disc_vehicle?: number
+          max_disc_grip_lighting?: number
+          max_disc_studio?: number
+          created_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "rebate_tiers_rebate_customer_id_fkey"
+            columns: ["rebate_customer_id"]
+            isOneToOne: false
+            referencedRelation: "rebate_customers"
+            referencedColumns: ["id"]
+          }
+        ]
+      }
+      rebate_excluded_icodes: {
+        Row: {
+          id: string
+          entity_id: string
+          rebate_customer_id: string | null
+          i_code: string
+          description: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          entity_id: string
+          rebate_customer_id?: string | null
+          i_code: string
+          description?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          entity_id?: string
+          rebate_customer_id?: string | null
+          i_code?: string
+          description?: string | null
+          created_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "rebate_excluded_icodes_entity_id_fkey"
+            columns: ["entity_id"]
+            isOneToOne: false
+            referencedRelation: "entities"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "rebate_excluded_icodes_rebate_customer_id_fkey"
+            columns: ["rebate_customer_id"]
+            isOneToOne: false
+            referencedRelation: "rebate_customers"
+            referencedColumns: ["id"]
+          }
+        ]
+      }
+      rebate_invoices: {
+        Row: {
+          id: string
+          entity_id: string
+          rebate_customer_id: string
+          rw_invoice_id: string
+          invoice_number: string
+          invoice_date: string | null
+          billing_start_date: string | null
+          billing_end_date: string | null
+          status: string | null
+          customer_name: string | null
+          deal: string | null
+          order_number: string | null
+          order_description: string | null
+          purchase_order_number: string | null
+          list_total: number
+          gross_total: number
+          sub_total: number
+          tax_amount: number
+          discount_amount: number
+          equipment_type: string
+          excluded_total: number | null
+          taxable_sales: number | null
+          before_discount: number | null
+          discount_percent: number | null
+          final_amount: number | null
+          tier_label: string | null
+          rebate_rate: number | null
+          remaining_rebate_pct: number | null
+          net_rebate: number | null
+          cumulative_revenue: number | null
+          cumulative_rebate: number | null
+          quarter: string | null
+          is_manually_excluded: boolean
+          manual_exclusion_reason: string | null
+          synced_at: string
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          entity_id: string
+          rebate_customer_id: string
+          rw_invoice_id: string
+          invoice_number: string
+          invoice_date?: string | null
+          billing_start_date?: string | null
+          billing_end_date?: string | null
+          status?: string | null
+          customer_name?: string | null
+          deal?: string | null
+          order_number?: string | null
+          order_description?: string | null
+          purchase_order_number?: string | null
+          list_total?: number
+          gross_total?: number
+          sub_total?: number
+          tax_amount?: number
+          discount_amount?: number
+          equipment_type?: string
+          excluded_total?: number | null
+          taxable_sales?: number | null
+          before_discount?: number | null
+          discount_percent?: number | null
+          final_amount?: number | null
+          tier_label?: string | null
+          rebate_rate?: number | null
+          remaining_rebate_pct?: number | null
+          net_rebate?: number | null
+          cumulative_revenue?: number | null
+          cumulative_rebate?: number | null
+          quarter?: string | null
+          is_manually_excluded?: boolean
+          manual_exclusion_reason?: string | null
+          synced_at?: string
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          entity_id?: string
+          rebate_customer_id?: string
+          rw_invoice_id?: string
+          invoice_number?: string
+          invoice_date?: string | null
+          billing_start_date?: string | null
+          billing_end_date?: string | null
+          status?: string | null
+          customer_name?: string | null
+          deal?: string | null
+          order_number?: string | null
+          order_description?: string | null
+          purchase_order_number?: string | null
+          list_total?: number
+          gross_total?: number
+          sub_total?: number
+          tax_amount?: number
+          discount_amount?: number
+          equipment_type?: string
+          excluded_total?: number | null
+          taxable_sales?: number | null
+          before_discount?: number | null
+          discount_percent?: number | null
+          final_amount?: number | null
+          tier_label?: string | null
+          rebate_rate?: number | null
+          remaining_rebate_pct?: number | null
+          net_rebate?: number | null
+          cumulative_revenue?: number | null
+          cumulative_rebate?: number | null
+          quarter?: string | null
+          is_manually_excluded?: boolean
+          manual_exclusion_reason?: string | null
+          synced_at?: string
+          created_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "rebate_invoices_entity_id_fkey"
+            columns: ["entity_id"]
+            isOneToOne: false
+            referencedRelation: "entities"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "rebate_invoices_rebate_customer_id_fkey"
+            columns: ["rebate_customer_id"]
+            isOneToOne: false
+            referencedRelation: "rebate_customers"
+            referencedColumns: ["id"]
+          }
+        ]
+      }
+      rebate_invoice_items: {
+        Row: {
+          id: string
+          rebate_invoice_id: string
+          rw_item_id: string | null
+          i_code: string | null
+          description: string | null
+          quantity: number | null
+          extended: number | null
+          is_excluded: boolean
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          rebate_invoice_id: string
+          rw_item_id?: string | null
+          i_code?: string | null
+          description?: string | null
+          quantity?: number | null
+          extended?: number | null
+          is_excluded?: boolean
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          rebate_invoice_id?: string
+          rw_item_id?: string | null
+          i_code?: string | null
+          description?: string | null
+          quantity?: number | null
+          extended?: number | null
+          is_excluded?: boolean
+          created_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "rebate_invoice_items_rebate_invoice_id_fkey"
+            columns: ["rebate_invoice_id"]
+            isOneToOne: false
+            referencedRelation: "rebate_invoices"
+            referencedColumns: ["id"]
+          }
+        ]
+      }
+      rebate_quarterly_summaries: {
+        Row: {
+          id: string
+          entity_id: string
+          rebate_customer_id: string
+          quarter: string
+          year: number
+          quarter_num: number
+          total_revenue: number | null
+          total_rebate: number | null
+          invoice_count: number | null
+          tier_label: string | null
+          is_paid: boolean
+          paid_at: string | null
+          paid_by: string | null
+          calculated_at: string
+        }
+        Insert: {
+          id?: string
+          entity_id: string
+          rebate_customer_id: string
+          quarter: string
+          year: number
+          quarter_num: number
+          total_revenue?: number | null
+          total_rebate?: number | null
+          invoice_count?: number | null
+          tier_label?: string | null
+          is_paid?: boolean
+          paid_at?: string | null
+          paid_by?: string | null
+          calculated_at?: string
+        }
+        Update: {
+          id?: string
+          entity_id?: string
+          rebate_customer_id?: string
+          quarter?: string
+          year?: number
+          quarter_num?: number
+          total_revenue?: number | null
+          total_rebate?: number | null
+          invoice_count?: number | null
+          tier_label?: string | null
+          is_paid?: boolean
+          paid_at?: string | null
+          paid_by?: string | null
+          calculated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "rebate_quarterly_summaries_entity_id_fkey"
+            columns: ["entity_id"]
+            isOneToOne: false
+            referencedRelation: "entities"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "rebate_quarterly_summaries_rebate_customer_id_fkey"
+            columns: ["rebate_customer_id"]
+            isOneToOne: false
+            referencedRelation: "rebate_customers"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "rebate_quarterly_summaries_paid_by_fkey"
+            columns: ["paid_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          }
+        ]
       }
     }
     Views: {
