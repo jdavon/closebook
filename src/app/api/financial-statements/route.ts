@@ -349,15 +349,31 @@ interface RawProFormaAdjustment {
  * -amount to the offset master account (when specified) for the
  * matching period. If no existing balance row exists for an
  * account/period, a new one is created.
+ *
+ * IMPORTANT: The ending_balance delta is propagated forward to all
+ * subsequent months for the same account.  aggregateByBucket() derives
+ * monthly net_change from ending_balance diffs between consecutive
+ * months, so without forward-propagation the adjustment would appear
+ * in the target month but be reversed in the next month (net zero).
  */
 function injectProFormaAdjustments(
   consolidatedBalances: RawGLBalance[],
   adjustments: Array<{ master_account_id: string; period_year: number; period_month: number; amount: number; offset_master_account_id?: string | null }>,
   entityId: string
 ): void {
+  // Primary index: "accountId-year-month" → balance row
   const balIndex = new Map<string, RawGLBalance>();
+  // Secondary index: accountId → list of balance rows (for forward propagation)
+  const byAccount = new Map<string, RawGLBalance[]>();
+
   for (const b of consolidatedBalances) {
     balIndex.set(`${b.account_id}-${b.period_year}-${b.period_month}`, b);
+    let list = byAccount.get(b.account_id);
+    if (!list) {
+      list = [];
+      byAccount.set(b.account_id, list);
+    }
+    list.push(b);
   }
 
   function injectAmount(accountId: string, year: number, month: number, amount: number) {
@@ -378,6 +394,26 @@ function injectProFormaAdjustments(
       };
       consolidatedBalances.push(newBal);
       balIndex.set(key, newBal);
+      let list = byAccount.get(accountId);
+      if (!list) {
+        list = [];
+        byAccount.set(accountId, list);
+      }
+      list.push(newBal);
+    }
+
+    // Forward-propagate: add the delta to ending_balance for every
+    // subsequent month of the same account so that the diff-based
+    // net_change derivation in aggregateByBucket() stays correct.
+    const adjYM = year * 12 + month;
+    const list = byAccount.get(accountId);
+    if (list) {
+      for (const bal of list) {
+        const balYM = bal.period_year * 12 + bal.period_month;
+        if (balYM > adjYM) {
+          bal.ending_balance += amount;
+        }
+      }
     }
   }
 
@@ -1915,30 +1951,99 @@ async function buildConsolidatedStatements(params: ConsolidatedStatementsParams)
     pyAggregated = aggregateByBucket(consolidatedAccounts, consolidatedBalances, pyBuckets, fiscalYearStartMonth);
   }
 
-  // Intercompany elimination: zero out P&L accounts tagged as intercompany.
-  // On consolidated views (org/RE scope), intercompany revenue and expense
-  // between entities should cancel out.  We zero both the current-year and
-  // prior-year aggregated amounts so they don't appear on the statements.
-  const intercompanyIds = new Set(
-    consolidatedAccounts
-      .filter((a) => a.isIntercompany && (a.classification === "Revenue" || a.classification === "Expense"))
-      .map((a) => a.id)
+  // Intercompany elimination: remove individual intercompany P&L accounts
+  // from the statement.  If intercompany revenue and expense don't perfectly
+  // cancel (timing differences, data entry errors), show a single
+  // "Intercompany Eliminations, Net" line with the residual.
+  const intercompanyAccounts = consolidatedAccounts.filter(
+    (a) => a.isIntercompany && (a.classification === "Revenue" || a.classification === "Expense")
   );
+  const intercompanyIds = new Set(intercompanyAccounts.map((a) => a.id));
+
   if (intercompanyIds.size > 0) {
-    for (const accountId of intercompanyIds) {
-      const bucketed = aggregated.get(accountId);
+    // Compute the net intercompany effect per bucket.
+    // Revenue accounts are credit-normal (stored negative in GL), so we
+    // negate them to get the display-sign amount, then net against expenses.
+    // A perfectly balanced pair yields zero net.
+    const netChange: Record<string, number> = {};
+    const netEnding: Record<string, number> = {};
+    const netBeginning: Record<string, number> = {};
+    const pyNetChange: Record<string, number> = {};
+    const pyNetEnding: Record<string, number> = {};
+    const pyNetBeginning: Record<string, number> = {};
+
+    for (const bucket of buckets) {
+      netChange[bucket.key] = 0;
+      netEnding[bucket.key] = 0;
+      netBeginning[bucket.key] = 0;
+      pyNetChange[bucket.key] = 0;
+      pyNetEnding[bucket.key] = 0;
+      pyNetBeginning[bucket.key] = 0;
+    }
+
+    for (const account of intercompanyAccounts) {
+      const bucketed = aggregated.get(account.id);
       if (bucketed) {
-        for (const key of Object.keys(bucketed.netChange)) bucketed.netChange[key] = 0;
-        for (const key of Object.keys(bucketed.endingBalance)) bucketed.endingBalance[key] = 0;
-        for (const key of Object.keys(bucketed.beginningBalance)) bucketed.beginningBalance[key] = 0;
+        for (const key of Object.keys(bucketed.netChange)) {
+          // Revenue is credit-normal → flip sign so positive = income;
+          // Expense is debit-normal → keep sign so positive = cost.
+          // Net effect = expense side − revenue side.  If they cancel, net=0.
+          const sign = account.classification === "Revenue" ? -1 : 1;
+          netChange[key] = (netChange[key] ?? 0) + bucketed.netChange[key] * sign;
+          netEnding[key] = (netEnding[key] ?? 0) + bucketed.endingBalance[key] * sign;
+          netBeginning[key] = (netBeginning[key] ?? 0) + bucketed.beginningBalance[key] * sign;
+        }
       }
       if (pyAggregated) {
-        const pyBucketed = pyAggregated.get(accountId);
+        const pyBucketed = pyAggregated.get(account.id);
         if (pyBucketed) {
-          for (const key of Object.keys(pyBucketed.netChange)) pyBucketed.netChange[key] = 0;
-          for (const key of Object.keys(pyBucketed.endingBalance)) pyBucketed.endingBalance[key] = 0;
-          for (const key of Object.keys(pyBucketed.beginningBalance)) pyBucketed.beginningBalance[key] = 0;
+          const sign = account.classification === "Revenue" ? -1 : 1;
+          for (const key of Object.keys(pyBucketed.netChange)) {
+            pyNetChange[key] = (pyNetChange[key] ?? 0) + pyBucketed.netChange[key] * sign;
+            pyNetEnding[key] = (pyNetEnding[key] ?? 0) + pyBucketed.endingBalance[key] * sign;
+            pyNetBeginning[key] = (pyNetBeginning[key] ?? 0) + pyBucketed.beginningBalance[key] * sign;
+          }
         }
+      }
+    }
+
+    // Remove individual intercompany accounts from the list and aggregated maps
+    for (const accountId of intercompanyIds) {
+      aggregated.delete(accountId);
+      pyAggregated?.delete(accountId);
+    }
+    // Mutate in place — remove intercompany accounts so buildStatement won't see them
+    const kept = consolidatedAccounts.filter((a) => !intercompanyIds.has(a.id));
+    consolidatedAccounts.length = 0;
+    consolidatedAccounts.push(...kept);
+
+    // If there's a non-zero net effect in any period, inject a synthetic
+    // "Intercompany Eliminations, Net" account into Other Expense.
+    const hasNetEffect =
+      Object.values(netChange).some((v) => Math.abs(v) >= 0.005) ||
+      Object.values(pyNetChange).some((v) => Math.abs(v) >= 0.005);
+
+    if (hasNetEffect) {
+      const syntheticId = "__intercompany_net__";
+      consolidatedAccounts.push({
+        id: syntheticId,
+        name: "Intercompany Eliminations, Net",
+        accountNumber: null,
+        classification: "Expense",
+        accountType: "Other Expense",
+        isIntercompany: false,
+      });
+      aggregated.set(syntheticId, {
+        netChange: { ...netChange },
+        endingBalance: { ...netEnding },
+        beginningBalance: { ...netBeginning },
+      });
+      if (pyAggregated) {
+        pyAggregated.set(syntheticId, {
+          netChange: { ...pyNetChange },
+          endingBalance: { ...pyNetEnding },
+          beginningBalance: { ...pyNetBeginning },
+        });
       }
     }
   }
