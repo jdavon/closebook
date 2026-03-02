@@ -74,10 +74,10 @@ export default function ICEliminationsPage() {
 
   const hasData = data && data.entityDetails.length > 0;
   const totalVariances = data?.eliminationPairs.filter(
-    (p) => Math.abs(p.variance) >= 0.01
+    (p) => Math.abs(p.netEffect) >= 0.01
   ).length ?? 0;
   const balancedPairs = data?.eliminationPairs.filter(
-    (p) => Math.abs(p.variance) < 0.01
+    (p) => Math.abs(p.netEffect) < 0.01
   ).length ?? 0;
 
   return (
@@ -360,114 +360,197 @@ function EntitySection({ detail }: { detail: ICEntityDetail }) {
 // ---------------------------------------------------------------------------
 
 function EliminationCheck({ pairs }: { pairs: ICEliminationPair[] }) {
-  const [collapsed, setCollapsed] = useState(false);
-  const variances = pairs.filter((p) => Math.abs(p.variance) >= 0.01);
+  const variances = pairs.filter((p) => Math.abs(p.netEffect) >= 0.01);
   const allBalanced = variances.length === 0;
 
   return (
     <Card>
+      <div className="px-4 py-3 flex items-center gap-2 border-b">
+        <span className="font-semibold text-sm">
+          Elimination Verification
+        </span>
+        {allBalanced ? (
+          <Badge
+            variant="outline"
+            className="text-[10px] px-1.5 py-0 border-green-300 text-green-700 dark:border-green-700 dark:text-green-400"
+          >
+            <CheckCircle2 className="h-3 w-3 mr-0.5" />
+            All balanced
+          </Badge>
+        ) : (
+          <Badge
+            variant="outline"
+            className="text-[10px] px-1.5 py-0 border-red-300 text-red-700 dark:border-red-700 dark:text-red-400"
+          >
+            <AlertTriangle className="h-3 w-3 mr-0.5" />
+            {variances.length} variance{variances.length !== 1 ? "s" : ""}
+          </Badge>
+        )}
+      </div>
+
+      <CardContent className="pt-0 pb-3 px-0">
+        <p className="px-4 py-2 text-xs text-muted-foreground">
+          For each entity pair, the net of all intercompany accounts must
+          cancel to zero: (A&apos;s Due From B − A&apos;s Due To B) +
+          (B&apos;s Due From A − B&apos;s Due To A) = 0
+        </p>
+
+        <div className="space-y-3 px-4">
+          {pairs.map((pair, i) => {
+            const isBalanced = Math.abs(pair.netEffect) < 0.01;
+            return (
+              <PairCard key={i} pair={pair} isBalanced={isBalanced} />
+            );
+          })}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Per-pair elimination card (net-zero check)
+// ---------------------------------------------------------------------------
+
+function PairCard({
+  pair,
+  isBalanced,
+}: {
+  pair: ICEliminationPair;
+  isBalanced: boolean;
+}) {
+  const [collapsed, setCollapsed] = useState(false);
+
+  return (
+    <div
+      className={`border rounded-lg overflow-hidden ${
+        !isBalanced
+          ? "border-red-300 dark:border-red-700"
+          : "border-border"
+      }`}
+    >
       <button
-        className="w-full flex items-center justify-between px-4 py-3 hover:bg-muted/30 transition-colors"
+        className="w-full flex items-center justify-between px-3 py-2 hover:bg-muted/30 transition-colors"
         onClick={() => setCollapsed(!collapsed)}
       >
-        <span className="flex items-center gap-2 font-semibold text-sm">
+        <span className="flex items-center gap-2 text-xs font-semibold">
           {collapsed ? (
-            <ChevronRight className="h-4 w-4" />
+            <ChevronRight className="h-3.5 w-3.5" />
           ) : (
-            <ChevronDown className="h-4 w-4" />
+            <ChevronDown className="h-3.5 w-3.5" />
           )}
-          Elimination Verification
-          {allBalanced ? (
-            <Badge
-              variant="outline"
-              className="text-[10px] px-1.5 py-0 border-green-300 text-green-700 dark:border-green-700 dark:text-green-400"
-            >
-              <CheckCircle2 className="h-3 w-3 mr-0.5" />
-              All balanced
-            </Badge>
+          {pair.entityACode}
+          <span className="text-muted-foreground font-normal">↔</span>
+          {pair.entityBCode}
+        </span>
+        <span className="flex items-center gap-2">
+          <span
+            className={`text-xs font-semibold tabular-nums ${
+              isBalanced
+                ? "text-green-600 dark:text-green-400"
+                : "text-red-600 dark:text-red-400"
+            }`}
+          >
+            Net: {formatStatementAmount(pair.netEffect)}
+          </span>
+          {isBalanced ? (
+            <CheckCircle2 className="h-3.5 w-3.5 text-green-600 dark:text-green-400" />
           ) : (
-            <Badge
-              variant="outline"
-              className="text-[10px] px-1.5 py-0 border-red-300 text-red-700 dark:border-red-700 dark:text-red-400"
-            >
-              <AlertTriangle className="h-3 w-3 mr-0.5" />
-              {variances.length} variance{variances.length !== 1 ? "s" : ""}
-            </Badge>
+            <AlertTriangle className="h-3.5 w-3.5 text-red-500" />
           )}
         </span>
       </button>
 
       {!collapsed && (
-        <CardContent className="pt-0 pb-3 px-0">
-          <p className="px-4 pb-2 text-xs text-muted-foreground">
-            Verifies that Entity A&apos;s &quot;Due from B&quot; matches Entity
-            B&apos;s &quot;Due to A&quot;.
-          </p>
-          <table className="w-full text-xs border-collapse">
-            <thead>
-              <tr className="border-t border-b bg-muted/30">
-                <th className="text-left px-4 py-2 font-medium text-muted-foreground">
-                  Relationship
-                </th>
-                <th className="text-right px-4 py-2 font-medium text-muted-foreground w-[150px]">
-                  A&apos;s Due From B
-                </th>
-                <th className="text-right px-4 py-2 font-medium text-muted-foreground w-[150px]">
-                  B&apos;s Due To A
-                </th>
-                <th className="text-right px-4 py-2 font-medium text-muted-foreground w-[150px]">
-                  Variance
-                </th>
-                <th className="text-center px-4 py-2 font-medium text-muted-foreground w-[80px]">
-                  Status
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {pairs.map((pair, i) => {
-                const isBalanced = Math.abs(pair.variance) < 0.01;
-                return (
-                  <tr
-                    key={i}
-                    className={`border-b hover:bg-muted/20 ${
-                      !isBalanced ? "bg-red-50/30 dark:bg-red-950/10" : ""
-                    }`}
-                  >
-                    <td className="px-4 py-1.5 font-medium">
-                      {pair.entityACode}{" "}
-                      <span className="text-muted-foreground font-normal">
-                        → {pair.entityBCode}
-                      </span>
-                    </td>
-                    <td className="text-right px-4 py-1.5 tabular-nums">
-                      {formatStatementAmount(pair.aDueFromB)}
-                    </td>
-                    <td className="text-right px-4 py-1.5 tabular-nums">
-                      {formatStatementAmount(pair.bDueToA)}
-                    </td>
-                    <td
-                      className={`text-right px-4 py-1.5 tabular-nums font-medium ${
-                        isBalanced
-                          ? "text-green-600 dark:text-green-400"
-                          : "text-red-600 dark:text-red-400"
-                      }`}
-                    >
-                      {formatStatementAmount(pair.variance)}
-                    </td>
-                    <td className="text-center px-4 py-1.5">
-                      {isBalanced ? (
-                        <CheckCircle2 className="h-3.5 w-3.5 text-green-600 dark:text-green-400 mx-auto" />
-                      ) : (
-                        <AlertTriangle className="h-3.5 w-3.5 text-red-500 mx-auto" />
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </CardContent>
+        <table className="w-full text-xs border-collapse">
+          <thead>
+            <tr className="border-t border-b bg-muted/30">
+              <th className="text-left px-3 py-1.5 font-medium text-muted-foreground">
+                Entity
+              </th>
+              <th className="text-right px-3 py-1.5 font-medium text-muted-foreground w-[120px]">
+                Due From
+              </th>
+              <th className="text-right px-3 py-1.5 font-medium text-muted-foreground w-[120px]">
+                Due To
+              </th>
+              <th className="text-right px-3 py-1.5 font-medium text-muted-foreground w-[120px]">
+                Net
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {/* Entity A's balances with B */}
+            <tr className="border-b hover:bg-muted/20">
+              <td className="px-3 py-1.5 font-medium">
+                {pair.entityACode}
+                <span className="text-muted-foreground font-normal ml-1">
+                  → {pair.entityBCode}
+                </span>
+              </td>
+              <td className="text-right px-3 py-1.5 tabular-nums">
+                {formatStatementAmount(pair.aDueFromB)}
+              </td>
+              <td className="text-right px-3 py-1.5 tabular-nums">
+                {formatStatementAmount(-pair.aDueToB)}
+              </td>
+              <td
+                className={`text-right px-3 py-1.5 tabular-nums font-medium ${
+                  pair.aNetWithB > 0
+                    ? "text-blue-600 dark:text-blue-400"
+                    : pair.aNetWithB < 0
+                      ? "text-orange-600 dark:text-orange-400"
+                      : "text-muted-foreground"
+                }`}
+              >
+                {formatStatementAmount(pair.aNetWithB)}
+              </td>
+            </tr>
+            {/* Entity B's balances with A */}
+            <tr className="border-b hover:bg-muted/20">
+              <td className="px-3 py-1.5 font-medium">
+                {pair.entityBCode}
+                <span className="text-muted-foreground font-normal ml-1">
+                  → {pair.entityACode}
+                </span>
+              </td>
+              <td className="text-right px-3 py-1.5 tabular-nums">
+                {formatStatementAmount(pair.bDueFromA)}
+              </td>
+              <td className="text-right px-3 py-1.5 tabular-nums">
+                {formatStatementAmount(-pair.bDueToA)}
+              </td>
+              <td
+                className={`text-right px-3 py-1.5 tabular-nums font-medium ${
+                  pair.bNetWithA > 0
+                    ? "text-blue-600 dark:text-blue-400"
+                    : pair.bNetWithA < 0
+                      ? "text-orange-600 dark:text-orange-400"
+                      : "text-muted-foreground"
+                }`}
+              >
+                {formatStatementAmount(pair.bNetWithA)}
+              </td>
+            </tr>
+          </tbody>
+          <tfoot>
+            <tr className="border-t-2 border-border">
+              <td className="px-3 py-1.5 font-semibold" colSpan={3}>
+                Net Effect (should be $0)
+              </td>
+              <td
+                className={`text-right px-3 py-1.5 tabular-nums font-bold ${
+                  Math.abs(pair.netEffect) < 0.01
+                    ? "text-green-600 dark:text-green-400"
+                    : "text-red-600 dark:text-red-400"
+                }`}
+              >
+                {formatStatementAmount(pair.netEffect)}
+              </td>
+            </tr>
+          </tfoot>
+        </table>
       )}
-    </Card>
+    </div>
   );
 }

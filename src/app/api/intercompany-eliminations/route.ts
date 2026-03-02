@@ -395,18 +395,25 @@ export async function GET(request: Request) {
     .filter(Boolean);
 
   // ---------------------------------------------------------------------------
-  // Build elimination pairs for cross-checking
+  // Build elimination pairs for net-zero cross-checking
   // ---------------------------------------------------------------------------
-  // Entity A's "Due from B" should match Entity B's "Due to A"
+  // For any two entities A and B, the NET of all IC accounts must cancel:
+  //   (A's Due From B − A's Due To B) + (B's Due From A − B's Due To A) = 0
 
   const eliminationPairs: Array<{
+    entityAId: string;
     entityACode: string;
     entityAName: string;
+    entityBId: string;
     entityBCode: string;
     entityBName: string;
     aDueFromB: number;
+    aDueToB: number;
+    aNetWithB: number;
+    bDueFromA: number;
     bDueToA: number;
-    variance: number;
+    bNetWithA: number;
+    netEffect: number;
   }> = [];
 
   const seenPairs = new Set<string>();
@@ -415,33 +422,65 @@ export async function GET(request: Request) {
     if (!ed) continue;
     for (const cp of ed.counterparties) {
       if (!cp.counterpartyEntityId) continue;
-      if (cp.dueFromBalance === 0) continue;
 
-      // Create a unique key for this pair (A→B direction)
-      const pairKey = `${ed.entityId}::${cp.counterpartyEntityId}`;
+      // Create a canonical key so we only process each pair once
+      const ids = [ed.entityId, cp.counterpartyEntityId].sort();
+      const pairKey = `${ids[0]}::${ids[1]}`;
       if (seenPairs.has(pairKey)) continue;
       seenPairs.add(pairKey);
 
-      // Entity A has "Due from B" = cp.dueFromBalance
-      // Look for Entity B's "Due to A"
+      // Entity A = ed, Entity B = counterparty
+      const entityAId = ed.entityId;
+      const entityBId = cp.counterpartyEntityId;
+
+      // A's balances with B
+      const aDueFromB = cp.dueFromBalance;
+      const aDueToB = cp.dueToBalance;
+      const aNetWithB = aDueFromB - aDueToB;
+
+      // B's balances with A — look up B's entity detail and find A as counterparty
       const entityBDetail = entityDetails.find(
-        (d) => d && d.entityId === cp.counterpartyEntityId
+        (d) => d && d.entityId === entityBId
       );
       const entityBCp = entityBDetail?.counterparties.find(
-        (c) =>
-          c.counterpartyEntityId === ed.entityId
+        (c) => c.counterpartyEntityId === entityAId
       );
 
+      const bDueFromA = entityBCp?.dueFromBalance ?? 0;
       const bDueToA = entityBCp?.dueToBalance ?? 0;
+      const bNetWithA = bDueFromA - bDueToA;
+
+      // Net effect should be zero when balanced
+      const netEffect = aNetWithB + bNetWithA;
+
+      // Only include pairs where there's actually IC activity
+      if (
+        Math.abs(aDueFromB) < 0.01 &&
+        Math.abs(aDueToB) < 0.01 &&
+        Math.abs(bDueFromA) < 0.01 &&
+        Math.abs(bDueToA) < 0.01
+      ) {
+        continue;
+      }
 
       eliminationPairs.push({
+        entityAId,
         entityACode: ed.entityCode,
         entityAName: ed.entityName,
-        entityBCode: cp.counterpartyCode ?? cp.counterpartyName,
-        entityBName: cp.counterpartyName,
-        aDueFromB: cp.dueFromBalance,
+        entityBId,
+        entityBCode:
+          entityBDetail?.entityCode ??
+          cp.counterpartyCode ??
+          cp.counterpartyName,
+        entityBName:
+          entityBDetail?.entityName ?? cp.counterpartyName,
+        aDueFromB,
+        aDueToB,
+        aNetWithB,
+        bDueFromA,
         bDueToA,
-        variance: cp.dueFromBalance - bDueToA,
+        bNetWithA,
+        netEffect,
       });
     }
   }

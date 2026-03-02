@@ -283,18 +283,31 @@ export interface ICEntityDetail {
   totalNet: number;
 }
 
-/** A cross-entity elimination pair for variance checking */
+/** A cross-entity elimination pair – net-zero check.
+ *  For any two entities A and B, the net of ALL intercompany accounts
+ *  between them must cancel: (A's net with B) + (B's net with A) = 0.
+ */
 export interface ICEliminationPair {
+  entityAId: string;
   entityACode: string;
   entityAName: string;
+  entityBId: string;
   entityBCode: string;
   entityBName: string;
-  /** Entity A's "Due from B" (receivable) */
+  /** Entity A's receivable from B */
   aDueFromB: number;
-  /** Entity B's "Due to A" (payable) — should match aDueFromB */
+  /** Entity A's payable to B */
+  aDueToB: number;
+  /** A's net position with B  = Due From B − Due To B */
+  aNetWithB: number;
+  /** Entity B's receivable from A */
+  bDueFromA: number;
+  /** Entity B's payable to A */
   bDueToA: number;
-  /** aDueFromB - bDueToA. Zero = balanced. */
-  variance: number;
+  /** B's net position with A  = Due From A − Due To A */
+  bNetWithA: number;
+  /** aNetWithB + bNetWithA — should be 0 when balanced */
+  netEffect: number;
 }
 
 /** Response from the intercompany-eliminations API */
