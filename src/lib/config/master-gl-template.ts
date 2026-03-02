@@ -95,7 +95,11 @@ const ASSETS: MasterAccountTemplate[] = [
     accountType: "Other Current Asset",
     normalBalance: "debit",
     displayOrder: 310,
-    mappingRules: [{ accountNumber: "1335" }],
+    mappingRules: [
+      { accountNumber: "1335" },
+      { nameContains: "Due from Two Family" },
+      { nameContains: "Due from 2 Family" },
+    ],
   },
   {
     accountNumber: "M1310",
@@ -104,7 +108,11 @@ const ASSETS: MasterAccountTemplate[] = [
     accountType: "Other Current Asset",
     normalBalance: "debit",
     displayOrder: 320,
-    mappingRules: [{ accountNumber: "1336" }],
+    mappingRules: [
+      { accountNumber: "1336" },
+      { accountNumber: "12302" },  // HDR
+      { nameContains: "Due from NCNT" },
+    ],
   },
   {
     accountNumber: "M1320",
@@ -113,7 +121,11 @@ const ASSETS: MasterAccountTemplate[] = [
     accountType: "Other Current Asset",
     normalBalance: "debit",
     displayOrder: 330,
-    mappingRules: [{ accountNumber: "1338" }],
+    mappingRules: [
+      { accountNumber: "1338" },
+      { accountNumber: "12301" },  // HDR
+      { nameContains: "Due from HSS" },
+    ],
   },
   {
     accountNumber: "M1330",
@@ -122,7 +134,10 @@ const ASSETS: MasterAccountTemplate[] = [
     accountType: "Other Current Asset",
     normalBalance: "debit",
     displayOrder: 340,
-    mappingRules: [{ accountNumber: "1337" }],
+    mappingRules: [
+      { accountNumber: "1337" },
+      { nameContains: "Due from HDR" },
+    ],
   },
   {
     accountNumber: "M1340",
@@ -131,7 +146,11 @@ const ASSETS: MasterAccountTemplate[] = [
     accountType: "Other Current Asset",
     normalBalance: "debit",
     displayOrder: 350,
-    mappingRules: [{ accountNumber: "1345" }],
+    mappingRules: [
+      { accountNumber: "1345" },
+      { nameContains: "Due from Avon Rental" },
+      { nameContains: "Due from ARH" },
+    ],
   },
   {
     accountNumber: "M1350",
@@ -140,7 +159,10 @@ const ASSETS: MasterAccountTemplate[] = [
     accountType: "Other Current Asset",
     normalBalance: "debit",
     displayOrder: 360,
-    mappingRules: [{ accountNumber: "1355" }],
+    mappingRules: [
+      { accountNumber: "1355" },
+      { nameContains: "Due from Bearcat" },
+    ],
   },
   {
     accountNumber: "M1360",
@@ -149,7 +171,22 @@ const ASSETS: MasterAccountTemplate[] = [
     accountType: "Other Current Asset",
     normalBalance: "debit",
     displayOrder: 370,
-    mappingRules: [{ accountNumber: "1356" }],
+    mappingRules: [
+      { accountNumber: "1356" },
+      { nameContains: "Due from Versatile" },
+    ],
+  },
+  {
+    accountNumber: "M1370",
+    name: "Due from Silverco",
+    classification: "Asset",
+    accountType: "Other Current Asset",
+    normalBalance: "debit",
+    displayOrder: 375,
+    mappingRules: [
+      { accountNumber: "12303" },  // HDR & Versatile
+      { nameContains: "Due from Silverco" },
+    ],
   },
   {
     accountNumber: "M1399",
@@ -311,9 +348,24 @@ const LIABILITIES: MasterAccountTemplate[] = [
       { accountNumber: "2505" },
       { accountNumber: "2506" },
       { accountNumber: "2507" },
-      { accountNumber: "2509" },
+      { accountNumber: "2508" },
+      { accountNumber: "2513" },
+      { accountNumber: "2549" },
+      { nameContains: "First Source Working Capital" }, // Silverco 2509 (by name, not number — ARH uses 2509 for "Due to Silverco")
       { accountNumberPrefix: "2509." },
       { accountNumber: "2562" },
+    ],
+  },
+  {
+    accountNumber: "M2295",
+    name: "Due to HSS",
+    classification: "Liability",
+    accountType: "Other Current Liability",
+    normalBalance: "credit",
+    displayOrder: 815,
+    mappingRules: [
+      { accountNumber: "20402" },  // HDR
+      { nameContains: "Due to HSS" },
     ],
   },
   {
@@ -323,7 +375,24 @@ const LIABILITIES: MasterAccountTemplate[] = [
     accountType: "Other Current Liability",
     normalBalance: "credit",
     displayOrder: 820,
-    mappingRules: [{ accountNumber: "2510" }],
+    mappingRules: [
+      { accountNumber: "2510" },
+      { accountNumber: "20404" },  // HDR & Versatile
+      { nameContains: "Due to Two Family" },
+      { nameContains: "Due to 2 Family" },
+    ],
+  },
+  {
+    accountNumber: "M2305",
+    name: "Due to Silverco",
+    classification: "Liability",
+    accountType: "Other Current Liability",
+    normalBalance: "credit",
+    displayOrder: 825,
+    mappingRules: [
+      { accountNumber: "20403" },  // HDR & Versatile
+      { nameContains: "Due to Silverco" },
+    ],
   },
   {
     accountNumber: "M2310",
@@ -332,7 +401,11 @@ const LIABILITIES: MasterAccountTemplate[] = [
     accountType: "Other Current Liability",
     normalBalance: "credit",
     displayOrder: 830,
-    mappingRules: [{ accountNumber: "2511" }],
+    mappingRules: [
+      { accountNumber: "2511" },
+      { nameContains: "Due to Avon Rental" },
+      { nameContains: "Due to ARH" },
+    ],
   },
   {
     accountNumber: "M2320",
@@ -341,7 +414,10 @@ const LIABILITIES: MasterAccountTemplate[] = [
     accountType: "Other Current Liability",
     normalBalance: "credit",
     displayOrder: 840,
-    mappingRules: [{ accountNumber: "2550" }],
+    mappingRules: [
+      { accountNumber: "2550" },
+      { nameContains: "Due to NCNT" },
+    ],
   },
   {
     accountNumber: "M2330",
@@ -350,7 +426,10 @@ const LIABILITIES: MasterAccountTemplate[] = [
     accountType: "Other Current Liability",
     normalBalance: "credit",
     displayOrder: 850,
-    mappingRules: [{ accountNumber: "2561" }],
+    mappingRules: [
+      { accountNumber: "2561" },
+      { nameContains: "Due to Versatile" },
+    ],
   },
   {
     accountNumber: "M2340",
@@ -359,7 +438,10 @@ const LIABILITIES: MasterAccountTemplate[] = [
     accountType: "Other Current Liability",
     normalBalance: "credit",
     displayOrder: 860,
-    mappingRules: [{ accountNumber: "2560" }],
+    mappingRules: [
+      { accountNumber: "2560" },
+      { nameContains: "Due to HDR" },
+    ],
   },
   {
     accountNumber: "M2399",

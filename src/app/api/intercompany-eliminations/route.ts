@@ -300,9 +300,18 @@ export async function GET(request: Request) {
   //   so all balances merge into a single counterparty entry.
   //
   // KEY FIX 2 — Sign normalisation:
-  //   Due To (liability / credit-normal) GL balances are stored as NEGATIVE
-  //   numbers. We use Math.abs() so dueTo is always a positive magnitude.
-  //   This makes the net calculation correct: net = dueFrom − dueTo.
+  //   GL balances are stored in debit-positive convention:
+  //     - "Due From" (asset, debit-normal): positive = normal
+  //     - "Due To" (liability, credit-normal): negative = normal credit balance
+  //   For display, we negate the "Due To" GL balance so a normal liability
+  //   reads as a positive number.  A reversed (debit) balance on a "Due To"
+  //   account will correctly display as negative.
+  //
+  //   Net position = dueFrom − dueTo  (where dueTo = −glBalance)
+  //               = dueFrom + glBalance  (sum of raw GL values)
+  //
+  //   This matches the Excel "Intercompany Review" net-zero formula:
+  //     A.due_from_B + A.due_to_B + B.due_from_A + B.due_to_A = 0
 
   interface CpEntry {
     dueFrom: number;
@@ -375,9 +384,12 @@ export async function GET(request: Request) {
         if (direction === "due_from") {
           entry.dueFrom += balance;
         } else {
-          // GL stores credit-normal (liability) balances as negative.
-          // Normalise to positive magnitude.
-          entry.dueTo += Math.abs(balance);
+          // Negate GL balance: credit-normal liabilities are negative in GL,
+          // so negating gives a positive display value.  Reversed (debit)
+          // balances become negative, correctly indicating the counterparty
+          // owes on this account.  Using -balance instead of Math.abs()
+          // preserves sign information needed for net-zero elimination.
+          entry.dueTo += -balance;
         }
       }
     }
@@ -424,8 +436,11 @@ export async function GET(request: Request) {
   // ---------------------------------------------------------------------------
   // Build elimination pairs for net-zero cross-checking
   // ---------------------------------------------------------------------------
-  // For any two entities A and B, the NET of all IC accounts must cancel:
-  //   (A's Due From B − A's Due To B) + (B's Due From A − B's Due To A) = 0
+  // For any two entities A and B, the SUM of all raw GL IC balances must cancel:
+  //   A.due_from_B + A.due_to_B + B.due_from_A + B.due_to_A = 0
+  //
+  // In display terms (dueTo = −glBalance):
+  //   (A.dueFrom − A.dueTo) + (B.dueFrom − B.dueTo) = 0
 
   const eliminationPairs: Array<{
     entityAId: string;
