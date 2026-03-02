@@ -13,21 +13,20 @@ import {
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
-import {
   ArrowLeftRight,
   CheckCircle2,
   AlertTriangle,
   Loader2,
+  ChevronDown,
+  ChevronRight,
 } from "lucide-react";
 import { getCurrentPeriod } from "@/lib/utils/dates";
 import { formatStatementAmount } from "@/components/financial-statements/format-utils";
 import { useICEliminations } from "@/components/financial-statements/use-ic-eliminations";
-import type { ICEliminationPair, ICEntityColumn } from "@/components/financial-statements/types";
+import type {
+  ICEntityDetail,
+  ICEliminationPair,
+} from "@/components/financial-statements/types";
 
 export default function ICEliminationsPage() {
   const supabase = createClient();
@@ -37,7 +36,6 @@ export default function ICEliminationsPage() {
   const [endYear, setEndYear] = useState(currentPeriod.year);
   const [endMonth, setEndMonth] = useState(currentPeriod.month);
 
-  // Load organization
   const loadOrg = useCallback(async () => {
     const {
       data: { user },
@@ -68,32 +66,19 @@ export default function ICEliminationsPage() {
     !!organizationId
   );
 
-  // Build month options
   const monthNames = [
-    "January",
-    "February",
-    "March",
-    "April",
-    "May",
-    "June",
-    "July",
-    "August",
-    "September",
-    "October",
-    "November",
-    "December",
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
   ];
-
-  // Build year options (current year ± 2)
   const yearOptions = Array.from({ length: 5 }, (_, i) => currentPeriod.year - 2 + i);
 
-  // Summary stats
-  const totalPairs = data?.pairs.length ?? 0;
-  const balancedPairs = data?.pairs.filter((p) => Math.abs(p.variance) < 0.01).length ?? 0;
-  const mismatchPairs = totalPairs - balancedPairs;
-  const totalVariance = data?.pairs.reduce((s, p) => s + p.variance, 0) ?? 0;
-  const unmatchedCount =
-    (data?.unmatchedDueTo.length ?? 0) + (data?.unmatchedDueFrom.length ?? 0);
+  const hasData = data && data.entityDetails.length > 0;
+  const totalVariances = data?.eliminationPairs.filter(
+    (p) => Math.abs(p.variance) >= 0.01
+  ).length ?? 0;
+  const balancedPairs = data?.eliminationPairs.filter(
+    (p) => Math.abs(p.variance) < 0.01
+  ).length ?? 0;
 
   return (
     <div className="space-y-4">
@@ -104,7 +89,7 @@ export default function ICEliminationsPage() {
           Intercompany Eliminations
         </h1>
         <p className="text-muted-foreground text-sm">
-          Balance sheet Due To / Due From reconciliation and elimination grid
+          Per-entity Due To / Due From balances and elimination verification
         </p>
       </div>
 
@@ -147,17 +132,18 @@ export default function ICEliminationsPage() {
           </Select>
         </div>
         {data && (
-          <div className="flex items-center gap-2 ml-4 text-xs text-muted-foreground">
-            <span>As of {data.metadata.periodLabel}</span>
-          </div>
+          <span className="text-xs text-muted-foreground ml-4">
+            As of {data.metadata.periodLabel}
+          </span>
         )}
       </div>
 
       {/* Summary badges */}
-      {data && totalPairs > 0 && (
+      {hasData && data.eliminationPairs.length > 0 && (
         <div className="flex items-center gap-2 flex-wrap">
           <Badge variant="outline" className="text-xs">
-            {totalPairs} pair{totalPairs !== 1 ? "s" : ""}
+            {data.eliminationPairs.length} elimination pair
+            {data.eliminationPairs.length !== 1 ? "s" : ""}
           </Badge>
           {balancedPairs > 0 && (
             <Badge
@@ -168,36 +154,19 @@ export default function ICEliminationsPage() {
               {balancedPairs} balanced
             </Badge>
           )}
-          {mismatchPairs > 0 && (
+          {totalVariances > 0 && (
             <Badge
               variant="outline"
               className="text-xs border-red-300 text-red-700 dark:border-red-700 dark:text-red-400"
             >
               <AlertTriangle className="h-3 w-3 mr-1" />
-              {mismatchPairs} mismatch{mismatchPairs !== 1 ? "es" : ""}
-            </Badge>
-          )}
-          {Math.abs(totalVariance) >= 0.01 && (
-            <Badge
-              variant="outline"
-              className="text-xs border-red-300 text-red-700 dark:border-red-700 dark:text-red-400"
-            >
-              Net variance: {formatStatementAmount(totalVariance, true)}
-            </Badge>
-          )}
-          {unmatchedCount > 0 && (
-            <Badge
-              variant="outline"
-              className="text-xs border-amber-300 text-amber-700 dark:border-amber-700 dark:text-amber-400"
-            >
-              <AlertTriangle className="h-3 w-3 mr-1" />
-              {unmatchedCount} unmatched
+              {totalVariances} variance{totalVariances !== 1 ? "s" : ""}
             </Badge>
           )}
         </div>
       )}
 
-      {/* Loading state */}
+      {/* Loading */}
       {loading && (
         <Card>
           <CardContent className="py-12 text-center">
@@ -209,7 +178,7 @@ export default function ICEliminationsPage() {
         </Card>
       )}
 
-      {/* Error state */}
+      {/* Error */}
       {error && (
         <Card>
           <CardContent className="py-12 text-center">
@@ -219,399 +188,286 @@ export default function ICEliminationsPage() {
         </Card>
       )}
 
-      {/* Empty state */}
-      {!loading && !error && data && totalPairs === 0 && unmatchedCount === 0 && (
+      {/* Empty */}
+      {!loading && !error && data && !hasData && (
         <Card>
           <CardContent className="py-12 text-center">
             <ArrowLeftRight className="h-8 w-8 mx-auto mb-2 text-muted-foreground" />
             <p className="text-sm text-muted-foreground">
-              No intercompany accounts found. Master accounts with names
-              starting with &quot;Due from&quot; or &quot;Due to&quot; will
-              appear here.
+              No intercompany accounts found. Entity accounts named &quot;Due
+              from ...&quot; or &quot;Due to ...&quot; mapped to intercompany
+              master accounts will appear here.
             </p>
           </CardContent>
         </Card>
       )}
 
-      {/* Elimination grid */}
-      {!loading && !error && data && (totalPairs > 0 || unmatchedCount > 0) && (
-        <EliminationGrid
-          pairs={data.pairs}
-          entities={data.entities}
-          unmatchedDueTo={data.unmatchedDueTo}
-          unmatchedDueFrom={data.unmatchedDueFrom}
-        />
+      {/* Per-entity sections */}
+      {!loading && !error && hasData && (
+        <div className="space-y-3">
+          {data.entityDetails.map((ed) => (
+            <EntitySection key={ed.entityId} detail={ed} />
+          ))}
+        </div>
+      )}
+
+      {/* Elimination verification */}
+      {!loading && !error && hasData && data.eliminationPairs.length > 0 && (
+        <EliminationCheck pairs={data.eliminationPairs} />
       )}
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Elimination Grid component
+// Per-entity section
 // ---------------------------------------------------------------------------
 
-function EliminationGrid({
-  pairs,
-  entities,
-  unmatchedDueTo,
-  unmatchedDueFrom,
-}: {
-  pairs: ICEliminationPair[];
-  entities: ICEntityColumn[];
-  unmatchedDueTo: Array<{
-    id: string;
-    accountNumber: string;
-    name: string;
-    totalByEntity: Record<string, number>;
-    total: number;
-  }>;
-  unmatchedDueFrom: Array<{
-    id: string;
-    accountNumber: string;
-    name: string;
-    totalByEntity: Record<string, number>;
-    total: number;
-  }>;
-}) {
-  // Only show entity columns that have at least one non-zero balance
-  const activeEntityIds = new Set<string>();
-  for (const pair of pairs) {
-    for (const [eid, val] of Object.entries(pair.dueFromByEntity)) {
-      if (Math.abs(val) >= 0.01) activeEntityIds.add(eid);
-    }
-    for (const [eid, val] of Object.entries(pair.dueToByEntity)) {
-      if (Math.abs(val) >= 0.01) activeEntityIds.add(eid);
-    }
-  }
-  for (const u of [...unmatchedDueTo, ...unmatchedDueFrom]) {
-    for (const [eid, val] of Object.entries(u.totalByEntity)) {
-      if (Math.abs(val) >= 0.01) activeEntityIds.add(eid);
-    }
-  }
-
-  const visibleEntities = entities.filter((e) => activeEntityIds.has(e.id));
-  const entityCount = visibleEntities.length;
-  const minWidth = 280 + entityCount * 120 + 120; // label + entities + total
-
-  // Grand totals
-  const grandDueFrom = pairs.reduce((s, p) => s + p.dueFromTotal, 0);
-  const grandDueTo = pairs.reduce((s, p) => s + p.dueToTotal, 0);
-  const grandVariance = pairs.reduce((s, p) => s + p.variance, 0);
+function EntitySection({ detail }: { detail: ICEntityDetail }) {
+  const [collapsed, setCollapsed] = useState(false);
+  const hasVariance = Math.abs(detail.totalNet) >= 0.01;
 
   return (
-    <TooltipProvider>
-      <Card>
-        <CardContent className="p-0">
-          <div className="overflow-x-auto">
-            <table
-              className="w-full border-collapse text-xs"
-              style={{ minWidth: `${minWidth}px` }}
-            >
-              <colgroup>
-                <col style={{ width: "280px", minWidth: "280px" }} />
-                {visibleEntities.map((e) => (
-                  <col
-                    key={e.id}
-                    style={{ width: "120px", minWidth: "120px" }}
-                  />
-                ))}
-                <col style={{ width: "120px", minWidth: "120px" }} />
-              </colgroup>
+    <Card>
+      <button
+        className="w-full flex items-center justify-between px-4 py-3 hover:bg-muted/30 transition-colors"
+        onClick={() => setCollapsed(!collapsed)}
+      >
+        <span className="flex items-center gap-2 font-semibold text-sm">
+          {collapsed ? (
+            <ChevronRight className="h-4 w-4" />
+          ) : (
+            <ChevronDown className="h-4 w-4" />
+          )}
+          {detail.entityName}
+          <Badge variant="outline" className="text-[10px] px-1.5 py-0 font-normal">
+            {detail.entityCode}
+          </Badge>
+        </span>
+        <span className="flex items-center gap-3 text-xs">
+          <span className="text-muted-foreground">
+            Due From:{" "}
+            <span className="text-foreground font-medium">
+              {formatStatementAmount(detail.totalDueFrom, true)}
+            </span>
+          </span>
+          <span className="text-muted-foreground">
+            Due To:{" "}
+            <span className="text-foreground font-medium">
+              {formatStatementAmount(detail.totalDueTo, true)}
+            </span>
+          </span>
+          <span
+            className={`font-semibold ${
+              hasVariance
+                ? "text-foreground"
+                : "text-muted-foreground"
+            }`}
+          >
+            Net: {formatStatementAmount(detail.totalNet, true)}
+          </span>
+        </span>
+      </button>
 
-              <thead>
-                <tr className="border-b bg-muted/50">
-                  <th className="text-left px-3 py-2 font-medium text-muted-foreground">
-                    Account
-                  </th>
-                  {visibleEntities.map((e) => (
-                    <th
-                      key={e.id}
-                      className="text-right px-3 py-2 font-medium text-muted-foreground"
-                    >
-                      <Tooltip>
-                        <TooltipTrigger>{e.code}</TooltipTrigger>
-                        <TooltipContent>{e.name}</TooltipContent>
-                      </Tooltip>
-                    </th>
-                  ))}
-                  <th className="text-right px-3 py-2 font-medium text-muted-foreground border-l-2 border-border">
-                    Total
-                  </th>
-                </tr>
-              </thead>
-
-              {pairs.map((pair, pairIdx) => (
-                <PairSection
-                  key={pair.dueFromAccount.id}
-                  pair={pair}
-                  visibleEntities={visibleEntities}
-                  isLast={
-                    pairIdx === pairs.length - 1 &&
-                    unmatchedDueTo.length === 0 &&
-                    unmatchedDueFrom.length === 0
-                  }
-                />
-              ))}
-
-              {/* Unmatched Due From (no matching Due To) */}
-              {unmatchedDueFrom.length > 0 && (
-                <tbody>
-                  <tr className="bg-amber-50/50 dark:bg-amber-950/20">
-                    <td
-                      colSpan={visibleEntities.length + 2}
-                      className="px-3 py-2 font-semibold text-amber-700 dark:text-amber-400 border-t-2 border-amber-200 dark:border-amber-800"
-                    >
-                      <AlertTriangle className="h-3.5 w-3.5 inline mr-1.5 -mt-0.5" />
-                      Unmatched Due From (no matching Due To)
-                    </td>
-                  </tr>
-                  {unmatchedDueFrom.map((u) => (
-                    <tr key={u.id} className="border-b hover:bg-muted/30">
-                      <td className="px-3 py-1.5 pl-6">
-                        {u.name}{" "}
-                        <span className="text-muted-foreground">
-                          ({u.accountNumber})
+      {!collapsed && (
+        <CardContent className="pt-0 pb-3 px-0">
+          <table className="w-full text-xs border-collapse">
+            <thead>
+              <tr className="border-t border-b bg-muted/30">
+                <th className="text-left px-4 py-2 font-medium text-muted-foreground w-[200px]">
+                  Counterparty
+                </th>
+                <th className="text-right px-4 py-2 font-medium text-muted-foreground w-[150px]">
+                  Due From (Receivable)
+                </th>
+                <th className="text-right px-4 py-2 font-medium text-muted-foreground w-[150px]">
+                  Due To (Payable)
+                </th>
+                <th className="text-right px-4 py-2 font-medium text-muted-foreground w-[150px]">
+                  Net Position
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {detail.counterparties.map((cp, i) => {
+                const net = cp.netPosition;
+                const isLast = i === detail.counterparties.length - 1;
+                return (
+                  <tr
+                    key={cp.counterpartyName}
+                    className={`${isLast ? "" : "border-b"} hover:bg-muted/20`}
+                  >
+                    <td className="px-4 py-1.5 font-medium">
+                      {cp.counterpartyName}
+                      {cp.counterpartyCode && (
+                        <span className="text-muted-foreground font-normal ml-1.5">
+                          ({cp.counterpartyCode})
                         </span>
-                      </td>
-                      {visibleEntities.map((e) => (
-                        <td key={e.id} className="text-right px-3 py-1.5">
-                          {formatStatementAmount(u.totalByEntity[e.id] ?? 0)}
-                        </td>
-                      ))}
-                      <td className="text-right px-3 py-1.5 font-medium border-l-2 border-border">
-                        {formatStatementAmount(u.total, true)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              )}
-
-              {/* Unmatched Due To (no matching Due From) */}
-              {unmatchedDueTo.length > 0 && (
-                <tbody>
-                  <tr className="bg-amber-50/50 dark:bg-amber-950/20">
-                    <td
-                      colSpan={visibleEntities.length + 2}
-                      className="px-3 py-2 font-semibold text-amber-700 dark:text-amber-400 border-t-2 border-amber-200 dark:border-amber-800"
-                    >
-                      <AlertTriangle className="h-3.5 w-3.5 inline mr-1.5 -mt-0.5" />
-                      Unmatched Due To (no matching Due From)
+                      )}
                     </td>
-                  </tr>
-                  {unmatchedDueTo.map((u) => (
-                    <tr key={u.id} className="border-b hover:bg-muted/30">
-                      <td className="px-3 py-1.5 pl-6">
-                        {u.name}{" "}
-                        <span className="text-muted-foreground">
-                          ({u.accountNumber})
-                        </span>
-                      </td>
-                      {visibleEntities.map((e) => (
-                        <td key={e.id} className="text-right px-3 py-1.5">
-                          {formatStatementAmount(u.totalByEntity[e.id] ?? 0)}
-                        </td>
-                      ))}
-                      <td className="text-right px-3 py-1.5 font-medium border-l-2 border-border">
-                        {formatStatementAmount(u.total, true)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              )}
-
-              {/* Grand total */}
-              {pairs.length > 1 && (
-                <tfoot>
-                  <tr className="border-t-2 border-border bg-muted/30 font-semibold">
-                    <td className="px-3 py-2">GRAND TOTAL</td>
-                    {visibleEntities.map((e) => {
-                      const entityDueFrom = pairs.reduce(
-                        (s, p) => s + (p.dueFromByEntity[e.id] ?? 0),
-                        0
-                      );
-                      const entityDueTo = pairs.reduce(
-                        (s, p) => s + (p.dueToByEntity[e.id] ?? 0),
-                        0
-                      );
-                      const entityNet = entityDueFrom - entityDueTo;
-                      return (
-                        <td key={e.id} className="text-right px-3 py-2">
-                          <span
-                            className={
-                              Math.abs(entityNet) >= 0.01
-                                ? "text-red-600 dark:text-red-400"
-                                : ""
-                            }
-                          >
-                            {formatStatementAmount(entityNet)}
-                          </span>
-                        </td>
-                      );
-                    })}
+                    <td className="text-right px-4 py-1.5 tabular-nums">
+                      {formatStatementAmount(cp.dueFromBalance)}
+                    </td>
+                    <td className="text-right px-4 py-1.5 tabular-nums">
+                      {formatStatementAmount(-cp.dueToBalance)}
+                    </td>
                     <td
-                      className={`text-right px-3 py-2 border-l-2 border-border ${
-                        Math.abs(grandVariance) >= 0.01
-                          ? "text-red-600 dark:text-red-400"
-                          : "text-green-600 dark:text-green-400"
+                      className={`text-right px-4 py-1.5 tabular-nums font-medium ${
+                        Math.abs(net) < 0.01
+                          ? "text-muted-foreground"
+                          : net > 0
+                            ? "text-blue-600 dark:text-blue-400"
+                            : "text-orange-600 dark:text-orange-400"
                       }`}
                     >
-                      {formatStatementAmount(grandVariance, true)}
+                      {formatStatementAmount(net)}
                     </td>
                   </tr>
-                </tfoot>
-              )}
-            </table>
-          </div>
+                );
+              })}
+            </tbody>
+            {detail.counterparties.length > 1 && (
+              <tfoot>
+                <tr className="border-t-2 border-border font-semibold">
+                  <td className="px-4 py-2">Total</td>
+                  <td className="text-right px-4 py-2 tabular-nums">
+                    {formatStatementAmount(detail.totalDueFrom, true)}
+                  </td>
+                  <td className="text-right px-4 py-2 tabular-nums">
+                    {formatStatementAmount(-detail.totalDueTo, true)}
+                  </td>
+                  <td
+                    className={`text-right px-4 py-2 tabular-nums ${
+                      Math.abs(detail.totalNet) < 0.01
+                        ? "text-muted-foreground"
+                        : ""
+                    }`}
+                  >
+                    {formatStatementAmount(detail.totalNet, true)}
+                  </td>
+                </tr>
+              </tfoot>
+            )}
+          </table>
         </CardContent>
-      </Card>
-    </TooltipProvider>
+      )}
+    </Card>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Pair Section (3 rows per counterparty: Due From, Due To, Variance)
+// Elimination cross-check
 // ---------------------------------------------------------------------------
 
-function PairSection({
-  pair,
-  visibleEntities,
-  isLast,
-}: {
-  pair: ICEliminationPair;
-  visibleEntities: ICEntityColumn[];
-  isLast: boolean;
-}) {
-  const isBalanced = Math.abs(pair.variance) < 0.01;
-  const hasDueTo = pair.dueToAccount !== null;
+function EliminationCheck({ pairs }: { pairs: ICEliminationPair[] }) {
+  const [collapsed, setCollapsed] = useState(false);
+  const variances = pairs.filter((p) => Math.abs(p.variance) >= 0.01);
+  const allBalanced = variances.length === 0;
 
   return (
-    <tbody>
-      {/* Counterparty header */}
-      <tr className="bg-muted/40 border-t-2 border-border">
-        <td
-          colSpan={visibleEntities.length + 2}
-          className="px-3 py-2 font-semibold"
-        >
-          <span className="flex items-center gap-2">
-            <ArrowLeftRight className="h-3.5 w-3.5 text-muted-foreground" />
-            {pair.counterpartyName}
-            {isBalanced ? (
-              <Badge
-                variant="outline"
-                className="text-[10px] px-1.5 py-0 border-green-300 text-green-700 dark:border-green-700 dark:text-green-400"
-              >
-                <CheckCircle2 className="h-3 w-3 mr-0.5" />
-                Balanced
-              </Badge>
-            ) : (
-              <Badge
-                variant="outline"
-                className="text-[10px] px-1.5 py-0 border-red-300 text-red-700 dark:border-red-700 dark:text-red-400"
-              >
-                <AlertTriangle className="h-3 w-3 mr-0.5" />
-                Variance: {formatStatementAmount(pair.variance, true)}
-              </Badge>
-            )}
-            {!hasDueTo && (
-              <Badge
-                variant="outline"
-                className="text-[10px] px-1.5 py-0 border-amber-300 text-amber-700 dark:border-amber-700 dark:text-amber-400"
-              >
-                No matching Due To
-              </Badge>
-            )}
-          </span>
-        </td>
-      </tr>
-
-      {/* Due From row */}
-      <tr className="border-b hover:bg-muted/20">
-        <td className="px-3 py-1.5 pl-6">
-          <span className="text-blue-700 dark:text-blue-400 font-medium">
-            Due From
-          </span>{" "}
-          <span className="text-muted-foreground">
-            ({pair.dueFromAccount.accountNumber})
-          </span>
-        </td>
-        {visibleEntities.map((e) => (
-          <td key={e.id} className="text-right px-3 py-1.5 tabular-nums">
-            {formatStatementAmount(pair.dueFromByEntity[e.id] ?? 0)}
-          </td>
-        ))}
-        <td className="text-right px-3 py-1.5 tabular-nums font-medium border-l-2 border-border">
-          {formatStatementAmount(pair.dueFromTotal, true)}
-        </td>
-      </tr>
-
-      {/* Due To row */}
-      <tr className="border-b hover:bg-muted/20">
-        <td className="px-3 py-1.5 pl-6">
-          <span className="text-orange-700 dark:text-orange-400 font-medium">
-            Due To
-          </span>{" "}
-          {hasDueTo ? (
-            <span className="text-muted-foreground">
-              ({pair.dueToAccount!.accountNumber})
-            </span>
-          ) : (
-            <span className="text-amber-500 italic">— none —</span>
-          )}
-        </td>
-        {visibleEntities.map((e) => (
-          <td key={e.id} className="text-right px-3 py-1.5 tabular-nums">
-            {hasDueTo
-              ? formatStatementAmount(
-                  -(pair.dueToByEntity[e.id] ?? 0)
-                )
-              : "\u2014"}
-          </td>
-        ))}
-        <td className="text-right px-3 py-1.5 tabular-nums font-medium border-l-2 border-border">
-          {hasDueTo
-            ? formatStatementAmount(-pair.dueToTotal, true)
-            : "\u2014"}
-        </td>
-      </tr>
-
-      {/* Net Variance row */}
-      <tr
-        className={`${isLast ? "" : "border-b"} ${
-          isBalanced
-            ? "bg-green-50/30 dark:bg-green-950/10"
-            : "bg-red-50/30 dark:bg-red-950/10"
-        }`}
+    <Card>
+      <button
+        className="w-full flex items-center justify-between px-4 py-3 hover:bg-muted/30 transition-colors"
+        onClick={() => setCollapsed(!collapsed)}
       >
-        <td className="px-3 py-1.5 pl-6 font-semibold text-xs">
-          Net Elimination
-        </td>
-        {visibleEntities.map((e) => {
-          const entityVariance =
-            (pair.dueFromByEntity[e.id] ?? 0) -
-            (pair.dueToByEntity[e.id] ?? 0);
-          return (
-            <td
-              key={e.id}
-              className={`text-right px-3 py-1.5 tabular-nums font-medium ${
-                Math.abs(entityVariance) >= 0.01
-                  ? "text-red-600 dark:text-red-400"
-                  : "text-green-600 dark:text-green-400"
-              }`}
+        <span className="flex items-center gap-2 font-semibold text-sm">
+          {collapsed ? (
+            <ChevronRight className="h-4 w-4" />
+          ) : (
+            <ChevronDown className="h-4 w-4" />
+          )}
+          Elimination Verification
+          {allBalanced ? (
+            <Badge
+              variant="outline"
+              className="text-[10px] px-1.5 py-0 border-green-300 text-green-700 dark:border-green-700 dark:text-green-400"
             >
-              {formatStatementAmount(entityVariance)}
-            </td>
-          );
-        })}
-        <td
-          className={`text-right px-3 py-1.5 tabular-nums font-bold border-l-2 border-border ${
-            isBalanced
-              ? "text-green-600 dark:text-green-400"
-              : "text-red-600 dark:text-red-400"
-          }`}
-        >
-          {formatStatementAmount(pair.variance, true)}
-        </td>
-      </tr>
-    </tbody>
+              <CheckCircle2 className="h-3 w-3 mr-0.5" />
+              All balanced
+            </Badge>
+          ) : (
+            <Badge
+              variant="outline"
+              className="text-[10px] px-1.5 py-0 border-red-300 text-red-700 dark:border-red-700 dark:text-red-400"
+            >
+              <AlertTriangle className="h-3 w-3 mr-0.5" />
+              {variances.length} variance{variances.length !== 1 ? "s" : ""}
+            </Badge>
+          )}
+        </span>
+      </button>
+
+      {!collapsed && (
+        <CardContent className="pt-0 pb-3 px-0">
+          <p className="px-4 pb-2 text-xs text-muted-foreground">
+            Verifies that Entity A&apos;s &quot;Due from B&quot; matches Entity
+            B&apos;s &quot;Due to A&quot;.
+          </p>
+          <table className="w-full text-xs border-collapse">
+            <thead>
+              <tr className="border-t border-b bg-muted/30">
+                <th className="text-left px-4 py-2 font-medium text-muted-foreground">
+                  Relationship
+                </th>
+                <th className="text-right px-4 py-2 font-medium text-muted-foreground w-[150px]">
+                  A&apos;s Due From B
+                </th>
+                <th className="text-right px-4 py-2 font-medium text-muted-foreground w-[150px]">
+                  B&apos;s Due To A
+                </th>
+                <th className="text-right px-4 py-2 font-medium text-muted-foreground w-[150px]">
+                  Variance
+                </th>
+                <th className="text-center px-4 py-2 font-medium text-muted-foreground w-[80px]">
+                  Status
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {pairs.map((pair, i) => {
+                const isBalanced = Math.abs(pair.variance) < 0.01;
+                return (
+                  <tr
+                    key={i}
+                    className={`border-b hover:bg-muted/20 ${
+                      !isBalanced ? "bg-red-50/30 dark:bg-red-950/10" : ""
+                    }`}
+                  >
+                    <td className="px-4 py-1.5 font-medium">
+                      {pair.entityACode}{" "}
+                      <span className="text-muted-foreground font-normal">
+                        → {pair.entityBCode}
+                      </span>
+                    </td>
+                    <td className="text-right px-4 py-1.5 tabular-nums">
+                      {formatStatementAmount(pair.aDueFromB)}
+                    </td>
+                    <td className="text-right px-4 py-1.5 tabular-nums">
+                      {formatStatementAmount(pair.bDueToA)}
+                    </td>
+                    <td
+                      className={`text-right px-4 py-1.5 tabular-nums font-medium ${
+                        isBalanced
+                          ? "text-green-600 dark:text-green-400"
+                          : "text-red-600 dark:text-red-400"
+                      }`}
+                    >
+                      {formatStatementAmount(pair.variance)}
+                    </td>
+                    <td className="text-center px-4 py-1.5">
+                      {isBalanced ? (
+                        <CheckCircle2 className="h-3.5 w-3.5 text-green-600 dark:text-green-400 mx-auto" />
+                      ) : (
+                        <AlertTriangle className="h-3.5 w-3.5 text-red-500 mx-auto" />
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </CardContent>
+      )}
+    </Card>
   );
 }

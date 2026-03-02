@@ -10,8 +10,6 @@ import { fetchAllMappings } from "@/lib/utils/paginated-fetch";
 interface RawGLBalance {
   account_id: string;
   entity_id: string;
-  period_year: number;
-  period_month: number;
   ending_balance: number;
 }
 
@@ -20,10 +18,14 @@ function parseGLBalance(row: any): RawGLBalance {
   return {
     account_id: row.account_id,
     entity_id: row.entity_id,
-    period_year: Number(row.period_year),
-    period_month: Number(row.period_month),
     ending_balance: Number(row.ending_balance),
   };
+}
+
+interface EntityAccountDetail {
+  id: string;
+  name: string;
+  account_number: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -49,7 +51,7 @@ async function fetchGLBalancesForAccounts(
   while (hasMore) {
     const { data, error } = await admin
       .from("gl_balances")
-      .select("account_id, entity_id, period_year, period_month, ending_balance")
+      .select("account_id, entity_id, ending_balance")
       .in("account_id", accountIds)
       .in("entity_id", entityIds)
       .eq("period_year", year)
@@ -75,14 +77,22 @@ async function fetchGLBalancesForAccounts(
 }
 
 // ---------------------------------------------------------------------------
-// Counterparty name extraction
+// Counterparty extraction from account name
 // ---------------------------------------------------------------------------
 
-function extractCounterparty(name: string): string {
+function extractCounterparty(name: string): string | null {
   const lower = name.toLowerCase();
-  if (lower.startsWith("due from ")) return name.slice(9);
-  if (lower.startsWith("due to ")) return name.slice(7);
-  return name;
+  if (lower.startsWith("due from ")) return name.slice(9).trim();
+  if (lower.startsWith("due to ")) return name.slice(7).trim();
+  return null;
+}
+
+/** Determine if the account is a "Due From" (receivable) or "Due To" (payable) */
+function classifyDirection(name: string): "due_from" | "due_to" | null {
+  const lower = name.toLowerCase();
+  if (lower.startsWith("due from")) return "due_from";
+  if (lower.startsWith("due to")) return "due_to";
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -148,77 +158,99 @@ export async function GET(request: Request) {
     .order("name");
 
   const entities = orgEntities ?? [];
+  const entityMap = new Map(entities.map((e) => [e.id, e]));
+
+  const emptyResponse = {
+    entityDetails: [],
+    eliminationPairs: [],
+    metadata: {
+      organizationName: org?.name,
+      generatedAt: new Date().toISOString(),
+      periodLabel: "",
+    },
+  };
 
   if (entities.length === 0) {
-    return NextResponse.json({
-      pairs: [],
-      entities: [],
-      unmatchedDueTo: [],
-      unmatchedDueFrom: [],
-      metadata: {
-        organizationName: org?.name,
-        generatedAt: new Date().toISOString(),
-        periodLabel: `${endMonth}/${endYear}`,
-      },
-    });
+    return NextResponse.json(emptyResponse);
   }
 
-  // Fetch Due From and Due To master accounts by name pattern
+  // Fetch intercompany master accounts by name pattern
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: dueAccounts } = await (admin as any)
+  const { data: icMasterAccounts } = await (admin as any)
     .from("master_accounts")
-    .select("id, account_number, name, classification, is_intercompany")
+    .select("id, account_number, name, classification")
     .eq("organization_id", organizationId)
     .eq("is_active", true)
     .or("name.ilike.Due from%,name.ilike.Due to%")
     .order("account_number");
 
-  if (!dueAccounts || dueAccounts.length === 0) {
-    return NextResponse.json({
-      pairs: [],
-      entities: entities.map((e) => ({ id: e.id, code: e.code, name: e.name })),
-      unmatchedDueTo: [],
-      unmatchedDueFrom: [],
-      metadata: {
-        organizationName: org?.name,
-        generatedAt: new Date().toISOString(),
-        periodLabel: `${endMonth}/${endYear}`,
-      },
-    });
+  if (!icMasterAccounts || icMasterAccounts.length === 0) {
+    return NextResponse.json(emptyResponse);
   }
 
-  // Separate into Due From and Due To groups
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const dueFromAccounts = dueAccounts.filter((a: any) =>
-    a.name.toLowerCase().startsWith("due from")
-  );
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const dueToAccounts = dueAccounts.filter((a: any) =>
-    a.name.toLowerCase().startsWith("due to")
-  );
+  const icMasterIds = icMasterAccounts.map((a: { id: string }) => a.id);
 
-  // Get mappings for all Due From / Due To master accounts
-  const allICMasterIds = dueAccounts.map((a: { id: string }) => a.id);
-  const mappings = await fetchAllMappings(admin, allICMasterIds);
+  // Get all mappings for IC master accounts
+  const mappings = await fetchAllMappings(admin, icMasterIds);
 
-  // Build mapping: master_account_id -> list of { entity_id, account_id }
-  const masterToMappings = new Map<
-    string,
-    Array<{ entity_id: string; account_id: string }>
-  >();
+  // Collect all mapped entity account IDs
   const allMappedAccountIds = new Set<string>();
   for (const m of mappings ?? []) {
-    const list = masterToMappings.get(m.master_account_id) ?? [];
-    list.push({ entity_id: m.entity_id, account_id: m.account_id });
-    masterToMappings.set(m.master_account_id, list);
     allMappedAccountIds.add(m.account_id);
   }
 
-  // Fetch GL balances for mapped entity accounts at the target period
+  if (allMappedAccountIds.size === 0) {
+    return NextResponse.json(emptyResponse);
+  }
+
+  // Fetch entity-level account details (name, account_number) for
+  // all mapped accounts. This tells us the counterparty for each account
+  // (e.g., entity account named "Due from Two Family" → counterparty "Two Family").
+  const accountIds = [...allMappedAccountIds];
+  const entityAccountDetails = new Map<string, EntityAccountDetail>();
+
+  // Paginate account detail fetch
+  const ACCT_PAGE_SIZE = 1000;
+  let acctOffset = 0;
+  let acctHasMore = true;
+  while (acctHasMore) {
+    const batch = accountIds.slice(acctOffset, acctOffset + ACCT_PAGE_SIZE);
+    if (batch.length === 0) break;
+
+    const { data: acctRows } = await admin
+      .from("accounts")
+      .select("id, name, account_number")
+      .in("id", batch);
+
+    for (const row of acctRows ?? []) {
+      entityAccountDetails.set(row.id, {
+        id: row.id,
+        name: row.name,
+        account_number: row.account_number,
+      });
+    }
+
+    if (batch.length < ACCT_PAGE_SIZE) {
+      acctHasMore = false;
+    } else {
+      acctOffset += ACCT_PAGE_SIZE;
+    }
+  }
+
+  // Build mapping index: (entity_id, master_account_id) → entity account_ids
+  const mappingIndex = new Map<string, string[]>();
+  for (const m of mappings ?? []) {
+    const key = `${m.entity_id}::${m.master_account_id}`;
+    const list = mappingIndex.get(key) ?? [];
+    list.push(m.account_id);
+    mappingIndex.set(key, list);
+  }
+
+  // Fetch GL balances
   const entityIds = entities.map((e) => e.id);
   const glBalances = await fetchGLBalancesForAccounts(
     admin,
-    [...allMappedAccountIds],
+    accountIds,
     entityIds,
     endYear,
     endMonth
@@ -231,127 +263,188 @@ export async function GET(request: Request) {
     glIndex.set(key, (glIndex.get(key) ?? 0) + gl.ending_balance);
   }
 
-  // Aggregate ending_balance per master account per entity
-  function aggregateForMaster(masterAccountId: string): Record<string, number> {
-    const result: Record<string, number> = {};
-    const acctMappings = masterToMappings.get(masterAccountId) ?? [];
-    for (const m of acctMappings) {
-      const key = `${m.account_id}::${m.entity_id}`;
-      const balance = glIndex.get(key) ?? 0;
-      if (balance !== 0) {
-        result[m.entity_id] = (result[m.entity_id] ?? 0) + balance;
+  // ---------------------------------------------------------------------------
+  // Build per-entity, per-counterparty breakdown
+  // ---------------------------------------------------------------------------
+
+  // For each entity, find all their IC account balances and group by
+  // counterparty (extracted from the entity-level account name or the
+  // master account name as fallback).
+
+  // Structure: entityId → counterpartyName → { dueFrom, dueTo }
+  const entityCounterpartyMap = new Map<
+    string,
+    Map<string, { dueFrom: number; dueTo: number }>
+  >();
+
+  for (const masterAcct of icMasterAccounts) {
+    const masterDirection = classifyDirection(masterAcct.name);
+    if (!masterDirection) continue;
+
+    for (const entity of entities) {
+      const key = `${entity.id}::${masterAcct.id}`;
+      const mappedAcctIds = mappingIndex.get(key) ?? [];
+
+      for (const acctId of mappedAcctIds) {
+        const glKey = `${acctId}::${entity.id}`;
+        const balance = glIndex.get(glKey) ?? 0;
+        if (Math.abs(balance) < 0.01) continue;
+
+        // Try to extract counterparty from entity-level account name first
+        const entityAcct = entityAccountDetails.get(acctId);
+        let counterparty: string | null = null;
+        let direction = masterDirection;
+
+        if (entityAcct) {
+          const acctCounterparty = extractCounterparty(entityAcct.name);
+          const acctDirection = classifyDirection(entityAcct.name);
+          if (acctCounterparty) {
+            counterparty = acctCounterparty;
+          }
+          if (acctDirection) {
+            direction = acctDirection;
+          }
+        }
+
+        // Fallback: use master account name for counterparty
+        if (!counterparty) {
+          counterparty = extractCounterparty(masterAcct.name) ?? masterAcct.name ?? "Unknown";
+        }
+
+        // Normalize counterparty name
+        counterparty = (counterparty ?? "Unknown").trim();
+
+        // Add to entity's counterparty map
+        if (!entityCounterpartyMap.has(entity.id)) {
+          entityCounterpartyMap.set(entity.id, new Map());
+        }
+        const cpMap = entityCounterpartyMap.get(entity.id)!;
+        if (!cpMap.has(counterparty)) {
+          cpMap.set(counterparty, { dueFrom: 0, dueTo: 0 });
+        }
+        const entry = cpMap.get(counterparty)!;
+
+        if (direction === "due_from") {
+          entry.dueFrom += balance;
+        } else {
+          entry.dueTo += balance;
+        }
       }
     }
-    return result;
   }
 
-  // Build pairs by matching Due From ↔ Due To on counterparty name
-  const matchedDueToIds = new Set<string>();
-  const matchedDueFromIds = new Set<string>();
-
-  interface AccountInfo {
-    id: string;
-    account_number: string;
-    name: string;
+  // Build entity name matching for counterparty → entity ID resolution.
+  // Try matching counterparty names to entity names or codes.
+  function resolveCounterpartyEntity(
+    counterpartyName: string
+  ): { id: string; code: string } | null {
+    const lower = counterpartyName.toLowerCase();
+    for (const entity of entities) {
+      if (
+        entity.name.toLowerCase() === lower ||
+        entity.code.toLowerCase() === lower ||
+        entity.name.toLowerCase().includes(lower) ||
+        lower.includes(entity.name.toLowerCase()) ||
+        lower.includes(entity.code.toLowerCase())
+      ) {
+        return { id: entity.id, code: entity.code };
+      }
+    }
+    return null;
   }
 
-  const pairs: Array<{
-    counterpartyName: string;
-    dueFromAccount: { id: string; accountNumber: string; name: string };
-    dueToAccount: { id: string; accountNumber: string; name: string } | null;
-    dueFromByEntity: Record<string, number>;
-    dueToByEntity: Record<string, number>;
-    dueFromTotal: number;
-    dueToTotal: number;
+  // Build entityDetails response
+  const entityDetails = entities
+    .map((entity) => {
+      const cpMap = entityCounterpartyMap.get(entity.id);
+      if (!cpMap || cpMap.size === 0) return null;
+
+      const counterparties = [...cpMap.entries()]
+        .map(([cpName, balances]) => {
+          const resolved = resolveCounterpartyEntity(cpName);
+          return {
+            counterpartyName: cpName,
+            counterpartyEntityId: resolved?.id,
+            counterpartyCode: resolved?.code,
+            dueFromBalance: balances.dueFrom,
+            dueToBalance: balances.dueTo,
+            netPosition: balances.dueFrom - balances.dueTo,
+          };
+        })
+        .sort((a, b) => a.counterpartyName.localeCompare(b.counterpartyName));
+
+      const totalDueFrom = counterparties.reduce(
+        (s, c) => s + c.dueFromBalance,
+        0
+      );
+      const totalDueTo = counterparties.reduce(
+        (s, c) => s + c.dueToBalance,
+        0
+      );
+
+      return {
+        entityId: entity.id,
+        entityCode: entity.code,
+        entityName: entity.name,
+        counterparties,
+        totalDueFrom,
+        totalDueTo,
+        totalNet: totalDueFrom - totalDueTo,
+      };
+    })
+    .filter(Boolean);
+
+  // ---------------------------------------------------------------------------
+  // Build elimination pairs for cross-checking
+  // ---------------------------------------------------------------------------
+  // Entity A's "Due from B" should match Entity B's "Due to A"
+
+  const eliminationPairs: Array<{
+    entityACode: string;
+    entityAName: string;
+    entityBCode: string;
+    entityBName: string;
+    aDueFromB: number;
+    bDueToA: number;
     variance: number;
   }> = [];
 
-  for (const df of dueFromAccounts as AccountInfo[]) {
-    const counterparty = extractCounterparty(df.name);
+  const seenPairs = new Set<string>();
 
-    // Find matching Due To by counterparty name
-    const matchingDt = (dueToAccounts as AccountInfo[]).find(
-      (dt) =>
-        extractCounterparty(dt.name).toLowerCase() ===
-        counterparty.toLowerCase()
-    );
+  for (const ed of entityDetails) {
+    if (!ed) continue;
+    for (const cp of ed.counterparties) {
+      if (!cp.counterpartyEntityId) continue;
+      if (cp.dueFromBalance === 0) continue;
 
-    if (matchingDt) {
-      matchedDueToIds.add(matchingDt.id);
-      matchedDueFromIds.add(df.id);
+      // Create a unique key for this pair (A→B direction)
+      const pairKey = `${ed.entityId}::${cp.counterpartyEntityId}`;
+      if (seenPairs.has(pairKey)) continue;
+      seenPairs.add(pairKey);
+
+      // Entity A has "Due from B" = cp.dueFromBalance
+      // Look for Entity B's "Due to A"
+      const entityBDetail = entityDetails.find(
+        (d) => d && d.entityId === cp.counterpartyEntityId
+      );
+      const entityBCp = entityBDetail?.counterparties.find(
+        (c) =>
+          c.counterpartyEntityId === ed.entityId
+      );
+
+      const bDueToA = entityBCp?.dueToBalance ?? 0;
+
+      eliminationPairs.push({
+        entityACode: ed.entityCode,
+        entityAName: ed.entityName,
+        entityBCode: cp.counterpartyCode ?? cp.counterpartyName,
+        entityBName: cp.counterpartyName,
+        aDueFromB: cp.dueFromBalance,
+        bDueToA,
+        variance: cp.dueFromBalance - bDueToA,
+      });
     }
-
-    // Aggregate balances
-    const dueFromByEntity = aggregateForMaster(df.id);
-
-    // Due To balances: sign-flip because liability ending_balance is stored
-    // as positive (credit balance), but for the elimination grid we want to
-    // show the payable amount as positive so it can be compared directly to
-    // the receivable (Due From) amount.
-    const rawDueTo = matchingDt ? aggregateForMaster(matchingDt.id) : {};
-    const dueToByEntity: Record<string, number> = {};
-    for (const [entityId, val] of Object.entries(rawDueTo)) {
-      dueToByEntity[entityId] = val;
-    }
-
-    const dueFromTotal = Object.values(dueFromByEntity).reduce(
-      (s, v) => s + v,
-      0
-    );
-    const dueToTotal = Object.values(dueToByEntity).reduce(
-      (s, v) => s + v,
-      0
-    );
-
-    pairs.push({
-      counterpartyName: counterparty,
-      dueFromAccount: {
-        id: df.id,
-        accountNumber: df.account_number,
-        name: df.name,
-      },
-      dueToAccount: matchingDt
-        ? {
-            id: matchingDt.id,
-            accountNumber: matchingDt.account_number,
-            name: matchingDt.name,
-          }
-        : null,
-      dueFromByEntity,
-      dueToByEntity,
-      dueFromTotal,
-      dueToTotal,
-      variance: dueFromTotal - dueToTotal,
-    });
   }
-
-  // Unmatched Due To accounts (no corresponding Due From)
-  const unmatchedDueTo = (dueToAccounts as AccountInfo[])
-    .filter((dt) => !matchedDueToIds.has(dt.id))
-    .map((dt) => {
-      const totalByEntity = aggregateForMaster(dt.id);
-      return {
-        id: dt.id,
-        accountNumber: dt.account_number,
-        name: dt.name,
-        totalByEntity,
-        total: Object.values(totalByEntity).reduce((s, v) => s + v, 0),
-      };
-    });
-
-  // Unmatched Due From accounts (no corresponding Due To)
-  const unmatchedDueFrom = (dueFromAccounts as AccountInfo[])
-    .filter((df) => !matchedDueFromIds.has(df.id))
-    .map((df) => {
-      const totalByEntity = aggregateForMaster(df.id);
-      return {
-        id: df.id,
-        accountNumber: df.account_number,
-        name: df.name,
-        totalByEntity,
-        total: Object.values(totalByEntity).reduce((s, v) => s + v, 0),
-      };
-    });
 
   // Build month label
   const monthNames = [
@@ -372,10 +465,8 @@ export async function GET(request: Request) {
   const periodLabel = `${monthNames[endMonth]} ${endYear}`;
 
   return NextResponse.json({
-    pairs,
-    entities: entities.map((e) => ({ id: e.id, code: e.code, name: e.name })),
-    unmatchedDueTo,
-    unmatchedDueFrom,
+    entityDetails,
+    eliminationPairs,
     metadata: {
       organizationName: org?.name,
       generatedAt: new Date().toISOString(),

@@ -154,7 +154,7 @@ export default function CustomerDetailPage() {
         .select("*")
         .eq("id", customerId)
         .single();
-      setCustomer(cust);
+      setCustomer(cust as CustomerData | null);
 
       // Load tiers
       const { data: tierData } = await supabase

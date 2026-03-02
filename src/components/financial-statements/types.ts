@@ -258,61 +258,49 @@ export interface DrillDownResponse {
 // Intercompany Eliminations types
 // ---------------------------------------------------------------------------
 
-/** A single intercompany elimination pair (Due From ↔ Due To) */
-export interface ICEliminationPair {
-  /** The counterparty entity name (e.g., "Two Family") */
+/** A counterparty balance within an entity's intercompany section */
+export interface ICCounterpartyBalance {
   counterpartyName: string;
-  /** Master account for the Due From side */
-  dueFromAccount: {
-    id: string;
-    accountNumber: string;
-    name: string;
-  };
-  /** Master account for the Due To side (null if no match found) */
-  dueToAccount: {
-    id: string;
-    accountNumber: string;
-    name: string;
-  } | null;
-  /** Per-entity Due From ending_balance. Key = entity_id */
-  dueFromByEntity: Record<string, number>;
-  /** Per-entity Due To ending_balance (sign-flipped to positive). Key = entity_id */
-  dueToByEntity: Record<string, number>;
-  /** Consolidated Due From total */
-  dueFromTotal: number;
-  /** Consolidated Due To total (sign-flipped to positive) */
-  dueToTotal: number;
-  /** dueFromTotal - dueToTotal. Zero = balanced. */
-  variance: number;
+  /** Matched entity ID for the counterparty (if resolvable) */
+  counterpartyEntityId?: string;
+  counterpartyCode?: string;
+  /** Receivable: what this entity is owed BY the counterparty */
+  dueFromBalance: number;
+  /** Payable: what this entity owes TO the counterparty (positive = liability) */
+  dueToBalance: number;
+  /** dueFromBalance - dueToBalance */
+  netPosition: number;
 }
 
-/** Entity column metadata for the IC elimination grid */
-export interface ICEntityColumn {
-  id: string;
-  code: string;
-  name: string;
+/** Per-entity intercompany summary */
+export interface ICEntityDetail {
+  entityId: string;
+  entityCode: string;
+  entityName: string;
+  counterparties: ICCounterpartyBalance[];
+  totalDueFrom: number;
+  totalDueTo: number;
+  totalNet: number;
+}
+
+/** A cross-entity elimination pair for variance checking */
+export interface ICEliminationPair {
+  entityACode: string;
+  entityAName: string;
+  entityBCode: string;
+  entityBName: string;
+  /** Entity A's "Due from B" (receivable) */
+  aDueFromB: number;
+  /** Entity B's "Due to A" (payable) — should match aDueFromB */
+  bDueToA: number;
+  /** aDueFromB - bDueToA. Zero = balanced. */
+  variance: number;
 }
 
 /** Response from the intercompany-eliminations API */
 export interface ICEliminationsResponse {
-  pairs: ICEliminationPair[];
-  entities: ICEntityColumn[];
-  /** Unmatched Due To accounts (no corresponding Due From) */
-  unmatchedDueTo: Array<{
-    id: string;
-    accountNumber: string;
-    name: string;
-    totalByEntity: Record<string, number>;
-    total: number;
-  }>;
-  /** Unmatched Due From accounts (no corresponding Due To) */
-  unmatchedDueFrom: Array<{
-    id: string;
-    accountNumber: string;
-    name: string;
-    totalByEntity: Record<string, number>;
-    total: number;
-  }>;
+  entityDetails: ICEntityDetail[];
+  eliminationPairs: ICEliminationPair[];
   metadata: {
     organizationName?: string;
     generatedAt: string;
