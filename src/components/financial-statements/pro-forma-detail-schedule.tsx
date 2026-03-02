@@ -106,7 +106,7 @@ export function ProFormaDetailSchedule({
   // --- Print-only detailed listing (table format with all fields) ---
   if (printMode) {
     return (
-      <div className="stmt-page-break stmt-pf-print-schedule">
+      <div className="stmt-pf-print-schedule">
         <Card>
           <CardContent className="pt-2 pb-6 px-4">
             <StatementHeader

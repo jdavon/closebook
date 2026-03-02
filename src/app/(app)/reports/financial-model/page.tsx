@@ -631,7 +631,7 @@ export default function FinancialModelPage() {
             )}
             {/* Print-only pro forma detail listing (separate page) */}
             {includeProForma && proFormaDetails.length > 0 && (
-              <div className="hidden print:block">
+              <div className="hidden print:block stmt-page-break">
                 <ProFormaDetailSchedule
                   {...sharedScheduleProps}
                   adjustments={proFormaDetails}
@@ -663,7 +663,7 @@ export default function FinancialModelPage() {
               </div>
             )}
             {includeProForma && proFormaDetails.length > 0 && (
-              <div className="hidden print:block">
+              <div className="hidden print:block stmt-page-break">
                 <ProFormaDetailSchedule
                   {...sharedScheduleProps}
                   adjustments={proFormaDetails}
@@ -695,7 +695,7 @@ export default function FinancialModelPage() {
               </div>
             )}
             {includeProForma && proFormaDetails.length > 0 && (
-              <div className="hidden print:block">
+              <div className="hidden print:block stmt-page-break">
                 <ProFormaDetailSchedule
                   {...sharedScheduleProps}
                   adjustments={proFormaDetails}
@@ -727,7 +727,7 @@ export default function FinancialModelPage() {
               </div>
             )}
             {includeProForma && proFormaDetails.length > 0 && (
-              <div className="hidden print:block">
+              <div className="hidden print:block stmt-page-break">
                 <ProFormaDetailSchedule
                   {...sharedScheduleProps}
                   adjustments={proFormaDetails}
