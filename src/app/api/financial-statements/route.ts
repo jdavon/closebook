@@ -514,6 +514,7 @@ interface AccountInfo {
   accountNumber: string | null;
   classification: string;
   accountType: string;
+  isIntercompany?: boolean;
 }
 
 interface BucketedAmounts {
@@ -1275,15 +1276,17 @@ function buildCashFlowStatement(
       const change =
         (bucketed?.endingBalance[bucket.key] ?? 0) -
         (bucketed?.beginningBalance[bucket.key] ?? 0);
-      amounts[bucket.key] = change;
-      operatingTotal[bucket.key] += change;
+      // Negate: liabilities are credit-normal (stored negative in GL).
+      // An increase in liability (more negative) should be a cash inflow (positive).
+      amounts[bucket.key] = -change;
+      operatingTotal[bucket.key] += -change;
 
       if (hasPY && pyAmounts) {
         const pyChange =
           (pyBucketed?.endingBalance[bucket.key] ?? 0) -
           (pyBucketed?.beginningBalance[bucket.key] ?? 0);
-        pyAmounts[bucket.key] = pyChange;
-        pyOperatingTotal[bucket.key] += pyChange;
+        pyAmounts[bucket.key] = -pyChange;
+        pyOperatingTotal[bucket.key] += -pyChange;
       }
     }
     operatingLines.push({
@@ -1416,15 +1419,17 @@ function buildCashFlowStatement(
       const change =
         (bucketed?.endingBalance[bucket.key] ?? 0) -
         (bucketed?.beginningBalance[bucket.key] ?? 0);
-      amounts[bucket.key] = change;
-      financingTotal[bucket.key] += change;
+      // Negate: both long-term liabilities and equity are credit-normal
+      // (stored negative in GL). An increase should be a cash inflow (positive).
+      amounts[bucket.key] = -change;
+      financingTotal[bucket.key] += -change;
 
       if (hasPY && pyAmounts) {
         const pyChange =
           (pyBucketed?.endingBalance[bucket.key] ?? 0) -
           (pyBucketed?.beginningBalance[bucket.key] ?? 0);
-        pyAmounts[bucket.key] = pyChange;
-        pyFinancingTotal[bucket.key] += pyChange;
+        pyAmounts[bucket.key] = -pyChange;
+        pyFinancingTotal[bucket.key] += -pyChange;
       }
     }
     financingLines.push({
@@ -1762,12 +1767,13 @@ async function buildConsolidatedStatements(params: ConsolidatedStatementsParams)
 
   // Consolidate: For each master account, sum the GL balances of all mapped entity accounts
   const consolidatedAccounts: AccountInfo[] = masterAccounts.map(
-    (ma: { id: string; name: string; account_number: string | null; classification: string; account_type: string }) => ({
+    (ma: { id: string; name: string; account_number: string | null; classification: string; account_type: string; is_intercompany?: boolean }) => ({
       id: ma.id,
       name: ma.name,
       accountNumber: ma.account_number,
       classification: ma.classification,
       accountType: ma.account_type,
+      isIntercompany: ma.is_intercompany ?? false,
     })
   );
 
@@ -1873,6 +1879,34 @@ async function buildConsolidatedStatements(params: ConsolidatedStatementsParams)
   if (includeYoY) {
     const pyBuckets = createPriorYearBuckets(buckets);
     pyAggregated = aggregateByBucket(consolidatedAccounts, consolidatedBalances, pyBuckets, fiscalYearStartMonth);
+  }
+
+  // Intercompany elimination: zero out P&L accounts tagged as intercompany.
+  // On consolidated views (org/RE scope), intercompany revenue and expense
+  // between entities should cancel out.  We zero both the current-year and
+  // prior-year aggregated amounts so they don't appear on the statements.
+  const intercompanyIds = new Set(
+    consolidatedAccounts
+      .filter((a) => a.isIntercompany && (a.classification === "Revenue" || a.classification === "Expense"))
+      .map((a) => a.id)
+  );
+  if (intercompanyIds.size > 0) {
+    for (const accountId of intercompanyIds) {
+      const bucketed = aggregated.get(accountId);
+      if (bucketed) {
+        for (const key of Object.keys(bucketed.netChange)) bucketed.netChange[key] = 0;
+        for (const key of Object.keys(bucketed.endingBalance)) bucketed.endingBalance[key] = 0;
+        for (const key of Object.keys(bucketed.beginningBalance)) bucketed.beginningBalance[key] = 0;
+      }
+      if (pyAggregated) {
+        const pyBucketed = pyAggregated.get(accountId);
+        if (pyBucketed) {
+          for (const key of Object.keys(pyBucketed.netChange)) pyBucketed.netChange[key] = 0;
+          for (const key of Object.keys(pyBucketed.endingBalance)) pyBucketed.endingBalance[key] = 0;
+          for (const key of Object.keys(pyBucketed.beginningBalance)) pyBucketed.beginningBalance[key] = 0;
+        }
+      }
+    }
   }
 
   // Depreciation

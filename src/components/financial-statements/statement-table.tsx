@@ -484,6 +484,57 @@ export function StatementTable({
               </tbody>
             );
           })}
+          {/* Cash flow reconciliation check: Beginning + Net Change should = Ending */}
+          {data.id === "cash_flow" && (() => {
+            const summarySection = data.sections.find((s) => s.id === "cf-summary");
+            const netChangeLine = summarySection?.lines.find((l) => l.id === "cf-net-change");
+            const beginningLine = summarySection?.lines.find((l) => l.id === "cf-cash-beginning");
+            const endingLine = summarySection?.subtotalLine;
+            if (!netChangeLine || !beginningLine || !endingLine) return null;
+
+            const hasImbalance = periods.some((p) => {
+              const expected = (beginningLine.amounts[p.key] ?? 0) + (netChangeLine.amounts[p.key] ?? 0);
+              const actual = endingLine.amounts[p.key] ?? 0;
+              return Math.abs(expected - actual) >= 0.5;
+            });
+
+            return (
+              <tbody>
+                <tr className="stmt-separator"><td colSpan={totalCols}></td></tr>
+                <tr className="text-xs">
+                  <td className={`italic ${hasImbalance ? "text-red-600" : "text-muted-foreground"}`}>
+                    Check: Beginning + Net Change − Ending
+                  </td>
+                  {periods.map((period) => {
+                    const expected = (beginningLine.amounts[period.key] ?? 0) + (netChangeLine.amounts[period.key] ?? 0);
+                    const actual = endingLine.amounts[period.key] ?? 0;
+                    const diff = expected - actual;
+                    const isOff = Math.abs(diff) >= 0.5;
+                    const checkBorderCls = period.isTotal ? ` ${totalBorderClass}` : "";
+                    return (
+                      <>
+                        <td key={period.key} className={`${isOff ? "text-red-600 font-medium" : "text-muted-foreground"}${checkBorderCls}`}>
+                          {isOff ? formatStatementAmount(diff, true) : "$\u2014"}
+                        </td>
+                        {showBudget && (
+                          <>
+                            <td key={`${period.key}-budget`}></td>
+                            <td key={`${period.key}-var`}></td>
+                          </>
+                        )}
+                      </>
+                    );
+                  })}
+                  {showYoY && (
+                    <>
+                      <td></td>
+                      <td></td>
+                    </>
+                  )}
+                </tr>
+              </tbody>
+            );
+          })()}
           {/* Balance check row for balance sheets */}
           {data.id === "balance_sheet" && (() => {
             const totalAssets = data.sections.find((s) => s.id === "total_assets")?.subtotalLine;

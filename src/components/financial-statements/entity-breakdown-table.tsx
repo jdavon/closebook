@@ -315,6 +315,54 @@ export function EntityBreakdownTable({
               </tbody>
             );
           })}
+          {/* Cash flow reconciliation check */}
+          {data.id === "cash_flow" && (() => {
+            const summarySection = data.sections.find((s) => s.id === "cf-summary");
+            const netChangeLine = summarySection?.lines.find((l) => l.id === "cf-net-change");
+            const beginningLine = summarySection?.lines.find((l) => l.id === "cf-cash-beginning");
+            const endingLine = summarySection?.subtotalLine;
+            if (!netChangeLine || !beginningLine || !endingLine) return null;
+
+            const allKeys = [...entityColumns.map((c) => c.key), ...(consolidatedColumn ? ["consolidated"] : [])];
+            const hasImbalance = allKeys.some((k) => {
+              const expected = (beginningLine.amounts[k] ?? 0) + (netChangeLine.amounts[k] ?? 0);
+              const actual = endingLine.amounts[k] ?? 0;
+              return Math.abs(expected - actual) >= 0.5;
+            });
+
+            return (
+              <tbody>
+                <tr className="stmt-separator"><td colSpan={totalCols}></td></tr>
+                <tr className="text-xs">
+                  <td className={`italic ${hasImbalance ? "text-red-600" : "text-muted-foreground"}`}>
+                    Check: Begin + Net Change − End
+                  </td>
+                  {entityColumns.map((col) => {
+                    const expected = (beginningLine.amounts[col.key] ?? 0) + (netChangeLine.amounts[col.key] ?? 0);
+                    const actual = endingLine.amounts[col.key] ?? 0;
+                    const diff = expected - actual;
+                    const isOff = Math.abs(diff) >= 0.5;
+                    return (
+                      <td key={col.key} className={isOff ? "text-red-600 font-medium" : "text-muted-foreground"}>
+                        {isOff ? formatStatementAmount(diff, true) : "$\u2014"}
+                      </td>
+                    );
+                  })}
+                  {consolidatedColumn && (() => {
+                    const expected = (beginningLine.amounts["consolidated"] ?? 0) + (netChangeLine.amounts["consolidated"] ?? 0);
+                    const actual = endingLine.amounts["consolidated"] ?? 0;
+                    const diff = expected - actual;
+                    const isOff = Math.abs(diff) >= 0.5;
+                    return (
+                      <td className={`border-l border-border/50 ${isOff ? "text-red-600 font-medium" : "text-muted-foreground"}`}>
+                        {isOff ? formatStatementAmount(diff, true) : "$\u2014"}
+                      </td>
+                    );
+                  })()}
+                </tr>
+              </tbody>
+            );
+          })()}
           {/* Balance check row for balance sheets */}
           {data.id === "balance_sheet" && (() => {
             const totalAssets = data.sections.find((s) => s.id === "total_assets")?.subtotalLine;

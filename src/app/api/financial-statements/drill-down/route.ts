@@ -260,14 +260,14 @@ export async function GET(request: Request) {
   const masterAccounts = await fetchAllPaginated<any>((offset, limit) =>
     admin
       .from("master_accounts")
-      .select("id, name, account_number, classification")
+      .select("id, name, account_number, classification, account_type")
       .in("id", allMasterAccountIds)
       .range(offset, offset + limit - 1)
   );
 
-  const maMap = new Map<string, { name: string; account_number: string | null; classification: string }>();
+  const maMap = new Map<string, { name: string; account_number: string | null; classification: string; accountType: string }>();
   for (const ma of masterAccounts) {
-    maMap.set(ma.id, { name: ma.name, account_number: ma.account_number, classification: ma.classification });
+    maMap.set(ma.id, { name: ma.name, account_number: ma.account_number, classification: ma.classification, accountType: ma.account_type });
   }
 
   // Get mappings: master_account -> entity accounts (filtered to scope entities)
@@ -477,13 +477,16 @@ export async function GET(request: Request) {
 
       let signedChange: number;
       if (isWC) {
-        // Assets: increase = cash outflow (negative), Liabilities: increase = cash inflow (positive)
-        const isAsset = maInfo && OPERATING_CURRENT_ASSET_TYPES.includes(maInfo.classification);
-        signedChange = isAsset ? -change : change;
+        // All balance sheet changes use -change to convert GL sign to cash impact.
+        // Assets (debit-normal, positive in GL): increase → -change = negative (outflow) ✓
+        // Liabilities (credit-normal, negative in GL): increase → -change = positive (inflow) ✓
+        signedChange = -change;
       } else if (isInv) {
         signedChange = -change; // Asset increase = cash outflow
       } else {
-        signedChange = change; // Financing: liability/equity increase = cash inflow
+        // Financing: liabilities & equity are credit-normal (negative in GL).
+        // Negate so increase shows as cash inflow.
+        signedChange = -change;
       }
 
       glAgg.set(aggKey, signedChange);
