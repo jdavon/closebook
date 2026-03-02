@@ -625,7 +625,6 @@ export default function FinancialModelPage() {
                 <ProFormaDetailSchedule
                   {...sharedScheduleProps}
                   adjustments={proFormaDetails}
-                  periods={data.periods}
                 />
               </div>
             )}
@@ -635,7 +634,6 @@ export default function FinancialModelPage() {
                 <ProFormaDetailSchedule
                   {...sharedScheduleProps}
                   adjustments={proFormaDetails}
-                  periods={data.periods}
                   printMode
                 />
               </div>
@@ -658,7 +656,6 @@ export default function FinancialModelPage() {
                 <ProFormaDetailSchedule
                   {...sharedScheduleProps}
                   adjustments={proFormaDetails}
-                  periods={data.periods}
                 />
               </div>
             )}
@@ -667,7 +664,6 @@ export default function FinancialModelPage() {
                 <ProFormaDetailSchedule
                   {...sharedScheduleProps}
                   adjustments={proFormaDetails}
-                  periods={data.periods}
                   printMode
                 />
               </div>
@@ -690,7 +686,6 @@ export default function FinancialModelPage() {
                 <ProFormaDetailSchedule
                   {...sharedScheduleProps}
                   adjustments={proFormaDetails}
-                  periods={data.periods}
                 />
               </div>
             )}
@@ -699,7 +694,6 @@ export default function FinancialModelPage() {
                 <ProFormaDetailSchedule
                   {...sharedScheduleProps}
                   adjustments={proFormaDetails}
-                  periods={data.periods}
                   printMode
                 />
               </div>
@@ -722,7 +716,6 @@ export default function FinancialModelPage() {
                 <ProFormaDetailSchedule
                   {...sharedScheduleProps}
                   adjustments={proFormaDetails}
-                  periods={data.periods}
                 />
               </div>
             )}
@@ -731,7 +724,6 @@ export default function FinancialModelPage() {
                 <ProFormaDetailSchedule
                   {...sharedScheduleProps}
                   adjustments={proFormaDetails}
-                  periods={data.periods}
                   printMode
                 />
               </div>

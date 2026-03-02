@@ -3,7 +3,7 @@
 import { Card, CardContent } from "@/components/ui/card";
 import { StatementHeader } from "./statement-header";
 import { formatStatementAmount } from "./format-utils";
-import type { ProFormaAdjustmentDetail, Period, Granularity } from "./types";
+import type { ProFormaAdjustmentDetail, Granularity } from "./types";
 
 const MONTHS = [
   "January", "February", "March", "April", "May", "June",
@@ -13,7 +13,6 @@ const MONTHS = [
 interface ProFormaDetailScheduleProps {
   companyName: string;
   adjustments: ProFormaAdjustmentDetail[];
-  periods: Period[];
   startYear: number;
   startMonth: number;
   endYear: number;
@@ -23,15 +22,21 @@ interface ProFormaDetailScheduleProps {
   printMode?: boolean;
 }
 
+/** A monthly column in the detail schedule */
+interface MonthColumn {
+  key: string;   // "2026-01"
+  label: string; // "Jan-26"
+  year: number;
+  month: number;
+}
+
 /** A single adjustment line within an account group */
 interface AdjustmentLine {
   key: string;
   entityCode: string;
   description: string;
   notes: string | null;
-  periodYear: number;
-  periodMonth: number;
-  amountsByBucket: Record<string, number>;
+  amountsByMonth: Record<string, number>;
   total: number;
 }
 
@@ -39,14 +44,44 @@ interface AdjustmentLine {
 interface AccountGroup {
   accountName: string;
   lines: AdjustmentLine[];
-  subtotalByBucket: Record<string, number>;
+  subtotalByMonth: Record<string, number>;
   subtotal: number;
+}
+
+/**
+ * Generate monthly columns for the date range.
+ * Always monthly regardless of the main statement granularity.
+ */
+function buildMonthColumns(
+  startYear: number,
+  startMonth: number,
+  endYear: number,
+  endMonth: number,
+): MonthColumn[] {
+  const cols: MonthColumn[] = [];
+  let y = startYear;
+  let m = startMonth;
+  while (y < endYear || (y === endYear && m <= endMonth)) {
+    const key = `${y}-${String(m).padStart(2, "0")}`;
+    const label = `${MONTHS[m - 1]?.slice(0, 3)}-${String(y).slice(2)}`;
+    cols.push({ key, label, year: y, month: m });
+    m++;
+    if (m > 12) {
+      m = 1;
+      y++;
+    }
+  }
+  return cols;
+}
+
+/** Month key from a year/month pair */
+function monthKey(year: number, month: number): string {
+  return `${year}-${String(month).padStart(2, "0")}`;
 }
 
 export function ProFormaDetailSchedule({
   companyName,
   adjustments,
-  periods,
   startYear,
   startMonth,
   endYear,
@@ -56,9 +91,9 @@ export function ProFormaDetailSchedule({
 }: ProFormaDetailScheduleProps) {
   if (adjustments.length === 0) return null;
 
-  // Filter out the "TOTAL" period for the columnar view — we'll compute our own total
-  const displayPeriods = periods.filter((p) => !p.isTotal);
-  const hasTotal = periods.some((p) => p.isTotal);
+  // Always build monthly columns from the date range
+  const monthColumns = buildMonthColumns(startYear, startMonth, endYear, endMonth);
+  const showTotal = monthColumns.length > 1;
 
   // ---- Group adjustments by account name ----
   const accountGroupMap = new Map<string, AccountGroup>();
@@ -70,7 +105,7 @@ export function ProFormaDetailSchedule({
       group = {
         accountName: adj.accountName,
         lines: [],
-        subtotalByBucket: {},
+        subtotalByMonth: {},
         subtotal: 0,
       };
       accountGroupMap.set(adj.accountName, group);
@@ -86,20 +121,18 @@ export function ProFormaDetailSchedule({
         entityCode: adj.entityCode,
         description: adj.description,
         notes: adj.notes,
-        periodYear: adj.periodYear,
-        periodMonth: adj.periodMonth,
-        amountsByBucket: {},
+        amountsByMonth: {},
         total: 0,
       };
       group.lines.push(line);
     }
 
-    line.amountsByBucket[adj.bucketKey] =
-      (line.amountsByBucket[adj.bucketKey] ?? 0) + adj.amount;
+    // Map using periodYear/periodMonth — NOT bucketKey
+    const mk = monthKey(adj.periodYear, adj.periodMonth);
+    line.amountsByMonth[mk] = (line.amountsByMonth[mk] ?? 0) + adj.amount;
     line.total += adj.amount;
 
-    group.subtotalByBucket[adj.bucketKey] =
-      (group.subtotalByBucket[adj.bucketKey] ?? 0) + adj.amount;
+    group.subtotalByMonth[mk] = (group.subtotalByMonth[mk] ?? 0) + adj.amount;
     group.subtotal += adj.amount;
   }
 
@@ -112,20 +145,20 @@ export function ProFormaDetailSchedule({
     );
   }
 
-  // Compute grand totals
-  const periodTotals: Record<string, number> = {};
+  // Compute grand totals per month
+  const monthTotals: Record<string, number> = {};
   let grandTotal = 0;
-  for (const period of displayPeriods) {
+  for (const col of monthColumns) {
     let sum = 0;
     for (const group of accountGroups) {
-      sum += group.subtotalByBucket[period.key] ?? 0;
+      sum += group.subtotalByMonth[col.key] ?? 0;
     }
-    periodTotals[period.key] = sum;
+    monthTotals[col.key] = sum;
     grandTotal += sum;
   }
 
   const totalBorderClass = "border-l-2 border-border";
-  const totalColSpan = 1 + displayPeriods.length + (hasTotal ? 1 : 0);
+  const totalColSpan = 1 + monthColumns.length + (showTotal ? 1 : 0);
 
   // --- Print-only detailed listing (grouped by account) ---
   if (printMode) {
@@ -161,27 +194,18 @@ export function ProFormaDetailSchedule({
                         <span className="font-bold">{group.accountName}</span>
                       </td>
                     </tr>
-                    {/* Individual adjustments */}
+                    {/* Individual adjustments — one row per month per line */}
                     {group.lines.map((line) => {
-                      // For lines spanning multiple months, render one row per bucket
-                      const bucketKeys = Object.keys(line.amountsByBucket).sort();
-                      return bucketKeys.map((bk) => {
-                        const amt = line.amountsByBucket[bk];
+                      const monthKeys = Object.keys(line.amountsByMonth).sort();
+                      return monthKeys.map((mk) => {
+                        const amt = line.amountsByMonth[mk];
                         const isStriped = stripeIdx % 2 === 0;
                         stripeIdx++;
-                        // Find month/year from bucket key for display
-                        const adj = adjustments.find(
-                          (a) =>
-                            a.bucketKey === bk &&
-                            a.entityCode === line.entityCode &&
-                            a.description === line.description
-                        );
-                        const periodLabel = adj
-                          ? `${MONTHS[adj.periodMonth - 1]?.slice(0, 3)} ${adj.periodYear}`
-                          : bk;
+                        const [y, m] = mk.split("-").map(Number);
+                        const periodLabel = `${MONTHS[m - 1]?.slice(0, 3)} ${y}`;
                         return (
                           <tr
-                            key={`${line.key}-${bk}`}
+                            key={`${line.key}-${mk}`}
                             className={isStriped ? "stmt-row-striped" : ""}
                           >
                             <td>{line.entityCode}</td>
@@ -229,7 +253,7 @@ export function ProFormaDetailSchedule({
     );
   }
 
-  // --- On-screen columnar view (grouped by account, matches period columns) ---
+  // --- On-screen columnar view (always monthly columns + total) ---
   return (
     <div className="stmt-page-break">
       <Card>
@@ -248,12 +272,12 @@ export function ProFormaDetailSchedule({
               <thead>
                 <tr>
                   <th className="min-w-[280px]">Adjustment</th>
-                  {displayPeriods.map((p) => (
-                    <th key={p.key} className="min-w-[110px]">
-                      {p.label}
+                  {monthColumns.map((col) => (
+                    <th key={col.key} className="min-w-[100px]">
+                      {col.label}
                     </th>
                   ))}
-                  {hasTotal && (
+                  {showTotal && (
                     <th className={`min-w-[110px] ${totalBorderClass} font-bold`}>
                       Total
                     </th>
@@ -289,17 +313,17 @@ export function ProFormaDetailSchedule({
                             </span>
                             {line.description}
                           </td>
-                          {displayPeriods.map((p) => {
-                            const amt = line.amountsByBucket[p.key] ?? 0;
+                          {monthColumns.map((col) => {
+                            const amt = line.amountsByMonth[col.key] ?? 0;
                             return (
-                              <td key={p.key}>
+                              <td key={col.key}>
                                 {amt !== 0
                                   ? formatStatementAmount(amt, false)
                                   : "—"}
                               </td>
                             );
                           })}
-                          {hasTotal && (
+                          {showTotal && (
                             <td className={totalBorderClass}>
                               {line.total !== 0
                                 ? formatStatementAmount(line.total, false)
@@ -313,15 +337,15 @@ export function ProFormaDetailSchedule({
                     {/* Account subtotal */}
                     <tr className="stmt-subtotal">
                       <td>Total {group.accountName}</td>
-                      {displayPeriods.map((p) => (
-                        <td key={p.key}>
+                      {monthColumns.map((col) => (
+                        <td key={col.key}>
                           {formatStatementAmount(
-                            group.subtotalByBucket[p.key] ?? 0,
+                            group.subtotalByMonth[col.key] ?? 0,
                             true
                           )}
                         </td>
                       ))}
-                      {hasTotal && (
+                      {showTotal && (
                         <td className={totalBorderClass}>
                           {formatStatementAmount(group.subtotal, true)}
                         </td>
@@ -340,12 +364,12 @@ export function ProFormaDetailSchedule({
               <tbody>
                 <tr className="stmt-grand-total">
                   <td>Total Pro Forma Impact</td>
-                  {displayPeriods.map((p) => (
-                    <td key={p.key}>
-                      {formatStatementAmount(periodTotals[p.key] ?? 0, true)}
+                  {monthColumns.map((col) => (
+                    <td key={col.key}>
+                      {formatStatementAmount(monthTotals[col.key] ?? 0, true)}
                     </td>
                   ))}
-                  {hasTotal && (
+                  {showTotal && (
                     <td className={totalBorderClass}>
                       {formatStatementAmount(grandTotal, true)}
                     </td>

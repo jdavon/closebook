@@ -464,9 +464,11 @@ function buildProFormaDetails(
     accountMap.set(ma.id, { name: ma.name, account_number: ma.account_number });
   }
 
-  // Build month-to-bucket lookup
+  // Build month-to-bucket lookup (skip TOTAL bucket — it would overwrite
+  // monthly keys since it contains the same months as the real buckets)
   const monthToBucket = new Map<string, string>();
   for (const bucket of buckets) {
+    if (bucket.key === "TOTAL") continue;
     for (const m of bucket.months) {
       monthToBucket.set(`${m.year}-${m.month}`, bucket.key);
     }
