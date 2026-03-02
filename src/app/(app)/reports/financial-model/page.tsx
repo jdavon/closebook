@@ -20,6 +20,7 @@ import { useDrillDown } from "@/components/financial-statements/use-drill-down";
 import { DrillDownDialog } from "@/components/financial-statements/drill-down-dialog";
 import { filterForEbitdaOnly } from "@/components/financial-statements/format-utils";
 import { ProFormaTab } from "@/components/financial-statements/pro-forma-tab";
+import { ProFormaDetailSchedule } from "@/components/financial-statements/pro-forma-detail-schedule";
 import { AllocationTab } from "@/components/financial-statements/allocation-tab";
 import { EntityBreakdownTab } from "@/components/financial-statements/entity-breakdown-tab";
 import { ReportingEntityBreakdownTab } from "@/components/financial-statements/reporting-entity-breakdown-tab";
@@ -76,6 +77,7 @@ export default function FinancialModelPage() {
   const [includeBudget, setIncludeBudget] = useState(false);
   const [includeYoY, setIncludeYoY] = useState(false);
   const [includeProForma, setIncludeProForma] = useState(false);
+  const [showProFormaDetails, setShowProFormaDetails] = useState(false);
   const [includeAllocations, setIncludeAllocations] = useState(false);
   const [includeTotal, setIncludeTotal] = useState(false);
   const [ebitdaOnly, setEbitdaOnly] = useState(false);
@@ -277,6 +279,17 @@ export default function FinancialModelPage() {
     varianceDisplay,
   };
 
+  const sharedScheduleProps = {
+    companyName,
+    startYear,
+    startMonth,
+    endYear,
+    endMonth,
+    granularity,
+  };
+
+  const proFormaDetails = data?.proFormaAdjustments ?? [];
+
   return (
     <div className={`space-y-4${ebitdaOnly ? " stmt-print-compact" : ""}`}>
       {/* Page header */}
@@ -367,6 +380,7 @@ export default function FinancialModelPage() {
         includeBudget={includeBudget}
         includeYoY={includeYoY}
         includeProForma={includeProForma}
+        showProFormaDetails={showProFormaDetails}
         includeAllocations={includeAllocations}
         ebitdaOnly={ebitdaOnly}
         includeTotal={includeTotal}
@@ -377,7 +391,11 @@ export default function FinancialModelPage() {
         onGranularityChange={setGranularity}
         onIncludeBudgetChange={setIncludeBudget}
         onIncludeYoYChange={setIncludeYoY}
-        onIncludeProFormaChange={setIncludeProForma}
+        onIncludeProFormaChange={(val) => {
+          setIncludeProForma(val);
+          if (!val) setShowProFormaDetails(false);
+        }}
+        onShowProFormaDetailsChange={setShowProFormaDetails}
         onIncludeAllocationsChange={setIncludeAllocations}
         onEbitdaOnlyChange={setEbitdaOnly}
         onIncludeTotalChange={setIncludeTotal}
@@ -601,10 +619,31 @@ export default function FinancialModelPage() {
                 />
               </>
             )}
+            {/* On-screen pro forma detail (hidden in print — print version below) */}
+            {showProFormaDetails && proFormaDetails.length > 0 && (
+              <div className="stmt-no-print">
+                <ProFormaDetailSchedule
+                  {...sharedScheduleProps}
+                  adjustments={proFormaDetails}
+                  periods={data.periods}
+                />
+              </div>
+            )}
+            {/* Print-only pro forma detail listing (separate page) */}
+            {includeProForma && proFormaDetails.length > 0 && (
+              <div className="hidden print:block">
+                <ProFormaDetailSchedule
+                  {...sharedScheduleProps}
+                  adjustments={proFormaDetails}
+                  periods={data.periods}
+                  printMode
+                />
+              </div>
+            )}
           </TabsContent>
 
           {/* Income Statement */}
-          <TabsContent value="income-statement">
+          <TabsContent value="income-statement" className="space-y-4">
             <StatementCard
               {...sharedCardProps}
               statementTitle={`${titlePrefix}Income Statement`}
@@ -614,10 +653,29 @@ export default function FinancialModelPage() {
               showYoY={includeYoY}
               onCellClick={handleCellClick("income_statement")}
             />
+            {showProFormaDetails && proFormaDetails.length > 0 && (
+              <div className="stmt-no-print">
+                <ProFormaDetailSchedule
+                  {...sharedScheduleProps}
+                  adjustments={proFormaDetails}
+                  periods={data.periods}
+                />
+              </div>
+            )}
+            {includeProForma && proFormaDetails.length > 0 && (
+              <div className="hidden print:block">
+                <ProFormaDetailSchedule
+                  {...sharedScheduleProps}
+                  adjustments={proFormaDetails}
+                  periods={data.periods}
+                  printMode
+                />
+              </div>
+            )}
           </TabsContent>
 
           {/* Balance Sheet */}
-          <TabsContent value="balance-sheet">
+          <TabsContent value="balance-sheet" className="space-y-4">
             <StatementCard
               {...sharedCardProps}
               statementTitle={`${titlePrefix}Balance Sheet`}
@@ -627,10 +685,29 @@ export default function FinancialModelPage() {
               showYoY={includeYoY}
               onCellClick={handleCellClick("balance_sheet")}
             />
+            {showProFormaDetails && proFormaDetails.length > 0 && (
+              <div className="stmt-no-print">
+                <ProFormaDetailSchedule
+                  {...sharedScheduleProps}
+                  adjustments={proFormaDetails}
+                  periods={data.periods}
+                />
+              </div>
+            )}
+            {includeProForma && proFormaDetails.length > 0 && (
+              <div className="hidden print:block">
+                <ProFormaDetailSchedule
+                  {...sharedScheduleProps}
+                  adjustments={proFormaDetails}
+                  periods={data.periods}
+                  printMode
+                />
+              </div>
+            )}
           </TabsContent>
 
           {/* Cash Flow */}
-          <TabsContent value="cash-flow">
+          <TabsContent value="cash-flow" className="space-y-4">
             <StatementCard
               {...sharedCardProps}
               statementTitle={`${titlePrefix}Statement of Cash Flows`}
@@ -640,6 +717,25 @@ export default function FinancialModelPage() {
               showYoY={includeYoY}
               onCellClick={handleCellClick("cash_flow")}
             />
+            {showProFormaDetails && proFormaDetails.length > 0 && (
+              <div className="stmt-no-print">
+                <ProFormaDetailSchedule
+                  {...sharedScheduleProps}
+                  adjustments={proFormaDetails}
+                  periods={data.periods}
+                />
+              </div>
+            )}
+            {includeProForma && proFormaDetails.length > 0 && (
+              <div className="hidden print:block">
+                <ProFormaDetailSchedule
+                  {...sharedScheduleProps}
+                  adjustments={proFormaDetails}
+                  periods={data.periods}
+                  printMode
+                />
+              </div>
+            )}
           </TabsContent>
 
           {/* Pro Forma Adjustments */}

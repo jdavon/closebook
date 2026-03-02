@@ -39,6 +39,7 @@ interface ConfigToolbarProps {
   includeBudget: boolean;
   includeYoY: boolean;
   includeProForma?: boolean;
+  showProFormaDetails?: boolean;
   includeAllocations?: boolean;
   ebitdaOnly?: boolean;
   includeTotal?: boolean;
@@ -50,6 +51,7 @@ interface ConfigToolbarProps {
   onIncludeBudgetChange: (val: boolean) => void;
   onIncludeYoYChange: (val: boolean) => void;
   onIncludeProFormaChange?: (val: boolean) => void;
+  onShowProFormaDetailsChange?: (val: boolean) => void;
   onIncludeAllocationsChange?: (val: boolean) => void;
   onEbitdaOnlyChange?: (val: boolean) => void;
   onIncludeTotalChange?: (val: boolean) => void;
@@ -78,6 +80,7 @@ export function ConfigToolbar({
   includeBudget,
   includeYoY,
   includeProForma,
+  showProFormaDetails,
   includeAllocations,
   ebitdaOnly,
   includeTotal,
@@ -89,6 +92,7 @@ export function ConfigToolbar({
   onIncludeBudgetChange,
   onIncludeYoYChange,
   onIncludeProFormaChange,
+  onShowProFormaDetailsChange,
   onIncludeAllocationsChange,
   onEbitdaOnlyChange,
   onIncludeTotalChange,
@@ -218,15 +222,28 @@ export function ConfigToolbar({
           Budget
         </label>
         {onIncludeProFormaChange && (
-          <label className="flex items-center gap-1.5 text-xs cursor-pointer">
-            <Checkbox
-              checked={includeProForma ?? false}
-              onCheckedChange={(checked) =>
-                onIncludeProFormaChange(checked === true)
-              }
-            />
-            Pro Forma
-          </label>
+          <div className="flex items-center gap-3">
+            <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+              <Checkbox
+                checked={includeProForma ?? false}
+                onCheckedChange={(checked) =>
+                  onIncludeProFormaChange(checked === true)
+                }
+              />
+              Pro Forma
+            </label>
+            {includeProForma && onShowProFormaDetailsChange && (
+              <label className="flex items-center gap-1.5 text-xs cursor-pointer text-muted-foreground">
+                <Checkbox
+                  checked={showProFormaDetails ?? false}
+                  onCheckedChange={(checked) =>
+                    onShowProFormaDetailsChange(checked === true)
+                  }
+                />
+                Show Details
+              </label>
+            )}
+          </div>
         )}
         {onIncludeAllocationsChange && (
           <label className="flex items-center gap-1.5 text-xs cursor-pointer">

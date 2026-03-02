@@ -458,4 +458,32 @@
   .stmt-print-compact .stmt-page-break {
     page-break-before: auto;
   }
+
+  /* ---- Pro Forma Detail Schedule (print) ---- */
+
+  /* Show print-only schedule (overrides Tailwind "hidden") */
+  .hidden.print\:block {
+    display: block !important;
+  }
+
+  /* Print detail table styling */
+  .stmt-pf-detail-table {
+    font-size: 8.5pt;
+    width: 100% !important;
+  }
+  .stmt-pf-detail-table th {
+    font-weight: 600;
+    padding: 0.25rem 0.5rem;
+    border-bottom: 1.5px solid #1a1a1a;
+    white-space: nowrap;
+  }
+  .stmt-pf-detail-table td {
+    padding: 0.2rem 0.5rem;
+    vertical-align: top;
+    color: #1a1a1a !important;
+  }
+  .stmt-pf-detail-table tfoot td {
+    border-top: 1.5px solid #1a1a1a;
+    padding-top: 0.3rem;
+  }
 }

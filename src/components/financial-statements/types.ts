@@ -67,6 +67,24 @@ export interface StatementData {
   sections: StatementSection[];
 }
 
+/** A pro forma adjustment detail for display in the detail schedule */
+export interface ProFormaAdjustmentDetail {
+  id: string;
+  entityCode: string;
+  entityName: string;
+  accountNumber: string;
+  accountName: string;
+  offsetAccountNumber: string | null;
+  offsetAccountName: string | null;
+  description: string;
+  notes: string | null;
+  periodYear: number;
+  periodMonth: number;
+  amount: number;
+  /** Period bucket key this adjustment falls into (matches Period.key) */
+  bucketKey: string;
+}
+
 /** Full response from the financial statements API */
 /** Diagnostic info returned by the API to verify data completeness. */
 export interface DataDiagnostics {
@@ -105,6 +123,8 @@ export interface FinancialStatementsResponse {
   };
   /** Optional data-completeness diagnostics (always present when data is returned) */
   diagnostics?: DataDiagnostics;
+  /** Pro forma adjustment details when includeProForma is true (for detail schedule display) */
+  proFormaAdjustments?: ProFormaAdjustmentDetail[];
 }
 
 /** Config object passed to the API and shared between components */

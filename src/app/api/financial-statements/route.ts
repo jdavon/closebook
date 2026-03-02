@@ -334,6 +334,7 @@ function aggregateBudgetByBucket(
 // ---------------------------------------------------------------------------
 
 interface RawProFormaAdjustment {
+  id: string;
   entity_id: string;
   master_account_id: string;
   offset_master_account_id: string | null;
@@ -341,6 +342,7 @@ interface RawProFormaAdjustment {
   period_month: number;
   amount: number;
   description: string;
+  notes: string | null;
 }
 
 /**
@@ -442,6 +444,60 @@ function applyProFormaPostAggregation(
       applyAmount(adj.offset_master_account_id, Number(adj.period_year), Number(adj.period_month), -amount);
     }
   }
+}
+
+/**
+ * Build pro forma adjustment detail records for frontend display.
+ * Resolves account names from the master accounts list and maps each
+ * adjustment to its period bucket key.
+ */
+function buildProFormaDetails(
+  proFormaRows: RawProFormaAdjustment[],
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  masterAccounts: any[],
+  entityLookup: Map<string, { name: string; code: string }>,
+  buckets: PeriodBucket[],
+) {
+  // Build account lookup
+  const accountMap = new Map<string, { name: string; account_number: string | null }>();
+  for (const ma of masterAccounts) {
+    accountMap.set(ma.id, { name: ma.name, account_number: ma.account_number });
+  }
+
+  // Build month-to-bucket lookup
+  const monthToBucket = new Map<string, string>();
+  for (const bucket of buckets) {
+    for (const m of bucket.months) {
+      monthToBucket.set(`${m.year}-${m.month}`, bucket.key);
+    }
+  }
+
+  return proFormaRows
+    .map((pf) => {
+      const bucketKey = monthToBucket.get(`${pf.period_year}-${pf.period_month}`);
+      if (!bucketKey) return null; // outside view range
+
+      const account = accountMap.get(pf.master_account_id);
+      const offsetAccount = pf.offset_master_account_id ? accountMap.get(pf.offset_master_account_id) : null;
+      const entityInfo = entityLookup.get(pf.entity_id);
+
+      return {
+        id: pf.id,
+        entityCode: entityInfo?.code ?? "",
+        entityName: entityInfo?.name ?? "",
+        accountNumber: account?.account_number ?? "",
+        accountName: account?.name ?? "",
+        offsetAccountNumber: offsetAccount?.account_number ?? null,
+        offsetAccountName: offsetAccount?.name ?? null,
+        description: pf.description,
+        notes: pf.notes ?? null,
+        periodYear: Number(pf.period_year),
+        periodMonth: Number(pf.period_month),
+        amount: Number(pf.amount),
+        bucketKey,
+      };
+    })
+    .filter((d): d is NonNullable<typeof d> => d !== null);
 }
 
 // ---------------------------------------------------------------------------
@@ -1910,7 +1966,7 @@ async function buildConsolidatedStatements(params: ConsolidatedStatementsParams)
     proFormaRows = await fetchAllPaginated<RawProFormaAdjustment>((offset, limit) =>
       (admin as any)
         .from("pro_forma_adjustments")
-        .select("entity_id, master_account_id, offset_master_account_id, period_year, period_month, amount, description")
+        .select("id, entity_id, master_account_id, offset_master_account_id, period_year, period_month, amount, description, notes")
         .eq("organization_id", organizationId)
         .eq("is_excluded", false)
         .in("entity_id", entityIds)
@@ -1918,6 +1974,19 @@ async function buildConsolidatedStatements(params: ConsolidatedStatementsParams)
     );
     // NOTE: intentionally NOT injected into consolidatedBalances here.
     // Applied post-aggregation below via applyProFormaPostAggregation().
+  }
+
+  // Resolve entity names for pro forma details (only when adjustments exist)
+  const entityLookup = new Map<string, { name: string; code: string }>();
+  if (proFormaRows.length > 0) {
+    const pfEntityIds = [...new Set(proFormaRows.map((pf) => pf.entity_id))];
+    const { data: pfEntities } = await admin
+      .from("entities")
+      .select("id, name, code")
+      .in("id", pfEntityIds);
+    for (const e of pfEntities ?? []) {
+      entityLookup.set(e.id, { name: e.name, code: e.code });
+    }
   }
 
   // Allocation Adjustments (org/RE scope — net zero at consolidated level, paginated)
@@ -2264,6 +2333,11 @@ async function buildConsolidatedStatements(params: ConsolidatedStatementsParams)
     }
   }
 
+  // Build pro forma detail records for frontend display
+  const proFormaAdjustments = proFormaRows.length > 0
+    ? buildProFormaDetails(proFormaRows, masterAccounts, entityLookup, buckets)
+    : undefined;
+
   return {
     periods,
     incomeStatement,
@@ -2279,6 +2353,7 @@ async function buildConsolidatedStatements(params: ConsolidatedStatementsParams)
       paginationErrors: glHadErrors,
       bsCheck,
     },
+    ...(proFormaAdjustments ? { proFormaAdjustments } : {}),
   };
 }
 
@@ -2524,7 +2599,7 @@ export async function GET(request: Request) {
       entityProFormaRows = await fetchAllPaginated<RawProFormaAdjustment>((offset, limit) =>
         (admin as any)
           .from("pro_forma_adjustments")
-          .select("master_account_id, offset_master_account_id, period_year, period_month, amount, description")
+          .select("id, entity_id, master_account_id, offset_master_account_id, period_year, period_month, amount, description, notes")
           .eq("entity_id", entityId!)
           .eq("is_excluded", false)
           .range(offset, offset + limit - 1)
@@ -2800,6 +2875,13 @@ export async function GET(request: Request) {
       }
     }
 
+    // Build pro forma detail records for entity scope
+    const entityPfLookup = new Map<string, { name: string; code: string }>();
+    entityPfLookup.set(entityId!, { name: entity.name, code: entity.code });
+    const entityProFormaDetails = entityProFormaRows.length > 0
+      ? buildProFormaDetails(entityProFormaRows, masterAccounts, entityPfLookup, buckets)
+      : undefined;
+
     const response = {
       periods,
       incomeStatement,
@@ -2814,6 +2896,7 @@ export async function GET(request: Request) {
         startPeriod: `${startYear}-${startMonth}`,
         endPeriod: `${endYear}-${endMonth}`,
       },
+      ...(entityProFormaDetails ? { proFormaAdjustments: entityProFormaDetails } : {}),
       diagnostics: {
         masterAccountsLoaded: masterAccounts.length,
         mappingsLoaded: mappings.length,
