@@ -85,11 +85,17 @@ interface GLQueryFilters {
   months: number[];
 }
 
+interface GLFetchResult {
+  rows: RawGLBalance[];
+  hadErrors: boolean;
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function fetchAllGLBalances(admin: any, filters: GLQueryFilters): Promise<RawGLBalance[]> {
+async function fetchAllGLBalances(admin: any, filters: GLQueryFilters): Promise<GLFetchResult> {
   const allRows: RawGLBalance[] = [];
   let offset = 0;
   let hasMore = true;
+  let hadErrors = false;
   const MAX_RETRIES = 2;
 
   while (hasMore) {
@@ -130,6 +136,7 @@ async function fetchAllGLBalances(admin: any, filters: GLQueryFilters): Promise<
 
     if (lastError) {
       console.error("GL balance pagination failed after retries:", lastError);
+      hadErrors = true;
       break;
     }
 
@@ -143,7 +150,7 @@ async function fetchAllGLBalances(admin: any, filters: GLQueryFilters): Promise<
     }
   }
 
-  return allRows;
+  return { rows: allRows, hadErrors };
 }
 
 // ---------------------------------------------------------------------------
@@ -1754,24 +1761,28 @@ async function buildConsolidatedStatements(params: ConsolidatedStatementsParams)
 
   // Get GL balances by entity_id
   let glBalances: RawGLBalance[] = [];
+  let glRawCount = 0;
+  let glHadErrors = false;
 
   if (mappedAccountIdSet.size > 0 && entityIds.length > 0) {
     const uniqueYears = [...new Set(allMonths.map((m) => m.year))];
     const uniqueMonthNums = [...new Set(allMonths.map((m) => m.month))];
 
-    const allBalances = await fetchAllGLBalances(admin, {
+    const glResult = await fetchAllGLBalances(admin, {
       filterColumn: "entity_id",
       filterValues: entityIds,
       years: uniqueYears,
       months: uniqueMonthNums,
     });
+    glRawCount = glResult.rows.length;
+    glHadErrors = glResult.hadErrors;
 
     const monthSet = new Set(
       allMonths.map(
         (m) => `${m.year}-${String(m.month).padStart(2, "0")}`
       )
     );
-    glBalances = allBalances.filter(
+    glBalances = glResult.rows.filter(
       (b) =>
         mappedAccountIdSet.has(b.account_id) &&
         monthSet.has(
@@ -2112,11 +2123,36 @@ async function buildConsolidatedStatements(params: ConsolidatedStatementsParams)
     ...(b.key === "TOTAL" ? { isTotal: true } : {}),
   }));
 
+  // Compute server-side balance sheet check: Assets - (Liabilities + Equity)
+  // Should be zero for every period if data is complete.
+  const bsCheck: Record<string, number> = {};
+  const totalAssetsLine = balanceSheet.sections
+    .find((s) => s.id === "total_assets")?.subtotalLine;
+  const totalLELine = balanceSheet.sections
+    .find((s) => s.id === "total_liabilities_equity")?.subtotalLine;
+  if (totalAssetsLine && totalLELine) {
+    for (const b of buckets) {
+      const assets = totalAssetsLine.amounts[b.key] ?? 0;
+      const le = totalLELine.amounts[b.key] ?? 0;
+      bsCheck[b.key] = Math.round((assets - le) * 100) / 100;
+    }
+  }
+
   return {
     periods,
     incomeStatement,
     balanceSheet,
     cashFlowStatement,
+    diagnostics: {
+      masterAccountsLoaded: masterAccounts.length,
+      mappingsLoaded: (mappings ?? []).length,
+      glRowsFetchedRaw: glRawCount,
+      glRowsAfterFilter: glBalances.length,
+      uniqueAccountsWithData: new Set(glBalances.map((b) => b.account_id)).size,
+      entityCount: entityIds.length,
+      paginationErrors: glHadErrors,
+      bsCheck,
+    },
   };
 }
 
@@ -2266,17 +2302,21 @@ export async function GET(request: Request) {
     // Get GL balances for mapped accounts (paginated to avoid row limit truncation)
     const mappedAccountIds = mappings.map((m) => m.account_id);
     let glBalances: RawGLBalance[] = [];
+    let entityGlRawCount = 0;
+    let entityGlHadErrors = false;
 
     if (mappedAccountIds.length > 0) {
       const uniqueYears = [...new Set(allMonths.map((m) => m.year))];
       const uniqueMonthNums = [...new Set(allMonths.map((m) => m.month))];
 
-      const allBalances = await fetchAllGLBalances(admin, {
+      const glResult = await fetchAllGLBalances(admin, {
         filterColumn: "account_id",
         filterValues: mappedAccountIds,
         years: uniqueYears,
         months: uniqueMonthNums,
       });
+      entityGlRawCount = glResult.rows.length;
+      entityGlHadErrors = glResult.hadErrors;
 
       const monthSet = new Set(
         allMonths.map(
@@ -2284,7 +2324,7 @@ export async function GET(request: Request) {
         )
       );
       // Filter to exact (year,month) pairs needed
-      glBalances = allBalances.filter((b) =>
+      glBalances = glResult.rows.filter((b) =>
         monthSet.has(
           `${b.period_year}-${String(b.period_month).padStart(2, "0")}`
         )
@@ -2615,6 +2655,20 @@ export async function GET(request: Request) {
       ...(b.key === "TOTAL" ? { isTotal: true } : {}),
     }));
 
+    // Compute server-side balance sheet check for entity scope
+    const entityBsCheck: Record<string, number> = {};
+    const entityTotalAssetsLine = balanceSheet.sections
+      .find((s) => s.id === "total_assets")?.subtotalLine;
+    const entityTotalLELine = balanceSheet.sections
+      .find((s) => s.id === "total_liabilities_equity")?.subtotalLine;
+    if (entityTotalAssetsLine && entityTotalLELine) {
+      for (const b of buckets) {
+        const assets = entityTotalAssetsLine.amounts[b.key] ?? 0;
+        const le = entityTotalLELine.amounts[b.key] ?? 0;
+        entityBsCheck[b.key] = Math.round((assets - le) * 100) / 100;
+      }
+    }
+
     const response = {
       periods,
       incomeStatement,
@@ -2628,6 +2682,16 @@ export async function GET(request: Request) {
         granularity,
         startPeriod: `${startYear}-${startMonth}`,
         endPeriod: `${endYear}-${endMonth}`,
+      },
+      diagnostics: {
+        masterAccountsLoaded: masterAccounts.length,
+        mappingsLoaded: mappings.length,
+        glRowsFetchedRaw: entityGlRawCount,
+        glRowsAfterFilter: glBalances.length,
+        uniqueAccountsWithData: new Set(glBalances.map((b) => b.account_id)).size,
+        entityCount: 1,
+        paginationErrors: entityGlHadErrors,
+        bsCheck: entityBsCheck,
       },
     };
 

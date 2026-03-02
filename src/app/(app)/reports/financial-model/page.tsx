@@ -23,6 +23,13 @@ import { ProFormaTab } from "@/components/financial-statements/pro-forma-tab";
 import { AllocationTab } from "@/components/financial-statements/allocation-tab";
 import { EntityBreakdownTab } from "@/components/financial-statements/entity-breakdown-tab";
 import { ReportingEntityBreakdownTab } from "@/components/financial-statements/reporting-entity-breakdown-tab";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  ChevronDown,
+  ChevronRight,
+  Database,
+} from "lucide-react";
 import type {
   Granularity,
   Scope,
@@ -74,6 +81,7 @@ export default function FinancialModelPage() {
   const [ebitdaOnly, setEbitdaOnly] = useState(false);
   const [varianceDisplay, setVarianceDisplay] = useState<VarianceDisplayMode>("dollars");
   const [activeTab, setActiveTab] = useState<StatementTab>("all");
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
 
   // Prevents the financial-data hook from firing until loadOrg has finished
   // setting organizationId, includeProForma, and includeAllocations.  Without
@@ -412,6 +420,132 @@ export default function FinancialModelPage() {
             <p className="text-sm text-destructive">{error}</p>
           </CardContent>
         </Card>
+      )}
+
+      {/* Data Diagnostics Panel */}
+      {!loading && !error && data && data.diagnostics && canFetch && (
+        <div className="stmt-no-print">
+          <button
+            onClick={() => setShowDiagnostics(!showDiagnostics)}
+            className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors"
+          >
+            {showDiagnostics ? (
+              <ChevronDown className="h-3 w-3" />
+            ) : (
+              <ChevronRight className="h-3 w-3" />
+            )}
+            <Database className="h-3 w-3" />
+            <span>Data Diagnostics</span>
+            {data.diagnostics.paginationErrors ? (
+              <span className="inline-flex items-center gap-1 rounded-full bg-destructive/10 text-destructive px-2 py-0.5 text-[10px] font-medium">
+                <AlertTriangle className="h-3 w-3" />
+                Pagination Errors
+              </span>
+            ) : Object.values(data.diagnostics.bsCheck).some(
+                (v) => Math.abs(v) > 0.01
+              ) ? (
+              <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400 px-2 py-0.5 text-[10px] font-medium">
+                <AlertTriangle className="h-3 w-3" />
+                BS Imbalance Detected
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400 px-2 py-0.5 text-[10px] font-medium">
+                <CheckCircle2 className="h-3 w-3" />
+                All Checks Passed
+              </span>
+            )}
+          </button>
+
+          {showDiagnostics && (
+            <div className="mt-2 rounded-lg border bg-muted/30 p-4 text-xs space-y-3">
+              {/* Row count summary */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
+                {scope !== "entity" && (
+                  <div>
+                    <p className="text-muted-foreground">Master Accounts</p>
+                    <p className="text-sm font-medium">
+                      {data.diagnostics.masterAccountsLoaded.toLocaleString()}
+                    </p>
+                  </div>
+                )}
+                {scope !== "entity" && (
+                  <div>
+                    <p className="text-muted-foreground">Account Mappings</p>
+                    <p className="text-sm font-medium">
+                      {data.diagnostics.mappingsLoaded.toLocaleString()}
+                    </p>
+                  </div>
+                )}
+                <div>
+                  <p className="text-muted-foreground">GL Rows Fetched</p>
+                  <p className="text-sm font-medium">
+                    {data.diagnostics.glRowsFetchedRaw.toLocaleString()}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground">GL Rows (Filtered)</p>
+                  <p className="text-sm font-medium">
+                    {data.diagnostics.glRowsAfterFilter.toLocaleString()}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground">Accounts w/ Data</p>
+                  <p className="text-sm font-medium">
+                    {data.diagnostics.uniqueAccountsWithData.toLocaleString()}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground">Entities</p>
+                  <p className="text-sm font-medium">
+                    {data.diagnostics.entityCount.toLocaleString()}
+                  </p>
+                </div>
+              </div>
+
+              {/* Pagination status */}
+              {data.diagnostics.paginationErrors && (
+                <div className="flex items-center gap-2 text-destructive">
+                  <AlertTriangle className="h-4 w-4" />
+                  <span className="font-medium">
+                    Warning: Some pages failed to load. Data may be incomplete.
+                    Try refreshing.
+                  </span>
+                </div>
+              )}
+
+              {/* Balance sheet check */}
+              {Object.keys(data.diagnostics.bsCheck).length > 0 && (
+                <div>
+                  <p className="text-muted-foreground mb-1">
+                    Balance Sheet Check (Assets − Liabilities − Equity):
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {Object.entries(data.diagnostics.bsCheck).map(
+                      ([period, diff]) => (
+                        <span
+                          key={period}
+                          className={`inline-flex items-center gap-1 rounded px-2 py-0.5 font-mono ${
+                            Math.abs(diff) > 0.01
+                              ? "bg-destructive/10 text-destructive"
+                              : "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400"
+                          }`}
+                        >
+                          {period}:{" "}
+                          {Math.abs(diff) > 0.01
+                            ? `$${diff.toLocaleString(undefined, {
+                                minimumFractionDigits: 2,
+                                maximumFractionDigits: 2,
+                              })}`
+                            : "$0.00"}
+                        </span>
+                      )
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       )}
 
       {!loading && !error && data && data.periods.length > 0 && canFetch && (

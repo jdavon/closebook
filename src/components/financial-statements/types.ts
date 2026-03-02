@@ -68,6 +68,26 @@ export interface StatementData {
 }
 
 /** Full response from the financial statements API */
+/** Diagnostic info returned by the API to verify data completeness. */
+export interface DataDiagnostics {
+  /** Number of master accounts (or entity accounts for entity scope) loaded */
+  masterAccountsLoaded: number;
+  /** Number of master_account_mappings loaded (org/RE scope only) */
+  mappingsLoaded: number;
+  /** Number of raw GL balance rows fetched from the database (before filtering) */
+  glRowsFetchedRaw: number;
+  /** Number of GL balance rows after filtering to requested period/accounts */
+  glRowsAfterFilter: number;
+  /** Number of unique entity accounts with at least one GL balance row */
+  uniqueAccountsWithData: number;
+  /** Number of entities contributing data */
+  entityCount: number;
+  /** Whether any pagination errors occurred (data may be incomplete) */
+  paginationErrors: boolean;
+  /** Balance sheet check: Assets - (Liabilities + Equity) per period. All zeros = balanced. */
+  bsCheck: Record<string, number>;
+}
+
 export interface FinancialStatementsResponse {
   periods: Period[];
   incomeStatement: StatementData;
@@ -83,6 +103,8 @@ export interface FinancialStatementsResponse {
     startPeriod: string;
     endPeriod: string;
   };
+  /** Optional data-completeness diagnostics (always present when data is returned) */
+  diagnostics?: DataDiagnostics;
 }
 
 /** Config object passed to the API and shared between components */
