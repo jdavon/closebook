@@ -253,3 +253,69 @@ export interface DrillDownResponse {
   groups: DrillDownGroup[];
   adjustments: DrillDownAdjustmentRow[];
 }
+
+// ---------------------------------------------------------------------------
+// Intercompany Eliminations types
+// ---------------------------------------------------------------------------
+
+/** A single intercompany elimination pair (Due From ↔ Due To) */
+export interface ICEliminationPair {
+  /** The counterparty entity name (e.g., "Two Family") */
+  counterpartyName: string;
+  /** Master account for the Due From side */
+  dueFromAccount: {
+    id: string;
+    accountNumber: string;
+    name: string;
+  };
+  /** Master account for the Due To side (null if no match found) */
+  dueToAccount: {
+    id: string;
+    accountNumber: string;
+    name: string;
+  } | null;
+  /** Per-entity Due From ending_balance. Key = entity_id */
+  dueFromByEntity: Record<string, number>;
+  /** Per-entity Due To ending_balance (sign-flipped to positive). Key = entity_id */
+  dueToByEntity: Record<string, number>;
+  /** Consolidated Due From total */
+  dueFromTotal: number;
+  /** Consolidated Due To total (sign-flipped to positive) */
+  dueToTotal: number;
+  /** dueFromTotal - dueToTotal. Zero = balanced. */
+  variance: number;
+}
+
+/** Entity column metadata for the IC elimination grid */
+export interface ICEntityColumn {
+  id: string;
+  code: string;
+  name: string;
+}
+
+/** Response from the intercompany-eliminations API */
+export interface ICEliminationsResponse {
+  pairs: ICEliminationPair[];
+  entities: ICEntityColumn[];
+  /** Unmatched Due To accounts (no corresponding Due From) */
+  unmatchedDueTo: Array<{
+    id: string;
+    accountNumber: string;
+    name: string;
+    totalByEntity: Record<string, number>;
+    total: number;
+  }>;
+  /** Unmatched Due From accounts (no corresponding Due To) */
+  unmatchedDueFrom: Array<{
+    id: string;
+    accountNumber: string;
+    name: string;
+    totalByEntity: Record<string, number>;
+    total: number;
+  }>;
+  metadata: {
+    organizationName?: string;
+    generatedAt: string;
+    periodLabel: string;
+  };
+}

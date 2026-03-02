@@ -26,6 +26,7 @@ import {
   Wallet,
   Layers,
   HandCoins,
+  ArrowLeftRight,
 } from "lucide-react";
 import {
   Sidebar,
@@ -179,6 +180,11 @@ export function AppSidebar({ user, entityId: entityIdProp }: AppSidebarProps) {
           title: "Financial Model",
           url: "/reports/financial-model",
           icon: FileText,
+        },
+        {
+          title: "IC Eliminations",
+          url: "/ic-eliminations",
+          icon: ArrowLeftRight,
         },
         {
           title: "Master GL",
