@@ -264,18 +264,56 @@ export async function GET(request: Request) {
   }
 
   // ---------------------------------------------------------------------------
-  // Build per-entity, per-counterparty breakdown
+  // Counterparty → Entity resolution (defined before map building so we can
+  // resolve EARLY and merge accounts that reference the same entity under
+  // different names, e.g. "Two Family" vs "Two Family Enterprises")
   // ---------------------------------------------------------------------------
 
-  // For each entity, find all their IC account balances and group by
-  // counterparty (extracted from the entity-level account name or the
-  // master account name as fallback).
+  function resolveCounterpartyEntity(
+    counterpartyName: string,
+    excludeEntityId?: string
+  ): { id: string; code: string; name: string } | null {
+    const lower = counterpartyName.toLowerCase();
+    for (const ent of entities) {
+      if (excludeEntityId && ent.id === excludeEntityId) continue;
+      if (
+        ent.name.toLowerCase() === lower ||
+        ent.code.toLowerCase() === lower ||
+        ent.name.toLowerCase().includes(lower) ||
+        lower.includes(ent.name.toLowerCase()) ||
+        lower.includes(ent.code.toLowerCase())
+      ) {
+        return { id: ent.id, code: ent.code, name: ent.name };
+      }
+    }
+    return null;
+  }
 
-  // Structure: entityId → counterpartyName → { dueFrom, dueTo }
-  const entityCounterpartyMap = new Map<
-    string,
-    Map<string, { dueFrom: number; dueTo: number }>
-  >();
+  // ---------------------------------------------------------------------------
+  // Build per-entity, per-counterparty breakdown
+  // ---------------------------------------------------------------------------
+  //
+  // KEY FIX 1 — Counterparty merging:
+  //   Account names like "Due From Two Family" and "Due To Two Family
+  //   Enterprises" both reference the same entity. We resolve the counterparty
+  //   to an entity ID *during* accumulation and use that ID as the map key
+  //   so all balances merge into a single counterparty entry.
+  //
+  // KEY FIX 2 — Sign normalisation:
+  //   Due To (liability / credit-normal) GL balances are stored as NEGATIVE
+  //   numbers. We use Math.abs() so dueTo is always a positive magnitude.
+  //   This makes the net calculation correct: net = dueFrom − dueTo.
+
+  interface CpEntry {
+    dueFrom: number;
+    dueTo: number;
+    displayName: string;
+    resolvedEntityId?: string;
+    resolvedCode?: string;
+  }
+
+  // Structure: entityId → cpKey → CpEntry
+  const entityCounterpartyMap = new Map<string, Map<string, CpEntry>>();
 
   for (const masterAcct of icMasterAccounts) {
     const masterDirection = classifyDirection(masterAcct.name);
@@ -290,7 +328,7 @@ export async function GET(request: Request) {
         const balance = glIndex.get(glKey) ?? 0;
         if (Math.abs(balance) < 0.01) continue;
 
-        // Try to extract counterparty from entity-level account name first
+        // Extract counterparty name & direction from entity-level account
         const entityAcct = entityAccountDetails.get(acctId);
         let counterparty: string | null = null;
         let direction = masterDirection;
@@ -298,59 +336,51 @@ export async function GET(request: Request) {
         if (entityAcct) {
           const acctCounterparty = extractCounterparty(entityAcct.name);
           const acctDirection = classifyDirection(entityAcct.name);
-          if (acctCounterparty) {
-            counterparty = acctCounterparty;
-          }
-          if (acctDirection) {
-            direction = acctDirection;
-          }
+          if (acctCounterparty) counterparty = acctCounterparty;
+          if (acctDirection) direction = acctDirection;
         }
 
-        // Fallback: use master account name for counterparty
+        // Fallback: master account name
         if (!counterparty) {
-          counterparty = extractCounterparty(masterAcct.name) ?? masterAcct.name ?? "Unknown";
+          counterparty =
+            extractCounterparty(masterAcct.name) ??
+            masterAcct.name ??
+            "Unknown";
         }
-
-        // Normalize counterparty name
         counterparty = (counterparty ?? "Unknown").trim();
 
-        // Add to entity's counterparty map
+        // Resolve counterparty to a known entity (exclude self)
+        const resolved = resolveCounterpartyEntity(counterparty, entity.id);
+
+        // Use resolved entity ID as the merge key, else lowercase name
+        const cpKey = resolved ? resolved.id : counterparty.toLowerCase();
+
+        // Initialise maps
         if (!entityCounterpartyMap.has(entity.id)) {
           entityCounterpartyMap.set(entity.id, new Map());
         }
         const cpMap = entityCounterpartyMap.get(entity.id)!;
-        if (!cpMap.has(counterparty)) {
-          cpMap.set(counterparty, { dueFrom: 0, dueTo: 0 });
+
+        if (!cpMap.has(cpKey)) {
+          cpMap.set(cpKey, {
+            dueFrom: 0,
+            dueTo: 0,
+            displayName: resolved ? resolved.name : counterparty,
+            resolvedEntityId: resolved?.id,
+            resolvedCode: resolved?.code,
+          });
         }
-        const entry = cpMap.get(counterparty)!;
+        const entry = cpMap.get(cpKey)!;
 
         if (direction === "due_from") {
           entry.dueFrom += balance;
         } else {
-          entry.dueTo += balance;
+          // GL stores credit-normal (liability) balances as negative.
+          // Normalise to positive magnitude.
+          entry.dueTo += Math.abs(balance);
         }
       }
     }
-  }
-
-  // Build entity name matching for counterparty → entity ID resolution.
-  // Try matching counterparty names to entity names or codes.
-  function resolveCounterpartyEntity(
-    counterpartyName: string
-  ): { id: string; code: string } | null {
-    const lower = counterpartyName.toLowerCase();
-    for (const entity of entities) {
-      if (
-        entity.name.toLowerCase() === lower ||
-        entity.code.toLowerCase() === lower ||
-        entity.name.toLowerCase().includes(lower) ||
-        lower.includes(entity.name.toLowerCase()) ||
-        lower.includes(entity.code.toLowerCase())
-      ) {
-        return { id: entity.id, code: entity.code };
-      }
-    }
-    return null;
   }
 
   // Build entityDetails response
@@ -359,18 +389,15 @@ export async function GET(request: Request) {
       const cpMap = entityCounterpartyMap.get(entity.id);
       if (!cpMap || cpMap.size === 0) return null;
 
-      const counterparties = [...cpMap.entries()]
-        .map(([cpName, balances]) => {
-          const resolved = resolveCounterpartyEntity(cpName);
-          return {
-            counterpartyName: cpName,
-            counterpartyEntityId: resolved?.id,
-            counterpartyCode: resolved?.code,
-            dueFromBalance: balances.dueFrom,
-            dueToBalance: balances.dueTo,
-            netPosition: balances.dueFrom - balances.dueTo,
-          };
-        })
+      const counterparties = [...cpMap.values()]
+        .map((data) => ({
+          counterpartyName: data.displayName,
+          counterpartyEntityId: data.resolvedEntityId,
+          counterpartyCode: data.resolvedCode,
+          dueFromBalance: data.dueFrom,
+          dueToBalance: data.dueTo,
+          netPosition: data.dueFrom - data.dueTo,
+        }))
         .sort((a, b) => a.counterpartyName.localeCompare(b.counterpartyName));
 
       const totalDueFrom = counterparties.reduce(
@@ -423,22 +450,21 @@ export async function GET(request: Request) {
     for (const cp of ed.counterparties) {
       if (!cp.counterpartyEntityId) continue;
 
-      // Create a canonical key so we only process each pair once
+      // Canonical key — only process each entity pair once
       const ids = [ed.entityId, cp.counterpartyEntityId].sort();
       const pairKey = `${ids[0]}::${ids[1]}`;
       if (seenPairs.has(pairKey)) continue;
       seenPairs.add(pairKey);
 
-      // Entity A = ed, Entity B = counterparty
       const entityAId = ed.entityId;
       const entityBId = cp.counterpartyEntityId;
 
-      // A's balances with B
+      // A's balances with B (already merged & sign-normalised)
       const aDueFromB = cp.dueFromBalance;
       const aDueToB = cp.dueToBalance;
       const aNetWithB = aDueFromB - aDueToB;
 
-      // B's balances with A — look up B's entity detail and find A as counterparty
+      // B's balances with A
       const entityBDetail = entityDetails.find(
         (d) => d && d.entityId === entityBId
       );
@@ -450,10 +476,10 @@ export async function GET(request: Request) {
       const bDueToA = entityBCp?.dueToBalance ?? 0;
       const bNetWithA = bDueFromA - bDueToA;
 
-      // Net effect should be zero when balanced
+      // Net effect: should be zero when balanced
       const netEffect = aNetWithB + bNetWithA;
 
-      // Only include pairs where there's actually IC activity
+      // Skip pairs with no activity
       if (
         Math.abs(aDueFromB) < 0.01 &&
         Math.abs(aDueToB) < 0.01 &&
