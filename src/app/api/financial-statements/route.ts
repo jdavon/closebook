@@ -2005,23 +2005,24 @@ async function buildConsolidatedStatements(params: ConsolidatedStatementsParams)
       const bucketed = aggregated.get(account.id);
       if (bucketed) {
         for (const key of Object.keys(bucketed.netChange)) {
-          // Revenue is credit-normal → flip sign so positive = income;
-          // Expense is debit-normal → keep sign so positive = cost.
-          // Net effect = expense side − revenue side.  If they cancel, net=0.
-          const sign = account.classification === "Revenue" ? -1 : 1;
-          netChange[key] = (netChange[key] ?? 0) + bucketed.netChange[key] * sign;
-          netEnding[key] = (netEnding[key] ?? 0) + bucketed.endingBalance[key] * sign;
-          netBeginning[key] = (netBeginning[key] ?? 0) + bucketed.beginningBalance[key] * sign;
+          // Sum raw GL-sign values (no sign flip).  Revenue endings are
+          // negative (credit-normal) and expense endings are positive
+          // (debit-normal) — a perfectly matched pair sums to zero.
+          // The synthetic account that receives these totals is classified
+          // as Expense; injectNetIncomeIntoBalanceSheet reads endingBalance
+          // in GL-sign convention, so we must NOT convert to display-sign.
+          netChange[key] = (netChange[key] ?? 0) + bucketed.netChange[key];
+          netEnding[key] = (netEnding[key] ?? 0) + bucketed.endingBalance[key];
+          netBeginning[key] = (netBeginning[key] ?? 0) + bucketed.beginningBalance[key];
         }
       }
       if (pyAggregated) {
         const pyBucketed = pyAggregated.get(account.id);
         if (pyBucketed) {
-          const sign = account.classification === "Revenue" ? -1 : 1;
           for (const key of Object.keys(pyBucketed.netChange)) {
-            pyNetChange[key] = (pyNetChange[key] ?? 0) + pyBucketed.netChange[key] * sign;
-            pyNetEnding[key] = (pyNetEnding[key] ?? 0) + pyBucketed.endingBalance[key] * sign;
-            pyNetBeginning[key] = (pyNetBeginning[key] ?? 0) + pyBucketed.beginningBalance[key] * sign;
+            pyNetChange[key] = (pyNetChange[key] ?? 0) + pyBucketed.netChange[key];
+            pyNetEnding[key] = (pyNetEnding[key] ?? 0) + pyBucketed.endingBalance[key];
+            pyNetBeginning[key] = (pyNetBeginning[key] ?? 0) + pyBucketed.beginningBalance[key];
           }
         }
       }
