@@ -90,26 +90,49 @@ async function fetchAllGLBalances(admin: any, filters: GLQueryFilters): Promise<
   const allRows: RawGLBalance[] = [];
   let offset = 0;
   let hasMore = true;
+  const MAX_RETRIES = 2;
 
   while (hasMore) {
-    const query = admin
-      .from("gl_balances")
-      .select(
-        "account_id, entity_id, period_year, period_month, beginning_balance, ending_balance, net_change"
-      )
-      .in(filters.filterColumn, filters.filterValues)
-      .in("period_year", filters.years)
-      .in("period_month", filters.months)
-      .range(offset, offset + GL_PAGE_SIZE - 1);
+    let lastError: unknown = null;
+    let rows: RawGLBalance[] = [];
 
-    const { data, error } = await query;
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      const query = admin
+        .from("gl_balances")
+        .select(
+          "account_id, entity_id, period_year, period_month, beginning_balance, ending_balance, net_change"
+        )
+        .in(filters.filterColumn, filters.filterValues)
+        .in("period_year", filters.years)
+        .in("period_month", filters.months)
+        // Deterministic ordering is CRITICAL for correct pagination.
+        // Without ORDER BY, PostgreSQL returns rows in arbitrary order that
+        // can change between page fetches, causing rows to be skipped or
+        // duplicated across pages.
+        .order("entity_id")
+        .order("account_id")
+        .order("period_year")
+        .order("period_month")
+        .range(offset, offset + GL_PAGE_SIZE - 1);
 
-    if (error) {
-      console.error("GL balance pagination error:", error);
+      const { data, error } = await query;
+
+      if (error) {
+        lastError = error;
+        console.warn(`GL balance pagination error (attempt ${attempt + 1}/${MAX_RETRIES + 1}):`, error);
+        if (attempt < MAX_RETRIES) continue; // retry
+      } else {
+        rows = (data ?? []).map(parseGLBalance);
+        lastError = null;
+        break; // success
+      }
+    }
+
+    if (lastError) {
+      console.error("GL balance pagination failed after retries:", lastError);
       break;
     }
 
-    const rows = (data ?? []).map(parseGLBalance);
     allRows.push(...rows);
 
     // If we got fewer rows than page size, we've fetched everything

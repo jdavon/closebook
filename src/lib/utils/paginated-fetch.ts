@@ -38,42 +38,64 @@ export async function fetchAllRows<T>(
   const allRows: T[] = [];
   let offset = 0;
   let hasMore = true;
+  const MAX_RETRIES = 2;
 
   while (hasMore) {
-    let query = client
-      .from(options.table)
-      .select(options.select);
+    let lastError: unknown = null;
+    let rows: T[] = [];
 
-    for (const filter of options.filters) {
-      switch (filter.type) {
-        case "eq":
-          query = query.eq(filter.column, filter.value);
-          break;
-        case "in":
-          query = query.in(filter.column, filter.value);
-          break;
-        case "neq":
-          query = query.neq(filter.column, filter.value);
-          break;
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      let query = client
+        .from(options.table)
+        .select(options.select);
+
+      for (const filter of options.filters) {
+        switch (filter.type) {
+          case "eq":
+            query = query.eq(filter.column, filter.value);
+            break;
+          case "in":
+            query = query.in(filter.column, filter.value);
+            break;
+          case "neq":
+            query = query.neq(filter.column, filter.value);
+            break;
+        }
+      }
+
+      // Deterministic ordering is CRITICAL for correct pagination.
+      // Without ORDER BY, PostgreSQL returns rows in arbitrary order that
+      // can change between page fetches, causing rows to be skipped or
+      // duplicated across pages. If no order is specified, fall back to
+      // ordering by the first filter column to ensure deterministic results.
+      if (options.order && options.order.length > 0) {
+        for (const o of options.order) {
+          query = query.order(o.column, { ascending: o.ascending ?? true });
+        }
+      } else if (options.filters.length > 0) {
+        query = query.order(options.filters[0].column);
+      }
+
+      query = query.range(offset, offset + PAGE_SIZE - 1);
+
+      const { data, error } = await query;
+
+      if (error) {
+        lastError = error;
+        console.warn(`Paginated fetch error (${options.table}, attempt ${attempt + 1}/${MAX_RETRIES + 1}):`, error);
+        if (attempt < MAX_RETRIES) continue; // retry
+      } else {
+        rows = (data ?? []) as T[];
+        lastError = null;
+        break; // success
       }
     }
 
-    if (options.order) {
-      for (const o of options.order) {
-        query = query.order(o.column, { ascending: o.ascending ?? true });
-      }
-    }
-
-    query = query.range(offset, offset + PAGE_SIZE - 1);
-
-    const { data, error } = await query;
-
-    if (error) {
-      console.error(`Paginated fetch error (${options.table}):`, error);
+    if (lastError) {
+      console.error(`Paginated fetch failed after retries (${options.table}):`, lastError);
       break;
     }
 
-    const rows = (data ?? []) as T[];
     allRows.push(...rows);
 
     if (rows.length < PAGE_SIZE) {
@@ -107,16 +129,31 @@ export async function fetchAllPaginated<T>(
   const allRows: T[] = [];
   let offset = 0;
   let hasMore = true;
+  const MAX_RETRIES = 2;
 
   while (hasMore) {
-    const { data, error } = await buildQuery(offset, pageSize);
+    let lastError: unknown = null;
+    let rows: T[] = [];
 
-    if (error) {
-      console.error("Paginated fetch error:", error);
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      const { data, error } = await buildQuery(offset, pageSize);
+
+      if (error) {
+        lastError = error;
+        console.warn(`Paginated fetch error (attempt ${attempt + 1}/${MAX_RETRIES + 1}):`, error);
+        if (attempt < MAX_RETRIES) continue; // retry
+      } else {
+        rows = (data ?? []) as T[];
+        lastError = null;
+        break; // success
+      }
+    }
+
+    if (lastError) {
+      console.error("Paginated fetch failed after retries:", lastError);
       break;
     }
 
-    const rows = (data ?? []) as T[];
     allRows.push(...rows);
 
     if (rows.length < pageSize) {
@@ -156,6 +193,11 @@ export async function fetchAllMappings(
     select: selectFields,
     filters: [
       { type: "in", column: "master_account_id", value: masterAccountIds },
+    ],
+    order: [
+      { column: "master_account_id" },
+      { column: "entity_id" },
+      { column: "account_id" },
     ],
   });
 }
@@ -198,5 +240,9 @@ export async function fetchAllAccounts(
     table: "accounts",
     select: selectFields,
     filters,
+    order: [
+      { column: "entity_id" },
+      { column: "id" },
+    ],
   });
 }
