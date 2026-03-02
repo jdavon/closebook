@@ -44,6 +44,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
@@ -60,6 +61,7 @@ import {
   Upload,
   Wand2,
   AlertTriangle,
+  ArrowLeftRight,
 } from "lucide-react";
 import type { AccountClassification } from "@/lib/types/database";
 import { ImportMappingsDialog } from "./import-mappings-dialog";
@@ -75,6 +77,7 @@ interface MasterAccount {
   account_sub_type: string | null;
   parent_account_id: string | null;
   is_active: boolean;
+  is_intercompany: boolean;
   display_order: number;
   normal_balance: string;
   created_at: string;
@@ -185,6 +188,7 @@ export default function MasterGLPage() {
     classification: "Asset" as AccountClassification,
     accountType: "",
     accountSubType: "",
+    isIntercompany: false,
   });
   const [saving, setSaving] = useState(false);
 
@@ -335,6 +339,7 @@ export default function MasterGLPage() {
       classification: "Asset",
       accountType: "",
       accountSubType: "",
+      isIntercompany: false,
     });
   }
 
@@ -353,6 +358,7 @@ export default function MasterGLPage() {
       classification: account.classification as AccountClassification,
       accountType: account.account_type,
       accountSubType: account.account_sub_type ?? "",
+      isIntercompany: account.is_intercompany ?? false,
     });
     setShowAddDialog(true);
   }
@@ -379,6 +385,7 @@ export default function MasterGLPage() {
             classification: formData.classification,
             accountType: formData.accountType,
             accountSubType: formData.accountSubType || null,
+            isIntercompany: formData.isIntercompany,
           }),
         });
 
@@ -401,6 +408,7 @@ export default function MasterGLPage() {
             classification: formData.classification,
             accountType: formData.accountType,
             accountSubType: formData.accountSubType || null,
+            isIntercompany: formData.isIntercompany,
           }),
         });
 
@@ -753,6 +761,15 @@ export default function MasterGLPage() {
                                     <span className="font-medium">
                                       {account.name}
                                     </span>
+                                    {account.is_intercompany && (
+                                      <Badge
+                                        variant="outline"
+                                        className="ml-2 text-[10px] px-1.5 py-0 border-amber-400 text-amber-700 bg-amber-50"
+                                      >
+                                        <ArrowLeftRight className="h-3 w-3 mr-0.5" />
+                                        IC Elim
+                                      </Badge>
+                                    )}
                                     {account.description && (
                                       <span className="text-xs block text-muted-foreground">
                                         {account.description}
@@ -947,6 +964,28 @@ export default function MasterGLPage() {
                 </Select>
               </div>
             </div>
+
+            {(formData.classification === "Revenue" ||
+              formData.classification === "Expense") && (
+              <div className="flex items-center justify-between rounded-lg border p-3 bg-muted/30">
+                <div className="space-y-0.5">
+                  <Label htmlFor="isIntercompany" className="text-sm font-medium">
+                    Intercompany Elimination
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    Zero out this account on consolidated financial statements.
+                    It will still appear at the entity level.
+                  </p>
+                </div>
+                <Switch
+                  id="isIntercompany"
+                  checked={formData.isIntercompany}
+                  onCheckedChange={(checked) =>
+                    setFormData({ ...formData, isIntercompany: checked })
+                  }
+                />
+              </div>
+            )}
           </div>
 
           <DialogFooter>

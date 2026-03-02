@@ -62,6 +62,7 @@ export async function POST(request: Request) {
     parentAccountId,
     normalBalance,
     displayOrder,
+    isIntercompany,
   } = body;
 
   if (!organizationId || !accountNumber || !name || !classification || !accountType) {
@@ -84,6 +85,7 @@ export async function POST(request: Request) {
       parent_account_id: parentAccountId || null,
       normal_balance: normalBalance || (["Asset", "Expense"].includes(classification) ? "debit" : "credit"),
       display_order: displayOrder ?? 0,
+      is_intercompany: isIntercompany ?? false,
       created_by: user.id,
     })
     .select()
@@ -123,6 +125,7 @@ export async function PUT(request: Request) {
   if (updates.accountSubType !== undefined) updateData.account_sub_type = updates.accountSubType;
   if (updates.parentAccountId !== undefined) updateData.parent_account_id = updates.parentAccountId || null;
   if (updates.isActive !== undefined) updateData.is_active = updates.isActive;
+  if (updates.isIntercompany !== undefined) updateData.is_intercompany = updates.isIntercompany;
   if (updates.normalBalance !== undefined) updateData.normal_balance = updates.normalBalance;
   if (updates.displayOrder !== undefined) updateData.display_order = updates.displayOrder;
 
