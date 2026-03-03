@@ -408,14 +408,27 @@ function applyProFormaPostAggregation(
   aggregated: Map<string, BucketedAmounts>,
   adjustments: Array<{ master_account_id: string; period_year: number; period_month: number; amount: number; offset_master_account_id?: string | null }>,
   buckets: PeriodBucket[],
+  accounts: AccountInfo[],
 ): void {
+  // Balance sheet accounts (Assets, Liabilities, Equity) have cumulative
+  // point-in-time ending balances.  An adjustment in one period must carry
+  // forward to every subsequent period's endingBalance so that monthly,
+  // quarterly and yearly views all agree.
+  const bsAccountIds = new Set(
+    accounts
+      .filter((a) => a.classification !== "Revenue" && a.classification !== "Expense")
+      .map((a) => a.id)
+  );
+
   // Map each year-month to its bucket key (skip TOTAL bucket — it contains
   // the same months as the real buckets and would overwrite their keys,
   // causing adjustments to land only in the Total column)
   const monthToBucket = new Map<string, string>();
   const hasTotalBucket = buckets.some((b) => b.key === "TOTAL");
+  const nonTotalBucketKeys: string[] = [];
   for (const bucket of buckets) {
     if (bucket.key === "TOTAL") continue;
+    nonTotalBucketKeys.push(bucket.key);
     for (const m of bucket.months) {
       monthToBucket.set(`${m.year}-${m.month}`, bucket.key);
     }
@@ -437,9 +450,22 @@ function applyProFormaPostAggregation(
       aggregated.set(accountId, bucketed);
     }
 
-    // Apply to the monthly bucket
+    // Apply netChange to the target bucket only
     bucketed.netChange[bucketKey] = (bucketed.netChange[bucketKey] ?? 0) + amount;
+    // Apply endingBalance to the target bucket
     bucketed.endingBalance[bucketKey] = (bucketed.endingBalance[bucketKey] ?? 0) + amount;
+
+    // For balance sheet accounts, propagate the ending balance adjustment
+    // to all subsequent buckets.  BS ending balances are cumulative, so an
+    // adjustment in one period carries forward to all future periods.
+    if (bsAccountIds.has(accountId)) {
+      const targetIdx = nonTotalBucketKeys.indexOf(bucketKey);
+      for (let i = targetIdx + 1; i < nonTotalBucketKeys.length; i++) {
+        const subsequentKey = nonTotalBucketKeys[i];
+        bucketed.endingBalance[subsequentKey] = (bucketed.endingBalance[subsequentKey] ?? 0) + amount;
+        bucketed.beginningBalance[subsequentKey] = (bucketed.beginningBalance[subsequentKey] ?? 0) + amount;
+      }
+    }
 
     // Also apply to the TOTAL bucket (it computes independently from raw GL
     // data, so pro forma adjustments must be added explicitly)
@@ -2121,7 +2147,7 @@ async function buildConsolidatedStatements(params: ConsolidatedStatementsParams)
 
   // Apply pro forma adjustments post-aggregation (target period only)
   if (proFormaRows.length > 0) {
-    applyProFormaPostAggregation(aggregated, proFormaRows, buckets);
+    applyProFormaPostAggregation(aggregated, proFormaRows, buckets, consolidatedAccounts);
   }
 
   // Apply allocation adjustments post-aggregation.  Injecting into raw GL
@@ -2129,7 +2155,7 @@ async function buildConsolidatedStatements(params: ConsolidatedStatementsParams)
   // is cumulative YTD — modifying one month without subsequent months causes
   // the diff-based net change to be wrong for the next month.
   if (allocEntries.length > 0) {
-    applyProFormaPostAggregation(aggregated, allocEntries, buckets);
+    applyProFormaPostAggregation(aggregated, allocEntries, buckets, consolidatedAccounts);
   }
 
   // Prior year aggregation for YoY
@@ -2139,10 +2165,10 @@ async function buildConsolidatedStatements(params: ConsolidatedStatementsParams)
     pyAggregated = aggregateByBucket(consolidatedAccounts, consolidatedBalances, pyBuckets, fiscalYearStartMonth);
     // Apply pro forma to prior year buckets so YoY comparisons include adjustments
     if (proFormaRows.length > 0) {
-      applyProFormaPostAggregation(pyAggregated, proFormaRows, pyBuckets);
+      applyProFormaPostAggregation(pyAggregated, proFormaRows, pyBuckets, consolidatedAccounts);
     }
     if (allocEntries.length > 0) {
-      applyProFormaPostAggregation(pyAggregated, allocEntries, pyBuckets);
+      applyProFormaPostAggregation(pyAggregated, allocEntries, pyBuckets, consolidatedAccounts);
     }
   }
 
@@ -2691,12 +2717,12 @@ export async function GET(request: Request) {
 
     // Apply pro forma adjustments post-aggregation (target period only)
     if (entityProFormaRows.length > 0) {
-      applyProFormaPostAggregation(aggregated, entityProFormaRows, buckets);
+      applyProFormaPostAggregation(aggregated, entityProFormaRows, buckets, consolidatedAccounts);
     }
 
     // Apply allocation adjustments post-aggregation (same reason as consolidated)
     if (entityAllocEntries.length > 0) {
-      applyProFormaPostAggregation(aggregated, entityAllocEntries, buckets);
+      applyProFormaPostAggregation(aggregated, entityAllocEntries, buckets, consolidatedAccounts);
     }
 
     // Prior year aggregation for YoY
@@ -2706,10 +2732,10 @@ export async function GET(request: Request) {
       pyAggregated = aggregateByBucket(consolidatedAccounts, consolidatedBalances, pyBuckets, fiscalYearStartMonth);
       // Apply pro forma to prior year buckets so YoY comparisons include adjustments
       if (entityProFormaRows.length > 0) {
-        applyProFormaPostAggregation(pyAggregated, entityProFormaRows, pyBuckets);
+        applyProFormaPostAggregation(pyAggregated, entityProFormaRows, pyBuckets, consolidatedAccounts);
       }
       if (entityAllocEntries.length > 0) {
-        applyProFormaPostAggregation(pyAggregated, entityAllocEntries, pyBuckets);
+        applyProFormaPostAggregation(pyAggregated, entityAllocEntries, pyBuckets, consolidatedAccounts);
       }
     }
 
