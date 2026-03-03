@@ -397,9 +397,23 @@ function injectProFormaAdjustments(
 }
 
 /**
+ * Synthetic account ID used to hold pro forma adjustments that would
+ * otherwise hit Bank (cash) accounts.  By redirecting the bank side to
+ * this synthetic ID, the real bank account balances remain untouched
+ * (matching the non-pro-forma view), while the adjustment is still
+ * reflected on the balance sheet via a dedicated "Pro Forma Adjustments"
+ * line injected by injectProFormaAdjustmentsIntoBalanceSheet().
+ */
+const PRO_FORMA_ADJ_ACCOUNT_ID = "__pro_forma_adj__";
+
+/**
  * Apply pro forma adjustments directly to already-aggregated bucket data.
  * Each adjustment adds its amount ONLY to the target period's netChange
  * and endingBalance — no leakage into subsequent months.
+ *
+ * Bank (cash) accounts are shielded: their side of the adjustment is
+ * redirected to the synthetic PRO_FORMA_ADJ_ACCOUNT_ID so that the
+ * user always sees the true bank balance.
  *
  * This bypasses the ending_balance-diff logic in aggregateByBucket()
  * which would otherwise reverse the adjustment in the next month.
@@ -408,8 +422,12 @@ function applyProFormaPostAggregation(
   aggregated: Map<string, BucketedAmounts>,
   adjustments: Array<{ master_account_id: string; period_year: number; period_month: number; amount: number; offset_master_account_id?: string | null }>,
   buckets: PeriodBucket[],
-  _accounts: AccountInfo[],
+  accounts: AccountInfo[],
 ): void {
+  // Build set of Bank account IDs — these are shielded from pro forma
+  const bankAccountIds = new Set(
+    accounts.filter((a) => a.accountType === "Bank").map((a) => a.id)
+  );
   // Map each year-month to its bucket key (skip TOTAL bucket — it contains
   // the same months as the real buckets and would overwrite their keys,
   // causing adjustments to land only in the Total column)
@@ -424,9 +442,14 @@ function applyProFormaPostAggregation(
     }
   }
 
-  function applyAmount(accountId: string, year: number, month: number, amount: number) {
+  function applyAmount(rawAccountId: string, year: number, month: number, amount: number) {
     const bucketKey = monthToBucket.get(`${year}-${month}`);
     if (!bucketKey) return; // adjustment outside the view range
+
+    // Shield bank accounts: redirect their side to the synthetic account
+    const accountId = bankAccountIds.has(rawAccountId)
+      ? PRO_FORMA_ADJ_ACCOUNT_ID
+      : rawAccountId;
 
     let bucketed = aggregated.get(accountId);
     if (!bucketed) {
@@ -1193,6 +1216,94 @@ function injectNetIncomeIntoBalanceSheet(
           section.subtotalLine.priorYearAmounts[bucket.key] =
             (section.subtotalLine.priorYearAmounts[bucket.key] ?? 0) +
             pyNiAmounts[bucket.key];
+        }
+      }
+    }
+  }
+}
+
+/**
+ * If any pro forma adjustments were redirected away from Bank accounts
+ * (into the synthetic PRO_FORMA_ADJ_ACCOUNT_ID), inject a visible
+ * "Pro Forma Adjustments" line into the Current Assets section of the
+ * balance sheet and update all affected subtotals / computed lines.
+ *
+ * This mirrors the pattern used by injectNetIncomeIntoBalanceSheet().
+ */
+function injectProFormaAdjustmentsIntoBalanceSheet(
+  balanceSheet: StatementData,
+  aggregated: Map<string, BucketedAmounts>,
+  buckets: PeriodBucket[],
+  pyAggregated?: Map<string, BucketedAmounts>
+): void {
+  const bucketed = aggregated.get(PRO_FORMA_ADJ_ACCOUNT_ID);
+  if (!bucketed) return; // no bank-targeting pro forma adjustments
+
+  // Check if there is any non-zero value
+  const hasValue = buckets.some((b) => (bucketed.endingBalance[b.key] ?? 0) !== 0);
+  if (!hasValue) return;
+
+  // Build amounts for the synthetic line (Asset classification, debit-normal → no sign flip)
+  const amounts: Record<string, number> = {};
+  const pyAmounts: Record<string, number> | undefined = pyAggregated ? {} : undefined;
+
+  for (const bucket of buckets) {
+    amounts[bucket.key] = bucketed.endingBalance[bucket.key] ?? 0;
+    if (pyAmounts && pyAggregated) {
+      const pyBucketed = pyAggregated.get(PRO_FORMA_ADJ_ACCOUNT_ID);
+      pyAmounts[bucket.key] = pyBucketed?.endingBalance[bucket.key] ?? 0;
+    }
+  }
+
+  // Find the current_assets section
+  const currentAssetsSection = balanceSheet.sections.find(
+    (s) => s.id === "current_assets"
+  );
+  if (!currentAssetsSection?.subtotalLine) return;
+
+  // Add the synthetic line at the end of current assets
+  currentAssetsSection.lines.push({
+    id: "current_assets-pro-forma-adj",
+    label: "Pro Forma Adjustments",
+    amounts,
+    priorYearAmounts: pyAmounts,
+    indent: 1,
+    isTotal: false,
+    isGrandTotal: false,
+    isHeader: false,
+    isSeparator: false,
+    showDollarSign: currentAssetsSection.lines.length === 0,
+  });
+
+  // Update the current_assets subtotal
+  for (const bucket of buckets) {
+    currentAssetsSection.subtotalLine.amounts[bucket.key] =
+      (currentAssetsSection.subtotalLine.amounts[bucket.key] ?? 0) +
+      amounts[bucket.key];
+
+    if (pyAmounts && currentAssetsSection.subtotalLine.priorYearAmounts) {
+      currentAssetsSection.subtotalLine.priorYearAmounts[bucket.key] =
+        (currentAssetsSection.subtotalLine.priorYearAmounts[bucket.key] ?? 0) +
+        pyAmounts[bucket.key];
+    }
+  }
+
+  // Update computed lines that include current_assets
+  for (const section of balanceSheet.sections) {
+    if (
+      (section.id === "total_current_assets" ||
+        section.id === "total_assets") &&
+      section.subtotalLine
+    ) {
+      for (const bucket of buckets) {
+        section.subtotalLine.amounts[bucket.key] =
+          (section.subtotalLine.amounts[bucket.key] ?? 0) +
+          amounts[bucket.key];
+
+        if (pyAmounts && section.subtotalLine.priorYearAmounts) {
+          section.subtotalLine.priorYearAmounts[bucket.key] =
+            (section.subtotalLine.priorYearAmounts[bucket.key] ?? 0) +
+            pyAmounts[bucket.key];
         }
       }
     }
@@ -2542,6 +2653,14 @@ async function buildConsolidatedStatements(params: ConsolidatedStatementsParams)
     pyAggregated
   );
 
+  // Inject "Pro Forma Adjustments" line for amounts redirected from bank accounts
+  injectProFormaAdjustmentsIntoBalanceSheet(
+    balanceSheet,
+    aggregated,
+    buckets,
+    pyAggregated
+  );
+
   // Build supplemental entries for cash flow pro forma section
   const cfSupplementalEntries: CashFlowSupplementalEntry[] = [
     ...proFormaRows
@@ -3017,6 +3136,14 @@ export async function GET(request: Request) {
     injectNetIncomeIntoBalanceSheet(
       balanceSheet,
       consolidatedAccounts,
+      aggregated,
+      buckets,
+      pyAggregated
+    );
+
+    // Inject "Pro Forma Adjustments" line for amounts redirected from bank accounts
+    injectProFormaAdjustmentsIntoBalanceSheet(
+      balanceSheet,
       aggregated,
       buckets,
       pyAggregated
