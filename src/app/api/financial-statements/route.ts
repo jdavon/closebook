@@ -894,11 +894,6 @@ function buildStatement(
     sectionBudgetTotals[config.id] = budgetTotals;
     sectionPyTotals[config.id] = pyTotals;
 
-    // Skip empty headerless sections (e.g. Other Expense/Income with no
-    // matching accounts).  Totals are still tracked above so computed
-    // formulas that reference them (net_income) remain correct.
-    if (!config.title && lines.length === 0) continue;
-
     // Subtotal line
     const subtotalLine: LineItem = {
       id: `${config.id}-total`,
@@ -1058,10 +1053,17 @@ function buildStatement(
     }
   }
 
+  // Remove empty headerless sections (e.g. Other Expense/Income with no
+  // matching accounts) that would render as blank rows.  This is done after
+  // computed line insertion so that afterSection references still resolve.
+  const filteredSections = finalSections.filter(
+    (s) => s.title || s.lines.length > 0 || s.subtotalLine?.label
+  );
+
   return {
     id: statementId,
     title,
-    sections: finalSections,
+    sections: filteredSections,
   };
 }
 
