@@ -409,9 +409,13 @@ function applyProFormaPostAggregation(
   adjustments: Array<{ master_account_id: string; period_year: number; period_month: number; amount: number; offset_master_account_id?: string | null }>,
   buckets: PeriodBucket[],
 ): void {
-  // Map each year-month to its bucket key
+  // Map each year-month to its bucket key (skip TOTAL bucket — it contains
+  // the same months as the real buckets and would overwrite their keys,
+  // causing adjustments to land only in the Total column)
   const monthToBucket = new Map<string, string>();
+  const hasTotalBucket = buckets.some((b) => b.key === "TOTAL");
   for (const bucket of buckets) {
+    if (bucket.key === "TOTAL") continue;
     for (const m of bucket.months) {
       monthToBucket.set(`${m.year}-${m.month}`, bucket.key);
     }
@@ -433,8 +437,16 @@ function applyProFormaPostAggregation(
       aggregated.set(accountId, bucketed);
     }
 
+    // Apply to the monthly bucket
     bucketed.netChange[bucketKey] = (bucketed.netChange[bucketKey] ?? 0) + amount;
     bucketed.endingBalance[bucketKey] = (bucketed.endingBalance[bucketKey] ?? 0) + amount;
+
+    // Also apply to the TOTAL bucket (it computes independently from raw GL
+    // data, so pro forma adjustments must be added explicitly)
+    if (hasTotalBucket) {
+      bucketed.netChange["TOTAL"] = (bucketed.netChange["TOTAL"] ?? 0) + amount;
+      bucketed.endingBalance["TOTAL"] = (bucketed.endingBalance["TOTAL"] ?? 0) + amount;
+    }
   }
 
   for (const adj of adjustments) {
