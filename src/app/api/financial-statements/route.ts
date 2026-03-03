@@ -1563,6 +1563,37 @@ function buildCashFlowStatement(
     });
   }
 
+  // D&A offset: Master accounts like "Vehicles (Net)" consolidate gross cost
+  // and accumulated depreciation, so their balance changes include both cash
+  // capex and non-cash depreciation.  Since D&A is already added back in
+  // operating, we must subtract it here to avoid double-counting.
+  const daOffset: Record<string, number> = {};
+  const pyDaOffset: Record<string, number> | undefined = hasPY ? {} : undefined;
+  for (const bucket of buckets) {
+    const da = depreciationByBucket[bucket.key] ?? 0;
+    daOffset[bucket.key] = -da;
+    investingTotal[bucket.key] -= da;
+
+    if (hasPY && pyDaOffset) {
+      const pyDa = pyDepreciationByBucket[bucket.key] ?? 0;
+      pyDaOffset[bucket.key] = -pyDa;
+      pyInvestingTotal[bucket.key] -= pyDa;
+    }
+  }
+  investingLines.push({
+    id: "cf-inv-da-offset",
+    label: "Less: Depreciation and amortization",
+    amounts: daOffset,
+    priorYearAmounts: pyDaOffset,
+    indent: 1,
+    isTotal: false,
+    isGrandTotal: false,
+    isHeader: false,
+    isSeparator: false,
+    showDollarSign: false,
+    drillDownMeta: { type: "none" },
+  });
+
   sections.push({
     id: "cf-investing",
     title: "CASH FLOWS FROM INVESTING ACTIVITIES",
@@ -1586,15 +1617,12 @@ function buildCashFlowStatement(
     FINANCING_LIABILITY_TYPES.includes(a.accountType)
   );
   // Exclude equity accounts whose balance changes represent accumulated net
-  // income (already captured in operating activities) or non-cash equity
-  // movements.  Only true financing cash flows (e.g. capital contributions)
-  // should appear here.
+  // income (already captured in operating activities).  Distributions, owner's
+  // equity contributions/withdrawals, and similar accounts are real cash flows
+  // and belong in financing.
   const EXCLUDED_FINANCING_EQUITY = [
     "retained earnings",
     "net income",
-    "owners equity",
-    "owner's equity",
-    "distributions",
   ];
   const financingEquity = accounts.filter(
     (a) =>
