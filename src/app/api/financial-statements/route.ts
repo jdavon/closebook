@@ -1761,10 +1761,10 @@ function buildCashFlowStatement(
         showDollarSign: true,
       },
       {
-        id: "cf-cash-beginning",
-        label: "Cash at beginning of period",
-        amounts: cashBeginning,
-        priorYearAmounts: hasPY ? pyCashBeginning : undefined,
+        id: "cf-cash-end",
+        label: "Cash at end of period",
+        amounts: cashEnding,
+        priorYearAmounts: hasPY ? pyCashEnding : undefined,
         indent: 1,
         isTotal: false,
         isGrandTotal: false,
@@ -1773,17 +1773,19 @@ function buildCashFlowStatement(
         showDollarSign: false,
       },
     ],
+    // subtotalLine is not rendered (headerless section) but carries beginning
+    // cash data so the reconciliation check can verify: beginning + net change = ending
     subtotalLine: {
-      id: "cf-cash-ending",
-      label: "CASH AT END OF PERIOD",
-      amounts: cashEnding,
-      priorYearAmounts: hasPY ? pyCashEnding : undefined,
+      id: "cf-cash-beginning",
+      label: "",
+      amounts: cashBeginning,
+      priorYearAmounts: hasPY ? pyCashBeginning : undefined,
       indent: 0,
       isTotal: false,
-      isGrandTotal: true,
+      isGrandTotal: false,
       isHeader: false,
       isSeparator: false,
-      showDollarSign: true,
+      showDollarSign: false,
     },
   });
 
