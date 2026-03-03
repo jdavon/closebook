@@ -2490,10 +2490,11 @@ async function buildConsolidatedStatements(params: ConsolidatedStatementsParams)
       }
     }
 
-    // Inject asset-side synthetic if any bucket has a positive residual
+    // Inject asset-side synthetic only if a current-period bucket has a
+    // meaningful positive residual.  Prior-year-only values are not enough
+    // to justify a line — they would show $— across all visible columns.
     const hasAssetEffect =
-      Object.values(assetEnding).some((v) => Math.abs(v) >= 0.005) ||
-      Object.values(pyAssetEnding).some((v) => Math.abs(v) >= 0.005);
+      Object.values(assetEnding).some((v) => Math.abs(v) >= 0.50);
 
     if (hasAssetEffect) {
       const syntheticAssetId = "__intercompany_bs_net_asset__";
@@ -2502,7 +2503,7 @@ async function buildConsolidatedStatements(params: ConsolidatedStatementsParams)
         name: "Intercompany Eliminations, Net",
         accountNumber: null,
         classification: "Asset",
-        accountType: "Other Current Asset",
+        accountType: "Other Asset",
         isIntercompany: false,
       });
       const assetNetChange: Record<string, number> = {};
@@ -2527,10 +2528,10 @@ async function buildConsolidatedStatements(params: ConsolidatedStatementsParams)
       }
     }
 
-    // Inject liability-side synthetic if any bucket has a negative residual
+    // Inject liability-side synthetic only if a current-period bucket has a
+    // meaningful negative residual.
     const hasLiabEffect =
-      Object.values(liabEnding).some((v) => Math.abs(v) >= 0.005) ||
-      Object.values(pyLiabEnding).some((v) => Math.abs(v) >= 0.005);
+      Object.values(liabEnding).some((v) => Math.abs(v) >= 0.50);
 
     if (hasLiabEffect) {
       const syntheticLiabId = "__intercompany_bs_net_liab__";
@@ -2539,7 +2540,7 @@ async function buildConsolidatedStatements(params: ConsolidatedStatementsParams)
         name: "Intercompany Eliminations, Net",
         accountNumber: null,
         classification: "Liability",
-        accountType: "Other Current Liability",
+        accountType: "Long Term Liability",
         isIntercompany: false,
       });
       const liabNetChange: Record<string, number> = {};
