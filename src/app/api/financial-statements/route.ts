@@ -2053,7 +2053,10 @@ async function buildConsolidatedStatements(params: ConsolidatedStatementsParams)
   }
 
   // Allocation Adjustments (org/RE scope — net zero at consolidated level, paginated)
+  // Applied post-aggregation (like pro forma) to avoid corrupting adjacent
+  // months' net change via the ending_balance diff calculation.
   let allocReclassEntries: CashFlowSupplementalEntry[] = [];
+  let allocEntries: Array<{ entity_id: string; master_account_id: string; period_year: number; period_month: number; amount: number }> = [];
   if (includeAllocations) {
     const allocRows = await fetchAllPaginated<RawAllocationAdjustment>((offset, limit) =>
       (admin as any)
@@ -2070,8 +2073,7 @@ async function buildConsolidatedStatements(params: ConsolidatedStatementsParams)
       // For org scope this keeps both sides (net zero at consolidated).
       // For reporting_entity scope this shows the net effect of cross-RE allocations.
       const entityIdSet = new Set(entityIds);
-      const filtered = expanded.filter((e) => entityIdSet.has(e.entity_id));
-      injectAllocationAdjustments(consolidatedBalances, filtered, "consolidated");
+      allocEntries = expanded.filter((e) => entityIdSet.has(e.entity_id));
 
       // Build supplemental entries for intra-entity reclass allocations
       // (inter-entity transfers net to zero at consolidated and are omitted)
@@ -2092,6 +2094,14 @@ async function buildConsolidatedStatements(params: ConsolidatedStatementsParams)
     applyProFormaPostAggregation(aggregated, proFormaRows, buckets);
   }
 
+  // Apply allocation adjustments post-aggregation.  Injecting into raw GL
+  // data (ending_balance) corrupted adjacent months because P&L ending_balance
+  // is cumulative YTD — modifying one month without subsequent months causes
+  // the diff-based net change to be wrong for the next month.
+  if (allocEntries.length > 0) {
+    applyProFormaPostAggregation(aggregated, allocEntries, buckets);
+  }
+
   // Prior year aggregation for YoY
   let pyAggregated: Map<string, BucketedAmounts> | undefined;
   if (includeYoY) {
@@ -2100,6 +2110,9 @@ async function buildConsolidatedStatements(params: ConsolidatedStatementsParams)
     // Apply pro forma to prior year buckets so YoY comparisons include adjustments
     if (proFormaRows.length > 0) {
       applyProFormaPostAggregation(pyAggregated, proFormaRows, pyBuckets);
+    }
+    if (allocEntries.length > 0) {
+      applyProFormaPostAggregation(pyAggregated, allocEntries, pyBuckets);
     }
   }
 
@@ -2614,7 +2627,10 @@ export async function GET(request: Request) {
     }
 
     // --- Allocation Adjustments (entity scope) ---
+    // Applied post-aggregation (like pro forma) to avoid corrupting adjacent
+    // months' net change via the ending_balance diff calculation.
     let entityAllocReclassEntries: CashFlowSupplementalEntry[] = [];
+    let entityAllocEntries: Array<{ entity_id: string; master_account_id: string; period_year: number; period_month: number; amount: number }> = [];
     if (includeAllocations) {
       // Fetch allocations where this entity is source or destination (paginated)
       const allocRows = await fetchAllPaginated<RawAllocationAdjustment>((offset, limit) =>
@@ -2628,11 +2644,8 @@ export async function GET(request: Request) {
 
       if (allocRows.length > 0) {
         const expanded = expandAllocationAdjustments(allocRows);
-        // Only inject entries that belong to this entity
-        const entityEntries = expanded.filter((e) => e.entity_id === entityId!);
-        if (entityEntries.length > 0) {
-          injectAllocationAdjustments(consolidatedBalances, entityEntries, entityId!);
-        }
+        // Only keep entries that belong to this entity
+        entityAllocEntries = expanded.filter((e) => e.entity_id === entityId!);
         // Build supplemental entries for intra-entity reclass allocations
         entityAllocReclassEntries = buildAllocationSupplementalEntries(allocRows, buckets);
       }
@@ -2651,6 +2664,11 @@ export async function GET(request: Request) {
       applyProFormaPostAggregation(aggregated, entityProFormaRows, buckets);
     }
 
+    // Apply allocation adjustments post-aggregation (same reason as consolidated)
+    if (entityAllocEntries.length > 0) {
+      applyProFormaPostAggregation(aggregated, entityAllocEntries, buckets);
+    }
+
     // Prior year aggregation for YoY
     let pyAggregated: Map<string, BucketedAmounts> | undefined;
     if (includeYoY) {
@@ -2659,6 +2677,9 @@ export async function GET(request: Request) {
       // Apply pro forma to prior year buckets so YoY comparisons include adjustments
       if (entityProFormaRows.length > 0) {
         applyProFormaPostAggregation(pyAggregated, entityProFormaRows, pyBuckets);
+      }
+      if (entityAllocEntries.length > 0) {
+        applyProFormaPostAggregation(pyAggregated, entityAllocEntries, pyBuckets);
       }
     }
 
