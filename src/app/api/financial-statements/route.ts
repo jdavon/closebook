@@ -1225,8 +1225,15 @@ function injectNetIncomeIntoBalanceSheet(
 /**
  * If any pro forma adjustments were redirected away from Bank accounts
  * (into the synthetic PRO_FORMA_ADJ_ACCOUNT_ID), inject a visible
- * "Pro Forma Adjustments" line into the Current Assets section of the
- * balance sheet and update all affected subtotals / computed lines.
+ * "Pro Forma Adjustments" line into the Stockholders' Equity section of
+ * the balance sheet and update all affected subtotals / computed lines.
+ *
+ * The redirected amount is debit-normal (from the bank account side),
+ * but equity is credit-normal, so the sign is flipped for display.
+ * This effectively offsets the Net Income increase from the P&L side
+ * of the same pro forma entry, making the balance sheet net-neutral
+ * for bank-targeting adjustments while keeping the income statement
+ * impact visible.
  *
  * This mirrors the pattern used by injectNetIncomeIntoBalanceSheet().
  */
@@ -1243,27 +1250,29 @@ function injectProFormaAdjustmentsIntoBalanceSheet(
   const hasValue = buckets.some((b) => (bucketed.endingBalance[b.key] ?? 0) !== 0);
   if (!hasValue) return;
 
-  // Build amounts for the synthetic line (Asset classification, debit-normal → no sign flip)
+  // Build amounts for the synthetic line.
+  // The raw value is debit-normal (positive = debit), but equity accounts
+  // are displayed with sign flip (credit-normal → negate for display).
   const amounts: Record<string, number> = {};
   const pyAmounts: Record<string, number> | undefined = pyAggregated ? {} : undefined;
 
   for (const bucket of buckets) {
-    amounts[bucket.key] = bucketed.endingBalance[bucket.key] ?? 0;
+    amounts[bucket.key] = -(bucketed.endingBalance[bucket.key] ?? 0);
     if (pyAmounts && pyAggregated) {
       const pyBucketed = pyAggregated.get(PRO_FORMA_ADJ_ACCOUNT_ID);
-      pyAmounts[bucket.key] = pyBucketed?.endingBalance[bucket.key] ?? 0;
+      pyAmounts[bucket.key] = -(pyBucketed?.endingBalance[bucket.key] ?? 0);
     }
   }
 
-  // Find the current_assets section
-  const currentAssetsSection = balanceSheet.sections.find(
-    (s) => s.id === "current_assets"
+  // Find the equity section
+  const equitySection = balanceSheet.sections.find(
+    (s) => s.id === "equity"
   );
-  if (!currentAssetsSection?.subtotalLine) return;
+  if (!equitySection?.subtotalLine) return;
 
-  // Add the synthetic line at the end of current assets
-  currentAssetsSection.lines.push({
-    id: "current_assets-pro-forma-adj",
+  // Add the synthetic line at the end of equity
+  equitySection.lines.push({
+    id: "equity-pro-forma-adj",
     label: "Pro Forma Adjustments",
     amounts,
     priorYearAmounts: pyAmounts,
@@ -1272,27 +1281,27 @@ function injectProFormaAdjustmentsIntoBalanceSheet(
     isGrandTotal: false,
     isHeader: false,
     isSeparator: false,
-    showDollarSign: currentAssetsSection.lines.length === 0,
+    showDollarSign: equitySection.lines.length === 0,
   });
 
-  // Update the current_assets subtotal
+  // Update the equity subtotal
   for (const bucket of buckets) {
-    currentAssetsSection.subtotalLine.amounts[bucket.key] =
-      (currentAssetsSection.subtotalLine.amounts[bucket.key] ?? 0) +
+    equitySection.subtotalLine.amounts[bucket.key] =
+      (equitySection.subtotalLine.amounts[bucket.key] ?? 0) +
       amounts[bucket.key];
 
-    if (pyAmounts && currentAssetsSection.subtotalLine.priorYearAmounts) {
-      currentAssetsSection.subtotalLine.priorYearAmounts[bucket.key] =
-        (currentAssetsSection.subtotalLine.priorYearAmounts[bucket.key] ?? 0) +
+    if (pyAmounts && equitySection.subtotalLine.priorYearAmounts) {
+      equitySection.subtotalLine.priorYearAmounts[bucket.key] =
+        (equitySection.subtotalLine.priorYearAmounts[bucket.key] ?? 0) +
         pyAmounts[bucket.key];
     }
   }
 
-  // Update computed lines that include current_assets
+  // Update computed lines that include equity
   for (const section of balanceSheet.sections) {
     if (
-      (section.id === "total_current_assets" ||
-        section.id === "total_assets") &&
+      (section.id === "total_equity" ||
+        section.id === "total_liabilities_and_equity") &&
       section.subtotalLine
     ) {
       for (const bucket of buckets) {
