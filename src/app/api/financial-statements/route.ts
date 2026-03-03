@@ -798,7 +798,12 @@ function buildStatement(
     const sectionAccounts = accounts.filter(
       (a) =>
         a.classification === config.classification &&
-        config.accountTypes.includes(a.accountType)
+        config.accountTypes.includes(a.accountType) &&
+        // Exclude "Net Income" equity account from balance sheet — the correct
+        // amount is injected dynamically by injectNetIncomeIntoBalanceSheet
+        !(statementId === "balance_sheet" &&
+          config.classification === "Equity" &&
+          a.name.toLowerCase().includes("net income"))
     );
 
     // Sort by account number
@@ -888,6 +893,11 @@ function buildStatement(
     sectionTotals[config.id] = totals;
     sectionBudgetTotals[config.id] = budgetTotals;
     sectionPyTotals[config.id] = pyTotals;
+
+    // Skip empty headerless sections (e.g. Other Expense/Income with no
+    // matching accounts).  Totals are still tracked above so computed
+    // formulas that reference them (net_income) remain correct.
+    if (!config.title && lines.length === 0) continue;
 
     // Subtotal line
     const subtotalLine: LineItem = {
@@ -1561,13 +1571,23 @@ function buildCashFlowStatement(
   const financingLiabilities = accounts.filter((a) =>
     FINANCING_LIABILITY_TYPES.includes(a.accountType)
   );
-  // Exclude Retained Earnings from financing — its balance change represents
-  // accumulated net income, which is already the starting point of operating
-  // activities.  Including it here would double-count net income.
+  // Exclude equity accounts whose balance changes represent accumulated net
+  // income (already captured in operating activities) or non-cash equity
+  // movements.  Only true financing cash flows (e.g. capital contributions)
+  // should appear here.
+  const EXCLUDED_FINANCING_EQUITY = [
+    "retained earnings",
+    "net income",
+    "owners equity",
+    "owner's equity",
+    "distributions",
+  ];
   const financingEquity = accounts.filter(
     (a) =>
       FINANCING_EQUITY_TYPES.includes(a.accountType) &&
-      !a.name.toLowerCase().includes("retained earnings")
+      !EXCLUDED_FINANCING_EQUITY.some((excl) =>
+        a.name.toLowerCase().includes(excl)
+      )
   );
   const financingLines: LineItem[] = [];
   const financingTotal: Record<string, number> = {};
