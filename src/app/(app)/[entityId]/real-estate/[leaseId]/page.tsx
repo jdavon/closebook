@@ -385,6 +385,8 @@ export default function LeaseDetailPage() {
   // Payment period selector
   const [periodYear, setPeriodYear] = useState(current.year);
   const [periodMonth, setPeriodMonth] = useState(current.month);
+  // Full payment schedule for grid view
+  const [allPayments, setAllPayments] = useState<PaymentRow[]>([]);
 
   // GL account editing
   const [rouAssetAccountId, setRouAssetAccountId] = useState("");
@@ -482,6 +484,14 @@ export default function LeaseDetailPage() {
       .eq("period_month", periodMonth)
       .order("payment_type");
 
+    const allPaymentsResult = await supabase
+      .from("lease_payments")
+      .select("*")
+      .eq("lease_id", leaseId)
+      .order("period_year")
+      .order("period_month")
+      .order("payment_type");
+
     const escalationsResult = await supabase
       .from("lease_escalations")
       .select("*")
@@ -554,6 +564,7 @@ export default function LeaseDetailPage() {
     }
 
     setPayments((paymentsResult.data as unknown as PaymentRow[]) ?? []);
+    setAllPayments((allPaymentsResult.data as unknown as PaymentRow[]) ?? []);
     setEscalations((escalationsResult.data as unknown as EscalationRow[]) ?? []);
     setOptions((optionsResult.data as unknown as OptionRow[]) ?? []);
     setCriticalDates((criticalDatesResult.data as unknown as CriticalDateRow[]) ?? []);
@@ -1276,6 +1287,18 @@ export default function LeaseDetailPage() {
     0
   );
 
+  // Build full payment grid: year → month → total scheduled
+  const MONTH_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const paymentGrid: Record<number, Record<number, number>> = {};
+  for (const p of allPayments) {
+    if (!paymentGrid[p.period_year]) paymentGrid[p.period_year] = {};
+    paymentGrid[p.period_year][p.period_month] =
+      (paymentGrid[p.period_year][p.period_month] || 0) + p.scheduled_amount;
+  }
+  const gridYears = Object.keys(paymentGrid)
+    .map(Number)
+    .sort((a, b) => a - b);
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -1633,55 +1656,132 @@ export default function LeaseDetailPage() {
         </TabsContent>
 
         {/* === Payments Tab === */}
-        <TabsContent value="payments">
+        <TabsContent value="payments" className="space-y-6">
+          {/* Full Schedule Grid */}
           <Card>
             <CardHeader>
               <div className="flex items-center justify-between">
-                <div>
-                  <CardTitle>Payment Schedule</CardTitle>
-                  <CardDescription>
-                    {getPeriodLabel(periodYear, periodMonth)}
-                  </CardDescription>
+                <CardTitle>Payment Schedule</CardTitle>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleRegenerateSchedule}
+                >
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                  Regenerate
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {gridYears.length === 0 ? (
+                <p className="text-sm text-muted-foreground py-4">
+                  No payment schedule generated yet. Click Regenerate to create one.
+                </p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="sticky left-0 bg-background z-10 w-16">Year</TableHead>
+                        {MONTH_SHORT.map((m) => (
+                          <TableHead key={m} className="text-right text-xs min-w-[90px]">
+                            {m}
+                          </TableHead>
+                        ))}
+                        <TableHead className="text-right text-xs font-semibold min-w-[100px]">
+                          Annual
+                        </TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {gridYears.map((year) => {
+                        const monthData = paymentGrid[year] || {};
+                        const annualTotal = Object.values(monthData).reduce(
+                          (s, v) => s + v,
+                          0
+                        );
+                        return (
+                          <TableRow key={year}>
+                            <TableCell className="sticky left-0 bg-background z-10 font-medium tabular-nums">
+                              {year}
+                            </TableCell>
+                            {Array.from({ length: 12 }, (_, i) => i + 1).map(
+                              (month) => {
+                                const amt = monthData[month];
+                                const isSelected =
+                                  year === periodYear && month === periodMonth;
+                                return (
+                                  <TableCell
+                                    key={month}
+                                    className={cn(
+                                      "text-right tabular-nums text-sm cursor-pointer transition-colors hover:bg-muted/50",
+                                      isSelected && "bg-primary/10 font-medium ring-1 ring-primary/30 rounded"
+                                    )}
+                                    onClick={() => {
+                                      setPeriodYear(year);
+                                      setPeriodMonth(month);
+                                    }}
+                                  >
+                                    {amt != null
+                                      ? formatCurrency(amt)
+                                      : <span className="text-muted-foreground">—</span>}
+                                  </TableCell>
+                                );
+                              }
+                            )}
+                            <TableCell className="text-right tabular-nums font-semibold text-sm">
+                              {formatCurrency(annualTotal)}
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                      {/* Grand total row */}
+                      {gridYears.length > 1 && (
+                        <TableRow className="border-t-2 font-semibold">
+                          <TableCell className="sticky left-0 bg-background z-10">
+                            Total
+                          </TableCell>
+                          {Array.from({ length: 12 }, (_, i) => i + 1).map(
+                            (month) => {
+                              const colTotal = gridYears.reduce(
+                                (s, y) => s + (paymentGrid[y]?.[month] || 0),
+                                0
+                              );
+                              return (
+                                <TableCell
+                                  key={month}
+                                  className="text-right tabular-nums text-sm"
+                                >
+                                  {colTotal > 0 ? formatCurrency(colTotal) : "—"}
+                                </TableCell>
+                              );
+                            }
+                          )}
+                          <TableCell className="text-right tabular-nums text-sm">
+                            {formatCurrency(
+                              allPayments.reduce((s, p) => s + p.scheduled_amount, 0)
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </TableBody>
+                  </Table>
                 </div>
-                <div className="flex items-center gap-2">
-                  <Select
-                    value={String(periodYear)}
-                    onValueChange={(v) => setPeriodYear(Number(v))}
-                  >
-                    <SelectTrigger className="w-[100px]">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {years.map((y) => (
-                        <SelectItem key={y} value={String(y)}>
-                          {y}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <Select
-                    value={String(periodMonth)}
-                    onValueChange={(v) => setPeriodMonth(Number(v))}
-                  >
-                    <SelectTrigger className="w-[120px]">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {months.map((m) => (
-                        <SelectItem key={m} value={String(m)}>
-                          {getPeriodLabel(current.year, m).split(" ")[0]}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handleRegenerateSchedule}
-                  >
-                    <RefreshCw className="mr-2 h-4 w-4" />
-                    Regenerate
-                  </Button>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Selected Month Detail */}
+          <Card>
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="text-base">
+                    {getPeriodLabel(periodYear, periodMonth)}
+                  </CardTitle>
+                  <CardDescription>
+                    Click any cell above to view that month
+                  </CardDescription>
                 </div>
               </div>
             </CardHeader>
