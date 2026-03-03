@@ -2026,16 +2026,25 @@ async function buildConsolidatedStatements(params: ConsolidatedStatementsParams)
     masterToEntityAccounts.set(m.master_account_id, existing);
   }
 
-  // Consolidate: For each master account, sum the GL balances of all mapped entity accounts
+  // Consolidate: For each master account, sum the GL balances of all mapped entity accounts.
+  // Auto-detect intercompany accounts by name pattern ("Due from ..." / "Due to ...")
+  // as a reliable fallback — the DB flag may not be set on legacy accounts.
   const consolidatedAccounts: AccountInfo[] = masterAccounts.map(
-    (ma: { id: string; name: string; account_number: string | null; classification: string; account_type: string; is_intercompany?: boolean }) => ({
-      id: ma.id,
-      name: ma.name,
-      accountNumber: ma.account_number,
-      classification: ma.classification,
-      accountType: ma.account_type,
-      isIntercompany: ma.is_intercompany ?? false,
-    })
+    (ma: { id: string; name: string; account_number: string | null; classification: string; account_type: string; is_intercompany?: boolean }) => {
+      const nameLower = ma.name.toLowerCase();
+      const isIC =
+        ma.is_intercompany === true ||
+        nameLower.startsWith("due from ") ||
+        nameLower.startsWith("due to ");
+      return {
+        id: ma.id,
+        name: ma.name,
+        accountNumber: ma.account_number,
+        classification: ma.classification,
+        accountType: ma.account_type,
+        isIntercompany: isIC,
+      };
+    }
   );
 
   const consolidatedBalances: RawGLBalance[] = [];
