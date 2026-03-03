@@ -488,8 +488,8 @@ export function StatementTable({
           {data.id === "cash_flow" && (() => {
             const summarySection = data.sections.find((s) => s.id === "cf-summary");
             const netChangeLine = summarySection?.lines.find((l) => l.id === "cf-net-change");
-            const beginningLine = summarySection?.subtotalLine; // hidden; carries beginning cash data
-            const endingLine = summarySection?.lines.find((l) => l.id === "cf-cash-end");
+            const beginningLine = summarySection?.lines.find((l) => l.id === "cf-cash-beginning");
+            const endingLine = summarySection?.subtotalLine;
             if (!netChangeLine || !beginningLine || !endingLine) return null;
 
             const hasImbalance = periods.some((p) => {
