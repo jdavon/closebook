@@ -274,19 +274,52 @@ export async function GET(request: Request) {
     excludeEntityId?: string
   ): { id: string; code: string; name: string } | null {
     const lower = counterpartyName.toLowerCase();
+
+    // Score-based matching: prefer exact and more-specific matches so that
+    // e.g. counterparty "Avon Rental Holdings" resolves to entity
+    // "Avon Rental Holdings" rather than a shorter entity like "Avon".
+    let bestMatch: { id: string; code: string; name: string } | null = null;
+    let bestScore = 0;
+
     for (const ent of entities) {
       if (excludeEntityId && ent.id === excludeEntityId) continue;
-      if (
-        ent.name.toLowerCase() === lower ||
-        ent.code.toLowerCase() === lower ||
-        ent.name.toLowerCase().includes(lower) ||
-        lower.includes(ent.name.toLowerCase()) ||
-        lower.includes(ent.code.toLowerCase())
-      ) {
-        return { id: ent.id, code: ent.code, name: ent.name };
+
+      const entName = ent.name.toLowerCase();
+      const entCode = ent.code.toLowerCase();
+      let score = 0;
+
+      // Exact name match — highest priority
+      if (entName === lower) {
+        score = 1000;
+      }
+      // Exact code match
+      else if (entCode === lower) {
+        score = 900;
+      }
+      // Entity name fully contains the counterparty name
+      // (e.g. entity "Two Family Enterprises" contains counterparty "Two Family")
+      // Prefer shorter entity names (closer to exact match)
+      else if (entName.includes(lower)) {
+        score = 800 - entName.length;
+      }
+      // Counterparty fully contains the entity name
+      // (e.g. counterparty "Avon Rental Holdings" contains entity "Avon")
+      // Prefer LONGER entity names (more specific match)
+      else if (lower.includes(entName)) {
+        score = 500 + entName.length;
+      }
+      // Counterparty contains entity code (min 3 chars to avoid false positives)
+      else if (entCode.length >= 3 && lower.includes(entCode)) {
+        score = 300 + entCode.length;
+      }
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestMatch = { id: ent.id, code: ent.code, name: ent.name };
       }
     }
-    return null;
+
+    return bestMatch;
   }
 
   // ---------------------------------------------------------------------------

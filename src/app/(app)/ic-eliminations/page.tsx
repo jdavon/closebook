@@ -403,6 +403,75 @@ function EliminationCheck({ pairs }: { pairs: ICEliminationPair[] }) {
             );
           })}
         </div>
+
+        {/* Grand total summary */}
+        {pairs.length > 1 && (
+          <div className="mx-4 mt-4 border-t-2 border-border pt-3">
+            <table className="w-full text-xs border-collapse">
+              <thead>
+                <tr className="border-b bg-muted/30">
+                  <th className="text-left px-3 py-1.5 font-medium text-muted-foreground">
+                    Grand Total
+                  </th>
+                  <th className="text-right px-3 py-1.5 font-medium text-muted-foreground w-[120px]">
+                    Due From
+                  </th>
+                  <th className="text-right px-3 py-1.5 font-medium text-muted-foreground w-[120px]">
+                    Due To
+                  </th>
+                  <th className="text-right px-3 py-1.5 font-medium text-muted-foreground w-[120px]">
+                    Net
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {(() => {
+                  const totalDueFrom = pairs.reduce(
+                    (s, p) => s + p.aDueFromB + p.bDueFromA,
+                    0
+                  );
+                  const totalDueTo = pairs.reduce(
+                    (s, p) => s + p.aDueToB + p.bDueToA,
+                    0
+                  );
+                  const totalNet = pairs.reduce(
+                    (s, p) => s + p.netEffect,
+                    0
+                  );
+                  const isNetBalanced = Math.abs(totalNet) < 0.01;
+                  return (
+                    <tr className="font-semibold">
+                      <td className="px-3 py-2">
+                        All pairs ({pairs.length})
+                      </td>
+                      <td className="text-right px-3 py-2 tabular-nums">
+                        {formatStatementAmount(totalDueFrom, true)}
+                      </td>
+                      <td className="text-right px-3 py-2 tabular-nums">
+                        {formatStatementAmount(-totalDueTo, true)}
+                      </td>
+                      <td
+                        className={`text-right px-3 py-2 tabular-nums font-bold ${
+                          isNetBalanced
+                            ? "text-green-600 dark:text-green-400"
+                            : "text-red-600 dark:text-red-400"
+                        }`}
+                      >
+                        {formatStatementAmount(totalNet)}
+                        {isNetBalanced && (
+                          <CheckCircle2 className="h-3.5 w-3.5 inline-block ml-1.5 -mt-0.5" />
+                        )}
+                        {!isNetBalanced && (
+                          <AlertTriangle className="h-3.5 w-3.5 inline-block ml-1.5 -mt-0.5" />
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })()}
+              </tbody>
+            </table>
+          </div>
+        )}
       </CardContent>
     </Card>
   );

@@ -2270,6 +2270,187 @@ async function buildConsolidatedStatements(params: ConsolidatedStatementsParams)
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Intercompany elimination — BALANCE SHEET
+  // ---------------------------------------------------------------------------
+  // Remove individual "Due From" (asset) and "Due To" (liability) IC accounts.
+  // In a perfect consolidation these cancel to $0.  Any residual is split by
+  // sign per bucket: positive (net receivable) → Asset side, negative (net
+  // payable) → Liability side.  This avoids showing negative values on either
+  // side of the balance sheet.
+  const icBSAccounts = consolidatedAccounts.filter(
+    (a) =>
+      a.isIntercompany &&
+      (a.classification === "Asset" || a.classification === "Liability")
+  );
+  const icBSIds = new Set(icBSAccounts.map((a) => a.id));
+
+  if (icBSIds.size > 0) {
+    const bsNetEnding: Record<string, number> = {};
+    const bsNetBeginning: Record<string, number> = {};
+    const pyBsNetEnding: Record<string, number> = {};
+    const pyBsNetBeginning: Record<string, number> = {};
+
+    for (const bucket of buckets) {
+      bsNetEnding[bucket.key] = 0;
+      bsNetBeginning[bucket.key] = 0;
+      pyBsNetEnding[bucket.key] = 0;
+      pyBsNetBeginning[bucket.key] = 0;
+    }
+
+    for (const account of icBSAccounts) {
+      const bucketed = aggregated.get(account.id);
+      if (bucketed) {
+        for (const key of Object.keys(bucketed.endingBalance)) {
+          // Sum raw GL-sign values.  Assets (debit-normal) are positive,
+          // liabilities (credit-normal) are negative.  A balanced pair
+          // cancels to zero.
+          bsNetEnding[key] = (bsNetEnding[key] ?? 0) + bucketed.endingBalance[key];
+          bsNetBeginning[key] = (bsNetBeginning[key] ?? 0) + bucketed.beginningBalance[key];
+        }
+      }
+      if (pyAggregated) {
+        const pyBucketed = pyAggregated.get(account.id);
+        if (pyBucketed) {
+          for (const key of Object.keys(pyBucketed.endingBalance)) {
+            pyBsNetEnding[key] = (pyBsNetEnding[key] ?? 0) + pyBucketed.endingBalance[key];
+            pyBsNetBeginning[key] = (pyBsNetBeginning[key] ?? 0) + pyBucketed.beginningBalance[key];
+          }
+        }
+      }
+    }
+
+    // Remove individual IC balance sheet accounts
+    for (const accountId of icBSIds) {
+      aggregated.delete(accountId);
+      pyAggregated?.delete(accountId);
+    }
+    const keptBS = consolidatedAccounts.filter((a) => !icBSIds.has(a.id));
+    consolidatedAccounts.length = 0;
+    consolidatedAccounts.push(...keptBS);
+
+    // Split the net IC balance per bucket: positive amounts (net receivable)
+    // go on the Asset side, negative amounts (net payable) go on the
+    // Liability side.  This avoids showing a negative asset or a negative
+    // liability — each side only carries its natural-sign residual.
+    const assetEnding: Record<string, number> = {};
+    const assetBeginning: Record<string, number> = {};
+    const liabEnding: Record<string, number> = {};
+    const liabBeginning: Record<string, number> = {};
+    const pyAssetEnding: Record<string, number> = {};
+    const pyAssetBeginning: Record<string, number> = {};
+    const pyLiabEnding: Record<string, number> = {};
+    const pyLiabBeginning: Record<string, number> = {};
+
+    for (const key of Object.keys(bsNetEnding)) {
+      // Positive net = debit (asset-like), negative net = credit (liability-like)
+      if (bsNetEnding[key] >= 0) {
+        assetEnding[key] = bsNetEnding[key];
+        liabEnding[key] = 0;
+      } else {
+        assetEnding[key] = 0;
+        liabEnding[key] = bsNetEnding[key]; // stays negative (GL credit convention)
+      }
+      if (bsNetBeginning[key] >= 0) {
+        assetBeginning[key] = bsNetBeginning[key];
+        liabBeginning[key] = 0;
+      } else {
+        assetBeginning[key] = 0;
+        liabBeginning[key] = bsNetBeginning[key];
+      }
+    }
+    for (const key of Object.keys(pyBsNetEnding)) {
+      if (pyBsNetEnding[key] >= 0) {
+        pyAssetEnding[key] = pyBsNetEnding[key];
+        pyLiabEnding[key] = 0;
+      } else {
+        pyAssetEnding[key] = 0;
+        pyLiabEnding[key] = pyBsNetEnding[key];
+      }
+      if (pyBsNetBeginning[key] >= 0) {
+        pyAssetBeginning[key] = pyBsNetBeginning[key];
+        pyLiabBeginning[key] = 0;
+      } else {
+        pyAssetBeginning[key] = 0;
+        pyLiabBeginning[key] = pyBsNetBeginning[key];
+      }
+    }
+
+    // Inject asset-side synthetic if any bucket has a positive residual
+    const hasAssetEffect =
+      Object.values(assetEnding).some((v) => Math.abs(v) >= 0.005) ||
+      Object.values(pyAssetEnding).some((v) => Math.abs(v) >= 0.005);
+
+    if (hasAssetEffect) {
+      const syntheticAssetId = "__intercompany_bs_net_asset__";
+      consolidatedAccounts.push({
+        id: syntheticAssetId,
+        name: "Intercompany Eliminations, Net",
+        accountNumber: null,
+        classification: "Asset",
+        accountType: "Other Current Asset",
+        isIntercompany: false,
+      });
+      const assetNetChange: Record<string, number> = {};
+      for (const key of Object.keys(assetEnding)) {
+        assetNetChange[key] = assetEnding[key] - (assetBeginning[key] ?? 0);
+      }
+      aggregated.set(syntheticAssetId, {
+        netChange: assetNetChange,
+        endingBalance: { ...assetEnding },
+        beginningBalance: { ...assetBeginning },
+      });
+      if (pyAggregated) {
+        const pyAssetNetChange: Record<string, number> = {};
+        for (const key of Object.keys(pyAssetEnding)) {
+          pyAssetNetChange[key] = pyAssetEnding[key] - (pyAssetBeginning[key] ?? 0);
+        }
+        pyAggregated.set(syntheticAssetId, {
+          netChange: pyAssetNetChange,
+          endingBalance: { ...pyAssetEnding },
+          beginningBalance: { ...pyAssetBeginning },
+        });
+      }
+    }
+
+    // Inject liability-side synthetic if any bucket has a negative residual
+    const hasLiabEffect =
+      Object.values(liabEnding).some((v) => Math.abs(v) >= 0.005) ||
+      Object.values(pyLiabEnding).some((v) => Math.abs(v) >= 0.005);
+
+    if (hasLiabEffect) {
+      const syntheticLiabId = "__intercompany_bs_net_liab__";
+      consolidatedAccounts.push({
+        id: syntheticLiabId,
+        name: "Intercompany Eliminations, Net",
+        accountNumber: null,
+        classification: "Liability",
+        accountType: "Other Current Liability",
+        isIntercompany: false,
+      });
+      const liabNetChange: Record<string, number> = {};
+      for (const key of Object.keys(liabEnding)) {
+        liabNetChange[key] = liabEnding[key] - (liabBeginning[key] ?? 0);
+      }
+      aggregated.set(syntheticLiabId, {
+        netChange: liabNetChange,
+        endingBalance: { ...liabEnding },
+        beginningBalance: { ...liabBeginning },
+      });
+      if (pyAggregated) {
+        const pyLiabNetChange: Record<string, number> = {};
+        for (const key of Object.keys(pyLiabEnding)) {
+          pyLiabNetChange[key] = pyLiabEnding[key] - (pyLiabBeginning[key] ?? 0);
+        }
+        pyAggregated.set(syntheticLiabId, {
+          netChange: pyLiabNetChange,
+          endingBalance: { ...pyLiabEnding },
+          beginningBalance: { ...pyLiabBeginning },
+        });
+      }
+    }
+  }
+
   // Budget data
   let consolidatedBudgetByAccount: Map<string, Record<string, number>> | undefined;
 
