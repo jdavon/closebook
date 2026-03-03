@@ -48,6 +48,9 @@ export default function LeaseFromPDFPage() {
   // Editable overrides — user can change extracted values
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [overrides, setOverrides] = useState<Record<string, any>>({});
+  // Escalation overrides keyed by index
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [escOverrides, setEscOverrides] = useState<Record<number, Record<string, any>>>({});
 
   function getVal(key: string) {
     if (key in overrides) return overrides[key];
@@ -56,6 +59,42 @@ export default function LeaseFromPDFPage() {
 
   function setVal(key: string, value: unknown) {
     setOverrides((prev) => ({ ...prev, [key]: value }));
+  }
+
+  function getEsc(index: number) {
+    const base = extractedData?.escalations?.[index] || {};
+    return { ...base, ...escOverrides[index] };
+  }
+
+  function setEscVal(index: number, key: string, value: unknown) {
+    setEscOverrides((prev) => ({
+      ...prev,
+      [index]: { ...prev[index], [key]: value },
+    }));
+  }
+
+  /** Update escalation: when user enters a dollar amount, compute percentage (and vice versa) */
+  function handleEscAmountChange(index: number, amount: number | null) {
+    const baseRent = getVal("base_rent_monthly") as number | null;
+    setEscVal(index, "amount_increase", amount);
+    if (amount != null && baseRent && baseRent > 0) {
+      setEscVal(index, "percentage_increase", amount / (baseRent * 12));
+      setEscVal(index, "escalation_type", "fixed_amount");
+    } else if (amount == null) {
+      setEscVal(index, "percentage_increase", null);
+    }
+  }
+
+  function handleEscPercentChange(index: number, pctDisplay: number | null) {
+    const baseRent = getVal("base_rent_monthly") as number | null;
+    const pctDecimal = pctDisplay != null ? pctDisplay / 100 : null;
+    setEscVal(index, "percentage_increase", pctDecimal);
+    if (pctDecimal != null && baseRent && baseRent > 0) {
+      setEscVal(index, "amount_increase", Math.round(pctDecimal * baseRent * 12 * 100) / 100);
+      setEscVal(index, "escalation_type", "fixed_percentage");
+    } else if (pctDecimal == null) {
+      setEscVal(index, "amount_increase", null);
+    }
   }
 
   async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
@@ -75,6 +114,7 @@ export default function LeaseFromPDFPage() {
     setExtracting(true);
     setExtractedData(null);
     setOverrides({});
+    setEscOverrides({});
 
     try {
       // 1. Get a signed upload URL from the server (uses admin client, bypasses RLS)
@@ -235,9 +275,10 @@ export default function LeaseFromPDFPage() {
         return;
       }
 
-      // 3. Insert escalations
-      const escalations = extractedData.escalations || [];
-      for (const esc of escalations) {
+      // 3. Insert escalations (with user overrides applied)
+      const rawEscalations = extractedData.escalations || [];
+      for (let i = 0; i < rawEscalations.length; i++) {
+        const esc = getEsc(i);
         if (esc.effective_date) {
           await supabase.from("lease_escalations").insert({
             lease_id: lease.id,
@@ -297,13 +338,16 @@ export default function LeaseFromPDFPage() {
             rent_abatement_months: getVal("rent_abatement_months") || 0,
             rent_abatement_amount: getVal("rent_abatement_amount") || 0,
           },
-          escalations.map((esc: Record<string, unknown>) => ({
-            escalation_type: (esc.escalation_type as string) || "fixed_percentage",
-            effective_date: esc.effective_date as string,
-            percentage_increase: esc.percentage_increase as number | null,
-            amount_increase: esc.amount_increase as number | null,
-            frequency: (esc.frequency as string) || "annual",
-          }))
+          rawEscalations.map((_: unknown, i: number) => {
+            const esc = getEsc(i);
+            return {
+              escalation_type: (esc.escalation_type as string) || "fixed_percentage",
+              effective_date: esc.effective_date as string,
+              percentage_increase: esc.percentage_increase as number | null,
+              amount_increase: esc.amount_increase as number | null,
+              frequency: (esc.frequency as string) || "annual",
+            };
+          })
         );
 
         if (schedule.length > 0) {
@@ -504,6 +548,7 @@ export default function LeaseFromPDFPage() {
                 onClick={() => {
                   setExtractedData(null);
                   setOverrides({});
+                  setEscOverrides({});
                 }}
               >
                 <X className="mr-2 h-4 w-4" />
@@ -559,33 +604,76 @@ export default function LeaseFromPDFPage() {
                     <TableRow>
                       <TableHead>Type</TableHead>
                       <TableHead>Effective Date</TableHead>
-                      <TableHead>Increase</TableHead>
+                      <TableHead>$ Increase (annual)</TableHead>
+                      <TableHead>% Increase</TableHead>
                       <TableHead>Frequency</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {extractedData.escalations.map(
-                      (esc: Record<string, unknown>, i: number) => (
-                        <TableRow key={i}>
-                          <TableCell className="capitalize">
-                            {String(esc.escalation_type || "").replace(/_/g, " ")}
-                          </TableCell>
-                          <TableCell>{esc.effective_date as string}</TableCell>
-                          <TableCell className="tabular-nums">
-                            {esc.percentage_increase != null
-                              ? `${((esc.percentage_increase as number) * 100).toFixed(1)}%`
-                              : esc.amount_increase != null
-                              ? formatCurrency(esc.amount_increase as number)
-                              : "CPI"}
-                          </TableCell>
-                          <TableCell className="capitalize">
-                            {String(esc.frequency || "annual").replace(/_/g, " ")}
-                          </TableCell>
-                        </TableRow>
-                      )
+                      (_esc: Record<string, unknown>, i: number) => {
+                        const esc = getEsc(i);
+                        return (
+                          <TableRow key={i}>
+                            <TableCell className="capitalize">
+                              {String(esc.escalation_type || "").replace(/_/g, " ")}
+                            </TableCell>
+                            <TableCell>
+                              <Input
+                                type="date"
+                                value={esc.effective_date || ""}
+                                onChange={(e) => setEscVal(i, "effective_date", e.target.value || null)}
+                                className="h-8 text-sm w-36"
+                              />
+                            </TableCell>
+                            <TableCell>
+                              <Input
+                                type="number"
+                                step="0.01"
+                                placeholder="$"
+                                value={esc.amount_increase ?? ""}
+                                onChange={(e) =>
+                                  handleEscAmountChange(
+                                    i,
+                                    e.target.value === "" ? null : parseFloat(e.target.value)
+                                  )
+                                }
+                                className="h-8 text-sm w-28 tabular-nums"
+                              />
+                            </TableCell>
+                            <TableCell>
+                              <Input
+                                type="number"
+                                step="0.1"
+                                placeholder="%"
+                                value={
+                                  esc.percentage_increase != null
+                                    ? Math.round(esc.percentage_increase * 100 * 1000) / 1000
+                                    : ""
+                                }
+                                onChange={(e) =>
+                                  handleEscPercentChange(
+                                    i,
+                                    e.target.value === "" ? null : parseFloat(e.target.value)
+                                  )
+                                }
+                                className="h-8 text-sm w-24 tabular-nums"
+                              />
+                            </TableCell>
+                            <TableCell className="capitalize">
+                              {String(esc.frequency || "annual").replace(/_/g, " ")}
+                            </TableCell>
+                          </TableRow>
+                        );
+                      }
                     )}
                   </TableBody>
                 </Table>
+                {!getVal("base_rent_monthly") && (
+                  <p className="text-xs text-muted-foreground mt-2">
+                    Set base rent above to auto-convert between $ and % increases.
+                  </p>
+                )}
               </CardContent>
             </Card>
           )}
