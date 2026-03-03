@@ -45,7 +45,7 @@ export function StatementCard({
   onCellClick,
 }: StatementCardProps) {
   return (
-    <div className={pageBreak ? "stmt-page-break" : undefined}>
+    <div className={`stmt-single-page${pageBreak ? " stmt-page-break" : ""}`}>
       <Card>
         <CardContent className="pt-2 pb-6 px-4">
           <StatementHeader

@@ -1278,15 +1278,37 @@ function buildCashFlowStatement(
   accounts: AccountInfo[],
   aggregated: Map<string, BucketedAmounts>,
   buckets: PeriodBucket[],
-  depreciationByBucket: Record<string, number>,
   netIncomeByBucket: Record<string, number>,
   pyAggregated?: Map<string, BucketedAmounts>,
-  pyDepreciationByBucket?: Record<string, number>,
   pyNetIncomeByBucket?: Record<string, number>,
   supplementalEntries?: CashFlowSupplementalEntry[]
 ): StatementData {
   const sections: StatementSection[] = [];
   const hasPY = !!pyAggregated;
+
+  // --- Compute D&A from GL expense accounts ---
+  // Depreciation/amortization expense accounts are identified by name pattern.
+  // Their netChange (debit-normal, positive) is the non-cash expense to add back.
+  const daAccounts = accounts.filter((a) => {
+    if (a.classification !== "Expense") return false;
+    const nameLower = a.name.toLowerCase();
+    return nameLower.includes("depreciation") || nameLower.includes("amortization");
+  });
+
+  const depreciationByBucket: Record<string, number> = {};
+  const pyDepreciationByBucket: Record<string, number> = {};
+  for (const bucket of buckets) {
+    let total = 0;
+    let pyTotal = 0;
+    for (const acct of daAccounts) {
+      total += aggregated.get(acct.id)?.netChange[bucket.key] ?? 0;
+      if (hasPY) {
+        pyTotal += pyAggregated!.get(acct.id)?.netChange[bucket.key] ?? 0;
+      }
+    }
+    depreciationByBucket[bucket.key] = total;
+    pyDepreciationByBucket[bucket.key] = pyTotal;
+  }
 
   // --- OPERATING ACTIVITIES ---
   const operatingLines: LineItem[] = [];
@@ -1323,7 +1345,7 @@ function buildCashFlowStatement(
     id: "cf-depreciation",
     label: "Depreciation and amortization",
     amounts: { ...depreciationByBucket },
-    priorYearAmounts: hasPY ? { ...pyDepreciationByBucket! } : undefined,
+    priorYearAmounts: hasPY ? { ...pyDepreciationByBucket } : undefined,
     indent: 1,
     isTotal: false,
     isGrandTotal: false,
@@ -1539,8 +1561,13 @@ function buildCashFlowStatement(
   const financingLiabilities = accounts.filter((a) =>
     FINANCING_LIABILITY_TYPES.includes(a.accountType)
   );
-  const financingEquity = accounts.filter((a) =>
-    FINANCING_EQUITY_TYPES.includes(a.accountType)
+  // Exclude Retained Earnings from financing — its balance change represents
+  // accumulated net income, which is already the starting point of operating
+  // activities.  Including it here would double-count net income.
+  const financingEquity = accounts.filter(
+    (a) =>
+      FINANCING_EQUITY_TYPES.includes(a.accountType) &&
+      !a.name.toLowerCase().includes("retained earnings")
   );
   const financingLines: LineItem[] = [];
   const financingTotal: Record<string, number> = {};
@@ -2140,62 +2167,6 @@ async function buildConsolidatedStatements(params: ConsolidatedStatementsParams)
     }
   }
 
-  // Depreciation
-  const depreciationByBucket: Record<string, number> = {};
-  const pyDepreciationByBucket: Record<string, number> = {};
-  for (const bucket of buckets) {
-    depreciationByBucket[bucket.key] = 0;
-    pyDepreciationByBucket[bucket.key] = 0;
-  }
-
-  if (entityIds.length > 0) {
-    const { data: assetIds } = await admin
-      .from("fixed_assets")
-      .select("id")
-      .in("entity_id", entityIds);
-
-    const ids = (assetIds ?? []).map((a: { id: string }) => a.id);
-    if (ids.length > 0) {
-      const uniqueYears = [
-        ...new Set(buckets.flatMap((b) => b.months.map((m) => m.year))),
-      ];
-      const allDepYears = includeYoY
-        ? [...new Set([...uniqueYears, ...uniqueYears.map((y) => y - 1)])]
-        : uniqueYears;
-
-      const { data: depRows } = await admin
-        .from("fixed_asset_depreciation")
-        .select("period_year, period_month, book_depreciation")
-        .in("fixed_asset_id", ids)
-        .in("period_year", allDepYears);
-
-      for (const bucket of buckets) {
-        const mSet = new Set(
-          bucket.months.map((m) => `${m.year}-${m.month}`)
-        );
-        for (const row of depRows ?? []) {
-          if (mSet.has(`${row.period_year}-${row.period_month}`)) {
-            depreciationByBucket[bucket.key] += Number(row.book_depreciation);
-          }
-        }
-      }
-
-      if (includeYoY) {
-        const pyBuckets = createPriorYearBuckets(buckets);
-        for (const bucket of pyBuckets) {
-          const mSet = new Set(
-            bucket.months.map((m) => `${m.year}-${m.month}`)
-          );
-          for (const row of depRows) {
-            if (mSet.has(`${row.period_year}-${row.period_month}`)) {
-              pyDepreciationByBucket[bucket.key] += Number(row.book_depreciation);
-            }
-          }
-        }
-      }
-    }
-  }
-
   // Budget data
   let consolidatedBudgetByAccount: Map<string, Record<string, number>> | undefined;
 
@@ -2302,10 +2273,8 @@ async function buildConsolidatedStatements(params: ConsolidatedStatementsParams)
     consolidatedAccounts,
     aggregated,
     buckets,
-    depreciationByBucket,
     netIncomeByBucket,
     includeYoY ? pyAggregated : undefined,
-    includeYoY ? pyDepreciationByBucket : undefined,
     includeYoY ? pyNetIncomeByBucket : undefined,
     cfSupplementalEntries.length > 0 ? cfSupplementalEntries : undefined
   );
@@ -2659,73 +2628,6 @@ export async function GET(request: Request) {
       }
     }
 
-    // Get depreciation data for cash flow
-    const depreciationByBucket: Record<string, number> = {};
-    const pyDepreciationByBucket: Record<string, number> = {};
-    {
-      // Paginated to avoid PostgREST row-limit truncation
-      const assetIds = await fetchAllPaginated<any>((offset, limit) =>
-        admin
-          .from("fixed_assets")
-          .select("id")
-          .eq("entity_id", entityId!)
-          .range(offset, offset + limit - 1)
-      );
-
-      const ids = assetIds.map((a) => a.id);
-      for (const bucket of buckets) {
-        depreciationByBucket[bucket.key] = 0;
-        pyDepreciationByBucket[bucket.key] = 0;
-      }
-
-      if (ids.length > 0) {
-        const uniqueYears = [
-          ...new Set(buckets.flatMap((b) => b.months.map((m) => m.year))),
-        ];
-        // Include prior years for YoY depreciation
-        const allDepYears = includeYoY
-          ? [...new Set([...uniqueYears, ...uniqueYears.map((y) => y - 1)])]
-          : uniqueYears;
-
-        // Paginated: assets × years × 12 months can exceed 1000 rows
-        const depRows = await fetchAllPaginated<any>((offset, limit) =>
-          admin
-            .from("fixed_asset_depreciation")
-            .select("period_year, period_month, book_depreciation")
-            .in("fixed_asset_id", ids)
-            .in("period_year", allDepYears)
-            .range(offset, offset + limit - 1)
-        );
-
-        // Aggregate into buckets
-        for (const bucket of buckets) {
-          const monthSet = new Set(
-            bucket.months.map((m) => `${m.year}-${m.month}`)
-          );
-          for (const row of depRows) {
-            if (monthSet.has(`${row.period_year}-${row.period_month}`)) {
-              depreciationByBucket[bucket.key] += Number(row.book_depreciation);
-            }
-          }
-        }
-
-        // Prior year depreciation
-        if (includeYoY) {
-          const pyBuckets = createPriorYearBuckets(buckets);
-          for (const bucket of pyBuckets) {
-            const monthSet = new Set(
-              bucket.months.map((m) => `${m.year}-${m.month}`)
-            );
-            for (const row of depRows) {
-              if (monthSet.has(`${row.period_year}-${row.period_month}`)) {
-                pyDepreciationByBucket[bucket.key] += Number(row.book_depreciation);
-              }
-            }
-          }
-        }
-      }
-    }
-
     // --------------- Budget data (entity scope) ---------------
     let budgetByAccount: Map<string, Record<string, number>> | undefined;
 
@@ -2844,10 +2746,8 @@ export async function GET(request: Request) {
       consolidatedAccounts,
       aggregated,
       buckets,
-      depreciationByBucket,
       netIncomeByBucket,
       includeYoY ? pyAggregated : undefined,
-      includeYoY ? pyDepreciationByBucket : undefined,
       includeYoY ? pyNetIncomeByBucket : undefined,
       entityCfSupplementalEntries.length > 0 ? entityCfSupplementalEntries : undefined
     );

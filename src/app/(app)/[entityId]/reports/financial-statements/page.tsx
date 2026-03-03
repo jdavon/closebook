@@ -9,6 +9,7 @@ import { StatementCard } from "@/components/financial-statements/statement-card"
 import { ConfigToolbar } from "@/components/financial-statements/config-toolbar";
 import { useFinancialStatements } from "@/components/financial-statements/use-financial-statements";
 import { filterForEbitdaOnly } from "@/components/financial-statements/format-utils";
+import { usePrintFitToPage } from "@/components/financial-statements/use-print-fit-to-page";
 import type {
   Granularity,
   StatementTab,
@@ -49,6 +50,7 @@ export default function FinancialStatementsPage() {
   };
 
   const { data, loading, error } = useFinancialStatements(config);
+  usePrintFitToPage();
 
   function buildExportUrl(statements: StatementTab) {
     const exportParams = new URLSearchParams({

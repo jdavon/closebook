@@ -19,6 +19,7 @@ import { useFinancialStatements } from "@/components/financial-statements/use-fi
 import { useDrillDown } from "@/components/financial-statements/use-drill-down";
 import { DrillDownDialog } from "@/components/financial-statements/drill-down-dialog";
 import { filterForEbitdaOnly } from "@/components/financial-statements/format-utils";
+import { usePrintFitToPage } from "@/components/financial-statements/use-print-fit-to-page";
 import { ProFormaTab } from "@/components/financial-statements/pro-forma-tab";
 import { ProFormaDetailSchedule } from "@/components/financial-statements/pro-forma-detail-schedule";
 import { AllocationTab } from "@/components/financial-statements/allocation-tab";
@@ -198,6 +199,7 @@ export default function FinancialModelPage() {
 
   const { data, loading, error } = useFinancialStatements(config, !!canFetch);
   const drillDown = useDrillDown(config);
+  usePrintFitToPage();
 
   function handleCellClick(statementId: string) {
     return (

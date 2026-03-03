@@ -381,7 +381,14 @@
     gap: 0 !important;
   }
 
-  /* Page break support */
+  /* ---- Page break / fit-to-page support ---- */
+
+  /* Each statement occupies its own page */
+  .stmt-single-page {
+    page-break-inside: avoid;
+  }
+
+  /* Subsequent statements start on a new page */
   .stmt-page-break {
     page-break-before: always;
   }
@@ -454,9 +461,12 @@
     padding-top: 0.25rem !important;
     padding-bottom: 0.25rem !important;
   }
-  /* Disable page breaks between statements */
+  /* Disable page breaks between statements in compact mode */
   .stmt-print-compact .stmt-page-break {
     page-break-before: auto;
+  }
+  .stmt-print-compact .stmt-single-page {
+    page-break-inside: auto;
   }
 
   /* ---- Pro Forma Detail Schedule (print) ---- */
