@@ -23,7 +23,7 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
-import { ArrowLeft, Upload, RefreshCw, Check, X } from "lucide-react";
+import { ArrowLeft, Upload, RefreshCw, Check, X, Plus, Trash2 } from "lucide-react";
 import { formatCurrency } from "@/lib/utils/dates";
 import { generateLeasePaymentSchedule } from "@/lib/utils/lease-payments";
 import type { PropertyTaxFrequency } from "@/lib/types/database";
@@ -95,6 +95,41 @@ export default function LeaseFromPDFPage() {
     } else if (pctDecimal == null) {
       setEscVal(index, "amount_increase", null);
     }
+  }
+
+  function addEscalation() {
+    if (!extractedData) return;
+    const newEsc = {
+      escalation_type: "fixed_amount",
+      effective_date: "",
+      percentage_increase: null,
+      amount_increase: null,
+      frequency: "annual",
+    };
+    setExtractedData((prev) =>
+      prev ? { ...prev, escalations: [...(prev.escalations || []), newEsc] } : prev
+    );
+  }
+
+  function removeEscalation(index: number) {
+    if (!extractedData) return;
+    setExtractedData((prev) => {
+      if (!prev) return prev;
+      const updated = [...(prev.escalations || [])];
+      updated.splice(index, 1);
+      return { ...prev, escalations: updated };
+    });
+    // Re-key overrides: shift all overrides above the removed index down
+    setEscOverrides((prev) => {
+      const next: Record<number, Record<string, unknown>> = {};
+      for (const [k, v] of Object.entries(prev)) {
+        const ki = Number(k);
+        if (ki < index) next[ki] = v;
+        else if (ki > index) next[ki - 1] = v;
+        // ki === index is removed
+      }
+      return next;
+    });
   }
 
   async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
@@ -590,93 +625,114 @@ export default function LeaseFromPDFPage() {
             ))}
           </div>
 
-          {/* Extracted arrays */}
-          {extractedData.escalations?.length > 0 && (
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-base">
-                  Escalations ({extractedData.escalations.length})
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Type</TableHead>
-                      <TableHead>Effective Date</TableHead>
-                      <TableHead>$ Increase (annual)</TableHead>
-                      <TableHead>% Increase</TableHead>
-                      <TableHead>Frequency</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {extractedData.escalations.map(
-                      (_esc: Record<string, unknown>, i: number) => {
-                        const esc = getEsc(i);
-                        return (
-                          <TableRow key={i}>
-                            <TableCell className="capitalize">
-                              {String(esc.escalation_type || "").replace(/_/g, " ")}
-                            </TableCell>
-                            <TableCell>
-                              <Input
-                                type="date"
-                                value={esc.effective_date || ""}
-                                onChange={(e) => setEscVal(i, "effective_date", e.target.value || null)}
-                                className="h-8 text-sm w-36"
-                              />
-                            </TableCell>
-                            <TableCell>
-                              <Input
-                                type="number"
-                                step="0.01"
-                                placeholder="$"
-                                value={esc.amount_increase ?? ""}
-                                onChange={(e) =>
-                                  handleEscAmountChange(
-                                    i,
-                                    e.target.value === "" ? null : parseFloat(e.target.value)
-                                  )
-                                }
-                                className="h-8 text-sm w-28 tabular-nums"
-                              />
-                            </TableCell>
-                            <TableCell>
-                              <Input
-                                type="number"
-                                step="0.1"
-                                placeholder="%"
-                                value={
-                                  esc.percentage_increase != null
-                                    ? Math.round(esc.percentage_increase * 100 * 1000) / 1000
-                                    : ""
-                                }
-                                onChange={(e) =>
-                                  handleEscPercentChange(
-                                    i,
-                                    e.target.value === "" ? null : parseFloat(e.target.value)
-                                  )
-                                }
-                                className="h-8 text-sm w-24 tabular-nums"
-                              />
-                            </TableCell>
-                            <TableCell className="capitalize">
-                              {String(esc.frequency || "annual").replace(/_/g, " ")}
-                            </TableCell>
-                          </TableRow>
-                        );
-                      }
-                    )}
-                  </TableBody>
-                </Table>
-                {!getVal("base_rent_monthly") && (
-                  <p className="text-xs text-muted-foreground mt-2">
-                    Set base rent above to auto-convert between $ and % increases.
-                  </p>
-                )}
-              </CardContent>
-            </Card>
-          )}
+          {/* Escalations — always show so user can add manually */}
+          <Card>
+            <CardHeader className="pb-3 flex flex-row items-center justify-between">
+              <CardTitle className="text-base">
+                Escalations ({extractedData.escalations?.length || 0})
+              </CardTitle>
+              <Button variant="outline" size="sm" onClick={addEscalation}>
+                <Plus className="mr-1 h-3.5 w-3.5" />
+                Add
+              </Button>
+            </CardHeader>
+            <CardContent>
+              {(extractedData.escalations?.length || 0) > 0 ? (
+                <>
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Type</TableHead>
+                        <TableHead>Effective Date</TableHead>
+                        <TableHead>$ Increase (annual)</TableHead>
+                        <TableHead>% Increase</TableHead>
+                        <TableHead>Frequency</TableHead>
+                        <TableHead className="w-10" />
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {extractedData.escalations.map(
+                        (_esc: Record<string, unknown>, i: number) => {
+                          const esc = getEsc(i);
+                          return (
+                            <TableRow key={i}>
+                              <TableCell className="capitalize">
+                                {String(esc.escalation_type || "").replace(/_/g, " ")}
+                              </TableCell>
+                              <TableCell>
+                                <Input
+                                  type="date"
+                                  value={esc.effective_date || ""}
+                                  onChange={(e) => setEscVal(i, "effective_date", e.target.value || null)}
+                                  className="h-8 text-sm w-36"
+                                />
+                              </TableCell>
+                              <TableCell>
+                                <Input
+                                  type="number"
+                                  step="0.01"
+                                  placeholder="$"
+                                  value={esc.amount_increase ?? ""}
+                                  onChange={(e) =>
+                                    handleEscAmountChange(
+                                      i,
+                                      e.target.value === "" ? null : parseFloat(e.target.value)
+                                    )
+                                  }
+                                  className="h-8 text-sm w-28 tabular-nums"
+                                />
+                              </TableCell>
+                              <TableCell>
+                                <Input
+                                  type="number"
+                                  step="0.1"
+                                  placeholder="%"
+                                  value={
+                                    esc.percentage_increase != null
+                                      ? Math.round(esc.percentage_increase * 100 * 1000) / 1000
+                                      : ""
+                                  }
+                                  onChange={(e) =>
+                                    handleEscPercentChange(
+                                      i,
+                                      e.target.value === "" ? null : parseFloat(e.target.value)
+                                    )
+                                  }
+                                  className="h-8 text-sm w-24 tabular-nums"
+                                />
+                              </TableCell>
+                              <TableCell className="capitalize">
+                                {String(esc.frequency || "annual").replace(/_/g, " ")}
+                              </TableCell>
+                              <TableCell>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                                  onClick={() => removeEscalation(i)}
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </Button>
+                              </TableCell>
+                            </TableRow>
+                          );
+                        }
+                      )}
+                    </TableBody>
+                  </Table>
+                  {!getVal("base_rent_monthly") && (
+                    <p className="text-xs text-muted-foreground mt-2">
+                      Set base rent above to auto-convert between $ and % increases.
+                    </p>
+                  )}
+                </>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  No escalations extracted. Click Add to create one.
+                </p>
+              )}
+            </CardContent>
+          </Card>
 
           {extractedData.options?.length > 0 && (
             <Card>
