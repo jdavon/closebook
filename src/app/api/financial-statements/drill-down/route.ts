@@ -162,6 +162,15 @@ export async function GET(request: Request) {
     );
   }
 
+  // Fetch fiscal year end month for YTD→monthly conversion
+  const { data: fyEntity } = await admin
+    .from("entities")
+    .select("fiscal_year_end_month")
+    .eq("id", scopeEntityIds[0])
+    .single();
+  const fyEndMonth = fyEntity?.fiscal_year_end_month ?? 12;
+  const fiscalYearStartMonth = (fyEndMonth % 12) + 1;
+
   // ---------------------------------------------------------------------------
   // Parse lineId to determine what to drill into
   // ---------------------------------------------------------------------------
@@ -325,6 +334,22 @@ export async function GET(request: Request) {
     targetMonths.map((m) => `${m.year}-${String(m.month).padStart(2, "0")}`)
   );
 
+  // Compute prior months needed for YTD→monthly conversion.
+  // QBO stores cumulative YTD in ending_balance/net_change for P&L accounts,
+  // so we need the prior month's ending_balance to derive standalone monthly amounts.
+  const priorMonths: Array<{ year: number; month: number }> = [];
+  for (const m of targetMonths) {
+    const pm = m.month === 1 ? 12 : m.month - 1;
+    const py = m.month === 1 ? m.year - 1 : m.year;
+    const key = `${py}-${String(pm).padStart(2, "0")}`;
+    if (!monthSet.has(key)) {
+      priorMonths.push({ year: py, month: pm });
+    }
+  }
+  const glQueryMonths = [...targetMonths, ...priorMonths];
+  const glQueryYears = [...new Set(glQueryMonths.map((m) => m.year))];
+  const glQueryMonthNums = [...new Set(glQueryMonths.map((m) => m.month))];
+
   // Build mapping lookup: account_id -> { master_account_id, entity_id }
   const accountToMapping = new Map<string, { master_account_id: string; entity_id: string }>();
   for (const m of mappings ?? []) {
@@ -414,17 +439,27 @@ export async function GET(request: Request) {
   }
 
   // --- Actual column: fetch GL balances ---
+  // Query includes prior months for YTD→monthly conversion
   const glRows = await fetchAllPaginated<any>((offset, limit) =>
     admin
       .from("gl_balances")
       .select("account_id, entity_id, period_year, period_month, beginning_balance, ending_balance, net_change")
       .in("account_id", mappedAccountIds)
-      .in("period_year", uniqueYears)
-      .in("period_month", uniqueMonthNums)
+      .in("period_year", glQueryYears)
+      .in("period_month", glQueryMonthNums)
       .range(offset, offset + limit - 1)
   );
 
-  // Filter to exact months and aggregate by (master_account_id, entity_id, account_id)
+  // Index GL rows by (account_id, year-month) for prior balance lookup
+  const glIndex = new Map<string, { ending_balance: number; beginning_balance: number }>();
+  for (const row of glRows) {
+    glIndex.set(
+      `${row.account_id}|${row.period_year}-${row.period_month}`,
+      { ending_balance: Number(row.ending_balance), beginning_balance: Number(row.beginning_balance) }
+    );
+  }
+
+  // Filter to target months and aggregate by (master_account_id, entity_id, account_id)
   const glAgg = new Map<string, number>();
   // For cash flow we need beginning and ending balances
   const cfBeginAgg = new Map<string, number>();
@@ -432,7 +467,7 @@ export async function GET(request: Request) {
 
   for (const row of glRows) {
     const key = `${row.period_year}-${String(row.period_month).padStart(2, "0")}`;
-    if (!monthSet.has(key)) continue;
+    if (!monthSet.has(key)) continue; // Only aggregate target months, skip prior months
 
     const mapping = accountToMapping.get(row.account_id);
     if (!mapping) continue;
@@ -440,11 +475,34 @@ export async function GET(request: Request) {
     const aggKey = `${mapping.master_account_id}|${mapping.entity_id}|${row.account_id}`;
 
     if (isCashFlowLine) {
-      // For cash flow: track beginning/ending balance for change calculation
-      cfBeginAgg.set(aggKey, (cfBeginAgg.get(aggKey) ?? 0) + Number(row.beginning_balance));
+      // For cash flow: derive beginning balance from prior month's ending balance
+      const pm = row.period_month === 1 ? 12 : row.period_month - 1;
+      const py = row.period_month === 1 ? row.period_year - 1 : row.period_year;
+      const priorRow = glIndex.get(`${row.account_id}|${py}-${pm}`);
+      const beginBal = priorRow ? priorRow.ending_balance : Number(row.beginning_balance);
+      cfBeginAgg.set(aggKey, (cfBeginAgg.get(aggKey) ?? 0) + beginBal);
       cfEndAgg.set(aggKey, (cfEndAgg.get(aggKey) ?? 0) + Number(row.ending_balance));
     } else if (useNetChange) {
-      glAgg.set(aggKey, (glAgg.get(aggKey) ?? 0) + Number(row.net_change));
+      // P&L accounts: derive standalone monthly amount from ending balance
+      // differences. QBO stores cumulative YTD in ending_balance/net_change,
+      // so we subtract the prior month's ending balance to get the true
+      // monthly activity (matching the main financial statements route).
+      const pm = row.period_month === 1 ? 12 : row.period_month - 1;
+      const py = row.period_month === 1 ? row.period_year - 1 : row.period_year;
+      const priorRow = glIndex.get(`${row.account_id}|${py}-${pm}`);
+
+      let monthlyAmount: number;
+      if (row.period_month === fiscalYearStartMonth) {
+        // First month of fiscal year: P&L resets, ending_balance IS standalone
+        monthlyAmount = Number(row.ending_balance);
+      } else if (priorRow) {
+        monthlyAmount = Number(row.ending_balance) - priorRow.ending_balance;
+      } else {
+        // No prior month data — use ending_balance as best available
+        monthlyAmount = Number(row.ending_balance);
+      }
+
+      glAgg.set(aggKey, (glAgg.get(aggKey) ?? 0) + monthlyAmount);
     } else {
       // Balance sheet: use ending balance of last month in bucket
       // We need the last month's ending balance, not a sum
