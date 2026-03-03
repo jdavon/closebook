@@ -39,6 +39,17 @@ import {
   CommandList,
 } from "@/components/ui/command";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -61,6 +72,9 @@ import {
   ChevronsUpDown,
   FileText,
   Users,
+  Pencil,
+  X,
+  Trash2,
 } from "lucide-react";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
@@ -104,6 +118,7 @@ interface LeaseData {
   entity_id: string;
   property_id: string;
   lease_name: string;
+  nickname: string | null;
   lessor_name: string | null;
   lessor_contact_info: string | null;
   lease_type: LeaseType;
@@ -422,6 +437,18 @@ export default function LeaseDetailPage() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [extractedData, setExtractedData] = useState<Record<string, any> | null>(null);
 
+  // Editable summary fields
+  const [editingDetails, setEditingDetails] = useState(false);
+  const [savingDetails, setSavingDetails] = useState(false);
+  const [editNickname, setEditNickname] = useState("");
+  const [editLessorName, setEditLessorName] = useState("");
+  const [editMaintenanceType, setEditMaintenanceType] = useState<MaintenanceType>("triple_net");
+  const [editRentPerSf, setEditRentPerSf] = useState("");
+  const [editSecurityDeposit, setEditSecurityDeposit] = useState("");
+  const [editTiAllowance, setEditTiAllowance] = useState("");
+  const [editNotes, setEditNotes] = useState("");
+  const [deleting, setDeleting] = useState(false);
+
   const years = Array.from({ length: 10 }, (_, i) => current.year - 2 + i);
   const months = Array.from({ length: 12 }, (_, i) => i + 1);
 
@@ -430,7 +457,7 @@ export default function LeaseDetailPage() {
     const leaseResult = await supabase
       .from("leases")
       .select(
-        `id, entity_id, property_id, lease_name, lessor_name, lessor_contact_info,
+        `id, entity_id, property_id, lease_name, nickname, lessor_name, lessor_contact_info,
         lease_type, status, commencement_date, rent_commencement_date, expiration_date,
         lease_term_months, base_rent_monthly, base_rent_annual, rent_per_sf,
         security_deposit, tenant_improvement_allowance, rent_abatement_months,
@@ -516,6 +543,14 @@ export default function LeaseDetailPage() {
       setAsc842AdjustmentAccountId(l.asc842_adjustment_account_id ?? "");
       setCashApAccountId(l.cash_ap_account_id ?? "");
       setDiscountRateInput(l.discount_rate > 0 ? String(l.discount_rate * 100) : "");
+      // Init editable summary fields
+      setEditNickname(l.nickname ?? "");
+      setEditLessorName(l.lessor_name ?? "");
+      setEditMaintenanceType(l.maintenance_type);
+      setEditRentPerSf(l.rent_per_sf != null ? String(l.rent_per_sf) : "");
+      setEditSecurityDeposit(String(l.security_deposit));
+      setEditTiAllowance(String(l.tenant_improvement_allowance));
+      setEditNotes(l.notes ?? "");
     }
 
     setPayments((paymentsResult.data as unknown as PaymentRow[]) ?? []);
@@ -553,6 +588,80 @@ export default function LeaseDetailPage() {
     if (error) toast.error(error.message);
     else toast.success("GL accounts updated");
     setSaving(false);
+  }
+
+  async function handleSaveDetails() {
+    setSavingDetails(true);
+    const rentPerSf = editRentPerSf ? parseFloat(editRentPerSf) : null;
+    const securityDeposit = parseFloat(editSecurityDeposit) || 0;
+    const tiAllowance = parseFloat(editTiAllowance) || 0;
+
+    const { error } = await supabase
+      .from("leases")
+      .update({
+        nickname: editNickname.trim() || null,
+        lessor_name: editLessorName.trim() || null,
+        maintenance_type: editMaintenanceType,
+        rent_per_sf: rentPerSf,
+        security_deposit: securityDeposit,
+        tenant_improvement_allowance: tiAllowance,
+        notes: editNotes.trim() || null,
+      })
+      .eq("id", leaseId);
+
+    if (error) {
+      toast.error(error.message);
+    } else {
+      toast.success("Lease details updated");
+      setEditingDetails(false);
+      loadData();
+    }
+    setSavingDetails(false);
+  }
+
+  function handleCancelEditDetails() {
+    if (lease) {
+      setEditNickname(lease.nickname ?? "");
+      setEditLessorName(lease.lessor_name ?? "");
+      setEditMaintenanceType(lease.maintenance_type);
+      setEditRentPerSf(lease.rent_per_sf != null ? String(lease.rent_per_sf) : "");
+      setEditSecurityDeposit(String(lease.security_deposit));
+      setEditTiAllowance(String(lease.tenant_improvement_allowance));
+      setEditNotes(lease.notes ?? "");
+    }
+    setEditingDetails(false);
+  }
+
+  async function handleDeleteLease() {
+    setDeleting(true);
+    // Delete child records first (FK cascade may handle this, but be explicit)
+    await supabase.from("lease_payments").delete().eq("lease_id", leaseId);
+    await supabase.from("lease_escalations").delete().eq("lease_id", leaseId);
+    await supabase.from("lease_options").delete().eq("lease_id", leaseId);
+    await supabase.from("lease_critical_dates").delete().eq("lease_id", leaseId);
+    await supabase.from("lease_documents").delete().eq("lease_id", leaseId);
+    await supabase.from("lease_amendments").delete().eq("lease_id", leaseId);
+    // Delete sublease child records then subleases
+    const { data: subs } = await supabase.from("subleases").select("id").eq("lease_id", leaseId);
+    if (subs) {
+      for (const sub of subs) {
+        await supabase.from("sublease_payments").delete().eq("sublease_id", sub.id);
+        await supabase.from("sublease_escalations").delete().eq("sublease_id", sub.id);
+        await supabase.from("sublease_options").delete().eq("sublease_id", sub.id);
+        await supabase.from("sublease_critical_dates").delete().eq("sublease_id", sub.id);
+        await supabase.from("sublease_documents").delete().eq("sublease_id", sub.id);
+      }
+    }
+    await supabase.from("subleases").delete().eq("lease_id", leaseId);
+
+    const { error } = await supabase.from("leases").delete().eq("id", leaseId);
+    if (error) {
+      toast.error("Failed to delete lease: " + error.message);
+      setDeleting(false);
+    } else {
+      toast.success("Lease deleted");
+      router.push(`/${entityId}/real-estate`);
+    }
   }
 
   async function handleSaveDiscountRate() {
@@ -1184,13 +1293,42 @@ export default function LeaseDetailPage() {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <h1 className="text-2xl font-semibold tracking-tight">
-            {lease.lease_name}
+            {lease.nickname || lease.lease_name}
           </h1>
           <Badge variant={STATUS_VARIANTS[lease.status]}>
             {STATUS_LABELS[lease.status]}
           </Badge>
           <Badge variant="outline">{TYPE_LABELS[lease.lease_type]}</Badge>
         </div>
+        <AlertDialog>
+          <AlertDialogTrigger asChild>
+            <Button variant="destructive" size="sm" disabled={deleting}>
+              <Trash2 className="mr-2 h-4 w-4" />
+              {deleting ? "Deleting..." : "Delete Lease"}
+            </Button>
+          </AlertDialogTrigger>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete this lease?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This will permanently delete{" "}
+                <span className="font-semibold">{lease.nickname || lease.lease_name}</span>{" "}
+                and all associated data including payments, escalations, options,
+                critical dates, documents, amendments, and any subleases. This action
+                cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={handleDeleteLease}
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              >
+                Delete
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </div>
 
       {/* Summary Bar */}
@@ -1257,51 +1395,170 @@ export default function LeaseDetailPage() {
           <div className="grid grid-cols-2 gap-6">
             <Card>
               <CardHeader>
-                <CardTitle>Property & Lease Details</CardTitle>
+                <div className="flex items-center justify-between">
+                  <CardTitle>Property & Lease Details</CardTitle>
+                  {!editingDetails ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setEditingDetails(true)}
+                    >
+                      <Pencil className="mr-2 h-4 w-4" />
+                      Edit
+                    </Button>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleCancelEditDetails}
+                      >
+                        <X className="mr-2 h-4 w-4" />
+                        Cancel
+                      </Button>
+                      <Button
+                        size="sm"
+                        onClick={handleSaveDetails}
+                        disabled={savingDetails}
+                      >
+                        <Save className="mr-2 h-4 w-4" />
+                        {savingDetails ? "Saving..." : "Save"}
+                      </Button>
+                    </div>
+                  )}
+                </div>
               </CardHeader>
               <CardContent className="space-y-3 text-sm">
-                <div className="grid grid-cols-2 gap-2">
-                  <span className="text-muted-foreground">Property</span>
-                  <span>{lease.properties?.property_name ?? "---"}</span>
-                  <span className="text-muted-foreground">Address</span>
-                  <span>
-                    {[
-                      lease.properties?.address_line1,
-                      lease.properties?.city,
-                      lease.properties?.state,
-                    ]
-                      .filter(Boolean)
-                      .join(", ") || "---"}
-                  </span>
-                  <span className="text-muted-foreground">Lessor</span>
-                  <span>{lease.lessor_name ?? "---"}</span>
-                  <span className="text-muted-foreground">Maintenance</span>
-                  <span>{MAINTENANCE_LABELS[lease.maintenance_type]}</span>
-                  <span className="text-muted-foreground">Rentable SF</span>
-                  <span>
-                    {lease.properties?.rentable_square_footage
-                      ? lease.properties.rentable_square_footage.toLocaleString()
-                      : "---"}
-                  </span>
-                  <span className="text-muted-foreground">Rent / SF</span>
-                  <span>
-                    {lease.rent_per_sf
-                      ? formatCurrency(lease.rent_per_sf)
-                      : "---"}
-                  </span>
-                  <span className="text-muted-foreground">Security Deposit</span>
-                  <span>{formatCurrency(lease.security_deposit)}</span>
-                  <span className="text-muted-foreground">TI Allowance</span>
-                  <span>
-                    {formatCurrency(lease.tenant_improvement_allowance)}
-                  </span>
-                </div>
-
-                {lease.notes && (
-                  <div className="pt-3 border-t">
-                    <p className="text-muted-foreground mb-1">Notes</p>
-                    <p className="whitespace-pre-wrap">{lease.notes}</p>
+                {editingDetails ? (
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-2 gap-3 items-center">
+                      <Label className="text-muted-foreground">Nickname</Label>
+                      <Input
+                        value={editNickname}
+                        onChange={(e) => setEditNickname(e.target.value)}
+                        placeholder="Display name (optional)"
+                      />
+                      <Label className="text-muted-foreground">Property</Label>
+                      <span>{lease.properties?.property_name ?? "---"}</span>
+                      <Label className="text-muted-foreground">Address</Label>
+                      <span>
+                        {[
+                          lease.properties?.address_line1,
+                          lease.properties?.city,
+                          lease.properties?.state,
+                        ]
+                          .filter(Boolean)
+                          .join(", ") || "---"}
+                      </span>
+                      <Label className="text-muted-foreground">Lessor</Label>
+                      <Input
+                        value={editLessorName}
+                        onChange={(e) => setEditLessorName(e.target.value)}
+                      />
+                      <Label className="text-muted-foreground">Maintenance</Label>
+                      <Select
+                        value={editMaintenanceType}
+                        onValueChange={(v) => setEditMaintenanceType(v as MaintenanceType)}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="triple_net">Triple Net (NNN)</SelectItem>
+                          <SelectItem value="gross">Gross</SelectItem>
+                          <SelectItem value="modified_gross">Modified Gross</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <Label className="text-muted-foreground">Rentable SF</Label>
+                      <span>
+                        {lease.properties?.rentable_square_footage
+                          ? lease.properties.rentable_square_footage.toLocaleString()
+                          : "---"}
+                      </span>
+                      <Label className="text-muted-foreground">Rent / SF</Label>
+                      <Input
+                        type="number"
+                        step="0.01"
+                        value={editRentPerSf}
+                        onChange={(e) => setEditRentPerSf(e.target.value)}
+                        placeholder="---"
+                      />
+                      <Label className="text-muted-foreground">Security Deposit</Label>
+                      <Input
+                        type="number"
+                        step="0.01"
+                        value={editSecurityDeposit}
+                        onChange={(e) => setEditSecurityDeposit(e.target.value)}
+                      />
+                      <Label className="text-muted-foreground">TI Allowance</Label>
+                      <Input
+                        type="number"
+                        step="0.01"
+                        value={editTiAllowance}
+                        onChange={(e) => setEditTiAllowance(e.target.value)}
+                      />
+                    </div>
+                    <div className="pt-3 border-t">
+                      <Label className="text-muted-foreground mb-2 block">Notes</Label>
+                      <Textarea
+                        value={editNotes}
+                        onChange={(e) => setEditNotes(e.target.value)}
+                        rows={4}
+                      />
+                    </div>
                   </div>
+                ) : (
+                  <>
+                    <div className="grid grid-cols-2 gap-2">
+                      {lease.nickname && (
+                        <>
+                          <span className="text-muted-foreground">Nickname</span>
+                          <span className="font-medium">{lease.nickname}</span>
+                        </>
+                      )}
+                      <span className="text-muted-foreground">Property</span>
+                      <span>{lease.properties?.property_name ?? "---"}</span>
+                      <span className="text-muted-foreground">Address</span>
+                      <span>
+                        {[
+                          lease.properties?.address_line1,
+                          lease.properties?.city,
+                          lease.properties?.state,
+                        ]
+                          .filter(Boolean)
+                          .join(", ") || "---"}
+                      </span>
+                      <span className="text-muted-foreground">Lessor</span>
+                      <span>{lease.lessor_name ?? "---"}</span>
+                      <span className="text-muted-foreground">Maintenance</span>
+                      <span>{MAINTENANCE_LABELS[lease.maintenance_type]}</span>
+                      <span className="text-muted-foreground">Rentable SF</span>
+                      <span>
+                        {lease.properties?.rentable_square_footage
+                          ? lease.properties.rentable_square_footage.toLocaleString()
+                          : "---"}
+                      </span>
+                      <span className="text-muted-foreground">Rent / SF</span>
+                      <span>
+                        {lease.rent_per_sf
+                          ? formatCurrency(lease.rent_per_sf)
+                          : "---"}
+                      </span>
+                      <span className="text-muted-foreground">Security Deposit</span>
+                      <span>{formatCurrency(lease.security_deposit)}</span>
+                      <span className="text-muted-foreground">TI Allowance</span>
+                      <span>
+                        {formatCurrency(lease.tenant_improvement_allowance)}
+                      </span>
+                    </div>
+
+                    {lease.notes && (
+                      <div className="pt-3 border-t">
+                        <p className="text-muted-foreground mb-1">Notes</p>
+                        <p className="whitespace-pre-wrap">{lease.notes}</p>
+                      </div>
+                    )}
+                  </>
                 )}
               </CardContent>
             </Card>

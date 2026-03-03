@@ -54,6 +54,7 @@ import type { LeaseStatus, LeaseType, CriticalDateType, SubleaseStatus } from "@
 interface LeaseListItem {
   id: string;
   lease_name: string;
+  nickname: string | null;
   status: LeaseStatus;
   lease_type: LeaseType;
   lessor_name: string | null;
@@ -86,6 +87,7 @@ interface CriticalDateItem {
   lease_id: string;
   leases: {
     lease_name: string;
+    nickname: string | null;
   } | null;
 }
 
@@ -105,7 +107,7 @@ interface SubleaseListItem {
   utilities_recovery_monthly: number;
   other_recovery_monthly: number;
   subleased_square_footage: number | null;
-  leases: { lease_name: string } | null;
+  leases: { lease_name: string; nickname: string | null } | null;
 }
 
 // --- Constants ---
@@ -217,7 +219,7 @@ export default function RealEstatePage() {
     const leasesQuery = supabase
       .from("leases")
       .select(
-        `id, lease_name, status, lease_type, lessor_name,
+        `id, lease_name, nickname, status, lease_type, lessor_name,
         commencement_date, expiration_date, lease_term_months,
         base_rent_monthly, cam_monthly, insurance_monthly,
         property_tax_annual, utilities_monthly, other_monthly_costs,
@@ -231,7 +233,7 @@ export default function RealEstatePage() {
       .from("lease_critical_dates")
       .select(
         `id, date_type, critical_date, description, alert_days_before, is_resolved, lease_id,
-        leases(lease_name)`
+        leases(lease_name, nickname)`
       )
       .eq("is_resolved", false)
       .order("critical_date");
@@ -244,7 +246,7 @@ export default function RealEstatePage() {
         base_rent_monthly, cam_recovery_monthly, insurance_recovery_monthly,
         property_tax_recovery_monthly, utilities_recovery_monthly, other_recovery_monthly,
         subleased_square_footage,
-        leases(lease_name)`
+        leases(lease_name, nickname)`
       )
       .eq("entity_id", entityId)
       .order("sublease_name");
@@ -289,9 +291,10 @@ export default function RealEstatePage() {
     if (!searchQuery) return true;
     const q = searchQuery.toLowerCase();
     const name = l.lease_name.toLowerCase();
+    const nick = (l.nickname ?? "").toLowerCase();
     const lessor = (l.lessor_name ?? "").toLowerCase();
     const property = (l.properties?.property_name ?? "").toLowerCase();
-    return name.includes(q) || lessor.includes(q) || property.includes(q);
+    return name.includes(q) || nick.includes(q) || lessor.includes(q) || property.includes(q);
   });
 
   // Compute current rent (after escalations) for each lease
@@ -422,7 +425,7 @@ export default function RealEstatePage() {
                         {DATE_TYPE_LABELS[cd.date_type]}
                       </span>
                       <span className="text-muted-foreground">
-                        — {cd.leases?.lease_name ?? "Unknown Lease"}
+                        — {cd.leases?.nickname || (cd.leases?.lease_name ?? "Unknown Lease")}
                       </span>
                     </div>
                     <Link href={`/${entityId}/real-estate/${cd.lease_id}`}>
@@ -634,7 +637,7 @@ export default function RealEstatePage() {
                           <TableCell className="font-medium">
                             {lease.properties?.property_name ?? "---"}
                           </TableCell>
-                          <TableCell>{lease.lease_name}</TableCell>
+                          <TableCell>{lease.nickname || lease.lease_name}</TableCell>
                           <TableCell className="text-muted-foreground">
                             {lease.lessor_name ?? "---"}
                           </TableCell>
@@ -755,7 +758,7 @@ export default function RealEstatePage() {
                         return (
                           <TableRow key={lease.id}>
                             <TableCell className="font-medium">
-                              {lease.lease_name}
+                              {lease.nickname || lease.lease_name}
                             </TableCell>
                             <TableCell className="text-muted-foreground">
                               {lease.properties?.property_name ?? "---"}
@@ -878,7 +881,7 @@ export default function RealEstatePage() {
                         return (
                           <TableRow key={lease.id}>
                             <TableCell className="font-medium">
-                              {lease.lease_name}
+                              {lease.nickname || lease.lease_name}
                             </TableCell>
                             <TableCell>
                               <Badge variant="outline">
@@ -1106,7 +1109,7 @@ export default function RealEstatePage() {
                             {DATE_TYPE_LABELS[cd.date_type]}
                           </TableCell>
                           <TableCell className="font-medium">
-                            {cd.leases?.lease_name ?? "---"}
+                            {cd.leases?.nickname || (cd.leases?.lease_name ?? "---")}
                           </TableCell>
                           <TableCell className="text-muted-foreground">
                             {cd.description ?? "---"}
