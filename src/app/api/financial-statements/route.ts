@@ -408,18 +408,8 @@ function applyProFormaPostAggregation(
   aggregated: Map<string, BucketedAmounts>,
   adjustments: Array<{ master_account_id: string; period_year: number; period_month: number; amount: number; offset_master_account_id?: string | null }>,
   buckets: PeriodBucket[],
-  accounts: AccountInfo[],
+  _accounts: AccountInfo[],
 ): void {
-  // Balance sheet accounts (Assets, Liabilities, Equity) have cumulative
-  // point-in-time ending balances.  An adjustment in one period must carry
-  // forward to every subsequent period's endingBalance so that monthly,
-  // quarterly and yearly views all agree.
-  const bsAccountIds = new Set(
-    accounts
-      .filter((a) => a.classification !== "Revenue" && a.classification !== "Expense")
-      .map((a) => a.id)
-  );
-
   // Map each year-month to its bucket key (skip TOTAL bucket — it contains
   // the same months as the real buckets and would overwrite their keys,
   // causing adjustments to land only in the Total column)
@@ -455,16 +445,20 @@ function applyProFormaPostAggregation(
     // Apply endingBalance to the target bucket
     bucketed.endingBalance[bucketKey] = (bucketed.endingBalance[bucketKey] ?? 0) + amount;
 
-    // For balance sheet accounts, propagate the ending balance adjustment
-    // to all subsequent buckets.  BS ending balances are cumulative, so an
-    // adjustment in one period carries forward to all future periods.
-    if (bsAccountIds.has(accountId)) {
-      const targetIdx = nonTotalBucketKeys.indexOf(bucketKey);
-      for (let i = targetIdx + 1; i < nonTotalBucketKeys.length; i++) {
-        const subsequentKey = nonTotalBucketKeys[i];
-        bucketed.endingBalance[subsequentKey] = (bucketed.endingBalance[subsequentKey] ?? 0) + amount;
-        bucketed.beginningBalance[subsequentKey] = (bucketed.beginningBalance[subsequentKey] ?? 0) + amount;
-      }
+    // Propagate the ending balance adjustment to all subsequent buckets.
+    // Both BS and P&L ending balances are cumulative:
+    //   - BS: point-in-time balance carries forward
+    //   - P&L: YTD cumulative balance carries forward (needed so that
+    //     injectNetIncomeIntoBalanceSheet picks up the correct cumulative
+    //     net income in every period, keeping Assets = L + E)
+    // netChange is NOT propagated — the activity belongs to the target
+    // period only.  The income statement reads netChange, so it is
+    // unaffected by this propagation.
+    const targetIdx = nonTotalBucketKeys.indexOf(bucketKey);
+    for (let i = targetIdx + 1; i < nonTotalBucketKeys.length; i++) {
+      const subsequentKey = nonTotalBucketKeys[i];
+      bucketed.endingBalance[subsequentKey] = (bucketed.endingBalance[subsequentKey] ?? 0) + amount;
+      bucketed.beginningBalance[subsequentKey] = (bucketed.beginningBalance[subsequentKey] ?? 0) + amount;
     }
 
     // Also apply to the TOTAL bucket (it computes independently from raw GL
