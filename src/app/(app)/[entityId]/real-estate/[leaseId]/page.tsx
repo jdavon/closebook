@@ -405,11 +405,13 @@ export default function LeaseDetailPage() {
   const [optionSheetOpen, setOptionSheetOpen] = useState(false);
   const [dateSheetOpen, setDateSheetOpen] = useState(false);
 
-  // New escalation form
+  // Escalation form (shared for add/edit)
+  const [editingEscId, setEditingEscId] = useState<string | null>(null);
   const [newEscType, setNewEscType] = useState<EscalationType>("fixed_percentage");
   const [newEscDate, setNewEscDate] = useState("");
   const [newEscPercent, setNewEscPercent] = useState("");
   const [newEscAmount, setNewEscAmount] = useState("");
+  const [newEscNewRent, setNewEscNewRent] = useState("");
   const [newEscFrequency, setNewEscFrequency] = useState<EscalationFrequency>("annual");
 
   // New option form
@@ -757,25 +759,71 @@ export default function LeaseDetailPage() {
     loadData();
   }
 
-  async function handleAddEscalation() {
-    const { error } = await supabase.from("lease_escalations").insert({
-      lease_id: leaseId,
+  function resetEscForm() {
+    setEditingEscId(null);
+    setNewEscType("fixed_percentage");
+    setNewEscDate("");
+    setNewEscPercent("");
+    setNewEscAmount("");
+    setNewEscNewRent("");
+    setNewEscFrequency("annual");
+  }
+
+  function openEditEscalation(esc: EscalationRow) {
+    setEditingEscId(esc.id);
+    setNewEscType(esc.escalation_type);
+    setNewEscDate(esc.effective_date);
+    setNewEscPercent(esc.percentage_increase != null ? String(esc.percentage_increase) : "");
+    setNewEscAmount(esc.amount_increase != null ? String(esc.amount_increase) : "");
+    setNewEscNewRent("");
+    setNewEscFrequency(esc.frequency);
+    setEscalationSheetOpen(true);
+  }
+
+  /** Compute percentage & amount from a new rent target */
+  function handleNewRentChange(val: string) {
+    setNewEscNewRent(val);
+    if (!val || !lease) return;
+    const newRent = parseFloat(val);
+    const currentAnnual = lease.base_rent_monthly * 12;
+    if (currentAnnual > 0 && !isNaN(newRent)) {
+      const diff = (newRent * 12) - currentAnnual;
+      const pct = diff / currentAnnual;
+      setNewEscAmount(String(Math.round(diff * 100) / 100));
+      setNewEscPercent(String(Math.round(pct * 1000000) / 1000000));
+      if (diff >= 0) {
+        setNewEscType("fixed_amount");
+      }
+    }
+  }
+
+  async function handleSaveEscalation() {
+    const payload = {
       escalation_type: newEscType,
       effective_date: newEscDate,
       percentage_increase: newEscPercent ? parseFloat(newEscPercent) : null,
       amount_increase: newEscAmount ? parseFloat(newEscAmount) : null,
       frequency: newEscFrequency,
-    });
+    };
 
-    if (error) toast.error(error.message);
-    else {
+    if (editingEscId) {
+      const { error } = await supabase
+        .from("lease_escalations")
+        .update(payload)
+        .eq("id", editingEscId);
+      if (error) { toast.error(error.message); return; }
+      toast.success("Escalation updated");
+    } else {
+      const { error } = await supabase
+        .from("lease_escalations")
+        .insert({ ...payload, lease_id: leaseId });
+      if (error) { toast.error(error.message); return; }
       toast.success("Escalation added");
-      setEscalationSheetOpen(false);
-      setNewEscDate("");
-      setNewEscPercent("");
-      setNewEscAmount("");
-      loadData();
     }
+
+    setEscalationSheetOpen(false);
+    resetEscForm();
+    loadData();
   }
 
   async function handleAddOption() {
@@ -1847,19 +1895,26 @@ export default function LeaseDetailPage() {
                 <CardTitle>Rent Escalations</CardTitle>
                 <Sheet
                   open={escalationSheetOpen}
-                  onOpenChange={setEscalationSheetOpen}
+                  onOpenChange={(open) => {
+                    setEscalationSheetOpen(open);
+                    if (!open) resetEscForm();
+                  }}
                 >
                   <SheetTrigger asChild>
-                    <Button size="sm">
+                    <Button size="sm" onClick={() => resetEscForm()}>
                       <Plus className="mr-2 h-4 w-4" />
                       Add Escalation
                     </Button>
                   </SheetTrigger>
                   <SheetContent>
                     <SheetHeader>
-                      <SheetTitle>Add Escalation</SheetTitle>
+                      <SheetTitle>
+                        {editingEscId ? "Edit Escalation" : "Add Escalation"}
+                      </SheetTitle>
                       <SheetDescription>
-                        Define a rent escalation rule
+                        {editingEscId
+                          ? "Update this escalation rule"
+                          : "Define a rent escalation rule"}
                       </SheetDescription>
                     </SheetHeader>
                     <div className="space-y-4 mt-6">
@@ -1893,6 +1948,30 @@ export default function LeaseDetailPage() {
                           onChange={(e) => setNewEscDate(e.target.value)}
                         />
                       </div>
+
+                      {/* New Monthly Rent — back-calculates increase */}
+                      {newEscType !== "cpi" && lease && lease.base_rent_monthly > 0 && (
+                        <div className="space-y-2">
+                          <Label>New Monthly Rent</Label>
+                          <Input
+                            type="number"
+                            step="0.01"
+                            placeholder={`Current: ${formatCurrency(lease.base_rent_monthly)}`}
+                            value={newEscNewRent}
+                            onChange={(e) => handleNewRentChange(e.target.value)}
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            Enter the new monthly amount — increase & percentage will be calculated automatically.
+                          </p>
+                        </div>
+                      )}
+
+                      <div className="relative flex items-center gap-2 py-1">
+                        <div className="flex-1 border-t" />
+                        <span className="text-xs text-muted-foreground">or enter directly</span>
+                        <div className="flex-1 border-t" />
+                      </div>
+
                       {newEscType === "fixed_percentage" && (
                         <div className="space-y-2">
                           <Label>Percentage Increase (decimal)</Label>
@@ -1901,18 +1980,24 @@ export default function LeaseDetailPage() {
                             step="0.000001"
                             placeholder="e.g., 0.03 for 3%"
                             value={newEscPercent}
-                            onChange={(e) => setNewEscPercent(e.target.value)}
+                            onChange={(e) => {
+                              setNewEscPercent(e.target.value);
+                              setNewEscNewRent("");
+                            }}
                           />
                         </div>
                       )}
                       {newEscType === "fixed_amount" && (
                         <div className="space-y-2">
-                          <Label>Amount Increase</Label>
+                          <Label>Amount Increase (annual)</Label>
                           <Input
                             type="number"
                             step="0.01"
                             value={newEscAmount}
-                            onChange={(e) => setNewEscAmount(e.target.value)}
+                            onChange={(e) => {
+                              setNewEscAmount(e.target.value);
+                              setNewEscNewRent("");
+                            }}
                           />
                         </div>
                       )}
@@ -1934,8 +2019,8 @@ export default function LeaseDetailPage() {
                           </SelectContent>
                         </Select>
                       </div>
-                      <Button onClick={handleAddEscalation} className="w-full">
-                        Add Escalation
+                      <Button onClick={handleSaveEscalation} className="w-full">
+                        {editingEscId ? "Save Changes" : "Add Escalation"}
                       </Button>
                     </div>
                   </SheetContent>
@@ -1980,13 +2065,24 @@ export default function LeaseDetailPage() {
                           {esc.frequency.replace("_", " ")}
                         </TableCell>
                         <TableCell>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleDeleteEscalation(esc.id)}
-                          >
-                            &times;
-                          </Button>
+                          <div className="flex items-center gap-1">
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7"
+                              onClick={() => openEditEscalation(esc)}
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                              onClick={() => handleDeleteEscalation(esc.id)}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          </div>
                         </TableCell>
                       </TableRow>
                     ))}
