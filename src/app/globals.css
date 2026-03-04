@@ -254,8 +254,11 @@
 
 /* Print styles */
 @media print {
-  /* Page margins */
+  /* Page size: always US Letter (8.5″×11″).
+     Orientation is overridden dynamically by usePrintFitToPage via an
+     injected <style> that sets `size: letter portrait` or `size: letter landscape`. */
   @page {
+    size: letter portrait;
     margin: 0.5in 0.6in 0.5in 0.4in;
   }
 
