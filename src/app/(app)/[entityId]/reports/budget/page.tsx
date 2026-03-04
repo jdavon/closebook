@@ -47,6 +47,14 @@ import {
   Eye,
   X,
 } from "lucide-react";
+import { createClient } from "@/lib/supabase/client";
+import { StatementCard } from "@/components/financial-statements/statement-card";
+import type {
+  StatementData,
+  StatementSection,
+  Period,
+  LineItem,
+} from "@/components/financial-statements/types";
 
 interface BudgetVersion {
   id: string;
@@ -124,14 +132,100 @@ const MONTH_ABBRS = [
   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 
-function formatBudgetAmount(amount: number): string {
-  if (amount === 0) return "\u2014";
-  const abs = Math.abs(amount);
-  const formatted = new Intl.NumberFormat("en-US", {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0,
-  }).format(abs);
-  return amount < 0 ? `(${formatted})` : formatted;
+/** Transform budget view data into the financial model's StatementData format */
+function budgetToStatementFormat(
+  data: BudgetViewData,
+  fiscalYear: number
+): { statementData: StatementData; periods: Period[] } {
+  const periods: Period[] = MONTH_ABBRS.map((label, i) => ({
+    key: String(i + 1),
+    label: `${label} ${fiscalYear}`,
+    year: fiscalYear,
+    startMonth: i + 1,
+    endMonth: i + 1,
+    endYear: fiscalYear,
+  }));
+  periods.push({
+    key: "total",
+    label: "Total",
+    year: fiscalYear,
+    startMonth: 1,
+    endMonth: 12,
+    endYear: fiscalYear,
+    isTotal: true,
+  });
+
+  // Map computed lines by the section they follow
+  const computedAfterSection: Record<string, string> = {
+    direct_operating_costs: "gross_margin",
+    other_operating_costs: "operating_margin",
+    other_income: "net_income",
+  };
+
+  const sections: StatementSection[] = [];
+
+  for (const section of data.sections) {
+    const lines: LineItem[] = section.lines.map((line, idx) => ({
+      id: line.accountId,
+      label: line.accountNumber
+        ? `${line.accountNumber} - ${line.accountName}`
+        : line.accountName,
+      amounts: { ...line.months, total: line.total },
+      indent: 1,
+      isTotal: false,
+      isGrandTotal: false,
+      isHeader: false,
+      isSeparator: false,
+      showDollarSign: idx === 0,
+    }));
+
+    const subtotalLine: LineItem = {
+      id: `subtotal_${section.id}`,
+      label: `Total ${section.title.charAt(0) + section.title.slice(1).toLowerCase()}`,
+      amounts: { ...section.subtotal },
+      indent: 0,
+      isTotal: true,
+      isGrandTotal: false,
+      isHeader: false,
+      isSeparator: false,
+      showDollarSign: true,
+    };
+
+    sections.push({ id: section.id, title: section.title, lines, subtotalLine });
+
+    // Insert computed line (e.g., Gross Margin) after this section
+    const computedId = computedAfterSection[section.id];
+    if (computedId) {
+      const comp = data.computedLines.find((c) => c.id === computedId);
+      if (comp) {
+        sections.push({
+          id: comp.id,
+          title: "",
+          lines: [],
+          subtotalLine: {
+            id: comp.id,
+            label: comp.label,
+            amounts: { ...comp.amounts },
+            indent: 0,
+            isTotal: !comp.isGrandTotal,
+            isGrandTotal: comp.isGrandTotal ?? false,
+            isHeader: false,
+            isSeparator: false,
+            showDollarSign: true,
+          },
+        });
+      }
+    }
+  }
+
+  return {
+    statementData: {
+      id: "budget_income_statement",
+      title: "Budget - Income Statement",
+      sections,
+    },
+    periods,
+  };
 }
 
 export default function BudgetPage({
@@ -140,6 +234,8 @@ export default function BudgetPage({
   params: Promise<{ entityId: string }>;
 }) {
   const { entityId } = use(params);
+  const supabase = createClient();
+  const [entityName, setEntityName] = useState("");
 
   const [versions, setVersions] = useState<BudgetVersion[]>([]);
   const [loading, setLoading] = useState(true);
@@ -183,6 +279,19 @@ export default function BudgetPage({
     fetchVersions();
   }, [fetchVersions]);
 
+  // Fetch entity name for statement header
+  useEffect(() => {
+    supabase
+      .from("entities")
+      .select("name")
+      .eq("id", entityId)
+      .single()
+      .then(({ data }) => {
+        if (data) setEntityName(data.name);
+      });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entityId]);
+
   // Fetch budget view data when a version is selected for viewing
   const fetchBudgetView = useCallback(
     async (versionId: string) => {
@@ -201,6 +310,17 @@ export default function BudgetPage({
     },
     [entityId]
   );
+
+  // Auto-load active budget on initial page load
+  useEffect(() => {
+    if (versions.length > 0 && !viewVersionId) {
+      const active = versions.find((v) => v.is_active);
+      if (active) {
+        setViewVersionId(active.id);
+        fetchBudgetView(active.id);
+      }
+    }
+  }, [versions, viewVersionId, fetchBudgetView]);
 
   function handleViewBudget(versionId: string) {
     if (viewVersionId === versionId) {
@@ -355,18 +475,11 @@ export default function BudgetPage({
     );
   }
 
-  // Determine which computed lines go after which sections
-  function getComputedLinesAfter(sectionId: string): ComputedLine[] {
-    if (!viewData) return [];
-    const sectionOrder: Record<string, string> = {
-      direct_operating_costs: "gross_margin",
-      other_operating_costs: "operating_margin",
-      other_income: "net_income",
-    };
-    const expectedId = sectionOrder[sectionId];
-    if (!expectedId) return [];
-    return viewData.computedLines.filter((c) => c.id === expectedId);
-  }
+  // Pre-compute statement format for the budget view
+  const budgetStatement =
+    viewData && viewData.sections.length > 0
+      ? budgetToStatementFormat(viewData, viewData.version.fiscalYear)
+      : null;
 
   return (
     <div className="space-y-6">
@@ -561,147 +674,52 @@ export default function BudgetPage({
         </CardContent>
       </Card>
 
-      {/* Budget View */}
-      {viewVersionId && (
+      {/* Budget View — Financial Model Format */}
+      {viewVersionId && viewLoading && (
         <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <div>
-                <CardTitle>
-                  {viewData?.version.name ?? "Budget Data"}
-                </CardTitle>
-                <CardDescription>
-                  {viewData
-                    ? `FY${viewData.version.fiscalYear} \u2014 ${viewData.sections.reduce((sum, s) => sum + s.lines.length, 0)} accounts`
-                    : "Loading..."}
-                </CardDescription>
-              </div>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => {
-                  setViewVersionId(null);
-                  setViewData(null);
-                }}
-              >
-                <X className="h-4 w-4" />
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent>
-            {viewLoading ? (
-              <p className="text-muted-foreground text-sm">
-                Loading budget data...
-              </p>
-            ) : viewData &&
-              viewData.sections.length === 0 ? (
-              <p className="text-muted-foreground text-sm">
-                No budget data imported for this version yet.
-              </p>
-            ) : viewData ? (
-              <div className="overflow-x-auto">
-                <table className="stmt-table">
-                  <thead>
-                    <tr>
-                      <th className="min-w-[250px]">Account</th>
-                      {MONTH_ABBRS.map((m, i) => (
-                        <th key={i} className="min-w-[90px]">
-                          {m}
-                        </th>
-                      ))}
-                      <th className="min-w-[100px]">Total</th>
-                    </tr>
-                  </thead>
-                    {viewData.sections.map((section) => {
-                      const computedAfter = getComputedLinesAfter(section.id);
-
-                      return (
-                        <tbody key={section.id}>
-                          {/* Section header */}
-                          <tr className="stmt-section-header">
-                            <td colSpan={14}>{section.title}</td>
-                          </tr>
-                          <tr className="stmt-separator">
-                            <td colSpan={14}></td>
-                          </tr>
-
-                          {/* Line items */}
-                          {section.lines.map((line, idx) => (
-                            <tr
-                              key={line.accountId}
-                              className={`stmt-line-item ${idx % 2 === 0 ? "stmt-row-striped" : ""}`}
-                            >
-                              <td>
-                                {line.accountNumber
-                                  ? `${line.accountNumber} - ${line.accountName}`
-                                  : line.accountName}
-                              </td>
-                              {MONTH_ABBRS.map((_, mi) => (
-                                <td key={mi}>
-                                  {formatBudgetAmount(
-                                    line.months[String(mi + 1)] ?? 0
-                                  )}
-                                </td>
-                              ))}
-                              <td>{formatBudgetAmount(line.total)}</td>
-                            </tr>
-                          ))}
-
-                          {/* Section subtotal */}
-                          <tr className="stmt-subtotal">
-                            <td>
-                              Total{" "}
-                              {section.title.charAt(0) +
-                                section.title.slice(1).toLowerCase()}
-                            </td>
-                            {MONTH_ABBRS.map((_, mi) => (
-                              <td key={mi}>
-                                {formatBudgetAmount(
-                                  section.subtotal[String(mi + 1)] ?? 0
-                                )}
-                              </td>
-                            ))}
-                            <td>
-                              {formatBudgetAmount(section.subtotal.total ?? 0)}
-                            </td>
-                          </tr>
-
-                          {/* Computed lines after this section */}
-                          {computedAfter.map((comp) => (
-                            <tr
-                              key={comp.id}
-                              className={
-                                comp.isGrandTotal
-                                  ? "stmt-grand-total"
-                                  : "stmt-subtotal"
-                              }
-                            >
-                              <td>{comp.label}</td>
-                              {MONTH_ABBRS.map((_, mi) => (
-                                <td key={mi}>
-                                  {formatBudgetAmount(
-                                    comp.amounts[String(mi + 1)] ?? 0
-                                  )}
-                                </td>
-                              ))}
-                              <td>
-                                {formatBudgetAmount(comp.amounts.total ?? 0)}
-                              </td>
-                            </tr>
-                          ))}
-
-                          {/* Spacing */}
-                          <tr className="stmt-separator">
-                            <td colSpan={14}></td>
-                          </tr>
-                        </tbody>
-                      );
-                    })}
-                </table>
-              </div>
-            ) : null}
+          <CardContent className="py-12 text-center">
+            <p className="text-muted-foreground text-sm">
+              Loading budget data...
+            </p>
           </CardContent>
         </Card>
+      )}
+      {viewVersionId && !viewLoading && viewData && viewData.sections.length === 0 && (
+        <Card>
+          <CardContent className="py-12 text-center">
+            <p className="text-muted-foreground text-sm">
+              No budget data imported for this version yet.
+            </p>
+          </CardContent>
+        </Card>
+      )}
+      {viewVersionId && !viewLoading && budgetStatement && viewData && (
+        <div className="relative">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="absolute right-6 top-4 z-10"
+            onClick={() => {
+              setViewVersionId(null);
+              setViewData(null);
+            }}
+          >
+            <X className="h-4 w-4" />
+          </Button>
+          <StatementCard
+            companyName={entityName}
+            statementTitle={`${viewData.version.name} (FY${viewData.version.fiscalYear})`}
+            statementData={budgetStatement.statementData}
+            periods={budgetStatement.periods}
+            showBudget={false}
+            showYoY={false}
+            startYear={viewData.version.fiscalYear}
+            startMonth={1}
+            endYear={viewData.version.fiscalYear}
+            endMonth={12}
+            granularity="monthly"
+          />
+        </div>
       )}
 
       {/* Import Section */}
