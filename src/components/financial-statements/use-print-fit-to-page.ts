@@ -57,8 +57,8 @@ export function usePrintFitToPage(dataColumnCount?: number) {
 
     // Never zoom below this floor — text becomes unreadable.
     const MIN_ZOOM = 0.45;
-    // Never zoom above this ceiling — keeps it professional, not blown-up.
-    const MAX_ZOOM = 1.5;
+    // Max font-size multiplier when scaling up to fill the page.
+    const MAX_FONT_SCALE = 1.5;
 
     function handleBeforePrint() {
       const pages =
@@ -91,30 +91,35 @@ export function usePrintFitToPage(dataColumnCount?: number) {
         // Skip hidden tabs (inactive TabsContent has zero height).
         if (page.offsetHeight === 0) return;
 
-        // Reset any previous zoom so we measure natural dimensions.
+        // Reset previous adjustments so we measure natural dimensions.
         page.style.zoom = "";
+        page.style.removeProperty("--print-scale");
+
         const estimatedPrintW = page.scrollWidth * WIDTH_RATIO;
         const estimatedPrintH = page.scrollHeight * HEIGHT_RATIO;
 
-        // Compute zoom for each axis.  Values > 1 mean the content is
-        // smaller than the page — we scale UP to fill the space.
-        // Values < 1 mean it overflows — we scale DOWN to fit.
         const widthZoom = availW / estimatedPrintW;
         const heightZoom = availH / estimatedPrintH;
 
-        // Use the tighter of the two so content fits in both dimensions,
-        // clamped between MIN_ZOOM (readable) and MAX_ZOOM (professional).
-        const zoom = Math.max(
-          Math.min(
+        if (widthZoom < 1 || heightZoom < 1) {
+          // Content overflows the page — shrink with CSS zoom.
+          const zoom = Math.max(
             Math.floor(Math.min(widthZoom, heightZoom) * 100) / 100,
-            MAX_ZOOM,
-          ),
-          MIN_ZOOM,
-        );
-
-        if (zoom !== 1) {
+            MIN_ZOOM,
+          );
           page.style.zoom = String(zoom);
           zoomedElements.current.push(page);
+        } else if (heightZoom > 1.1) {
+          // Content fits but has excess vertical space.  The table already
+          // fills 100% width so zoom can't help (it would overflow width).
+          // Instead, scale font-size & em-based padding via CSS variable
+          // so rows get taller → content fills the page with bigger text.
+          // 0.90 safety factor prevents overflow from estimation error.
+          const scale = Math.min(heightZoom * 0.90, MAX_FONT_SCALE);
+          if (scale > 1.05) {
+            page.style.setProperty("--print-scale", scale.toFixed(2));
+            zoomedElements.current.push(page);
+          }
         }
       });
     }
@@ -122,6 +127,7 @@ export function usePrintFitToPage(dataColumnCount?: number) {
     function handleAfterPrint() {
       zoomedElements.current.forEach((el) => {
         el.style.zoom = "";
+        el.style.removeProperty("--print-scale");
       });
       zoomedElements.current = [];
 

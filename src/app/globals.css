@@ -327,8 +327,12 @@
   }
 
   /* ---- Statement table ---- */
+
+  /* Dynamic print scale: --print-scale is set by usePrintFitToPage when
+     a statement has extra vertical space.  Font-size uses it directly;
+     padding uses em units so it scales with font-size automatically. */
   .stmt-table {
-    font-size: 9pt;
+    font-size: calc(9pt * var(--print-scale, 1));
     width: 100% !important;
   }
 
@@ -336,6 +340,35 @@
   .stmt-table th,
   .stmt-table td {
     min-width: 0 !important;
+  }
+
+  /* em-based padding so it scales with --print-scale via font-size.
+     At base 9pt (12px): 0.33em ≈ 4px, 0.5em = 6px, 1em = 12px. */
+  .stmt-table td {
+    padding: 0.33em 1em;
+  }
+  .stmt-table thead th {
+    padding: 0.5em 1em;
+    font-size: 0.9em;
+  }
+  .stmt-table thead .stmt-subheader th {
+    font-size: 0.85em;
+  }
+  .stmt-section-header td {
+    padding-top: 1em;
+    padding-bottom: 0.33em;
+    font-size: 1em;
+  }
+  .stmt-subtotal td {
+    padding-top: 0.5em;
+    padding-bottom: 0.5em;
+  }
+  .stmt-grand-total td {
+    padding-top: 0.67em;
+    padding-bottom: 0.67em;
+  }
+  .stmt-margin-row td {
+    padding-bottom: 0.67em;
   }
 
   /* Force black text on all table cells */
@@ -374,9 +407,26 @@
     print-color-adjust: exact;
   }
 
-  /* Compact separator rows for less wasted space */
+  /* Separator rows scale with --print-scale */
   .stmt-separator td {
-    height: 0.35rem !important;
+    height: calc(0.35rem * var(--print-scale, 1)) !important;
+  }
+
+  /* Remove card padding in print — table fills the full printable area */
+  .stmt-single-page [data-slot="card-content"] {
+    padding: 0 !important;
+  }
+
+  /* Scale statement header text with --print-scale */
+  .stmt-single-page .text-center.py-4 {
+    padding-top: calc(0.5rem * var(--print-scale, 1));
+    padding-bottom: calc(0.5rem * var(--print-scale, 1));
+  }
+  .stmt-single-page .text-center.py-4 .text-sm {
+    font-size: calc(0.875rem * var(--print-scale, 1));
+  }
+  .stmt-single-page .text-center.py-4 .text-xs {
+    font-size: calc(0.75rem * var(--print-scale, 1));
   }
 
   /* ---- Hide interactive elements ---- */
@@ -441,29 +491,27 @@
     font-size: 8pt;
   }
   .stmt-print-compact .stmt-table td {
-    padding-top: 0.125rem;
-    padding-bottom: 0.125rem;
+    padding: 0.15em 0.8em;
   }
   .stmt-print-compact .stmt-table thead th {
-    padding-top: 0.25rem;
-    padding-bottom: 0.25rem;
-    font-size: 7.5pt;
+    padding: 0.3em 0.8em;
+    font-size: 0.85em;
   }
   .stmt-print-compact .stmt-section-header td {
-    padding-top: 0.4rem;
-    padding-bottom: 0.125rem;
-    font-size: 8pt;
+    padding-top: 0.5em;
+    padding-bottom: 0.15em;
+    font-size: 1em;
   }
   .stmt-print-compact .stmt-subtotal td,
   .stmt-print-compact .stmt-grand-total td {
-    padding-top: 0.2rem;
-    padding-bottom: 0.2rem;
+    padding-top: 0.25em;
+    padding-bottom: 0.25em;
   }
   .stmt-print-compact .stmt-separator td {
     height: 0.2rem !important;
   }
   .stmt-print-compact .stmt-margin-row td {
-    padding-bottom: 0.25rem;
+    padding-bottom: 0.3em;
   }
   /* Tighter statement header */
   .stmt-print-compact .text-center.py-4 {
