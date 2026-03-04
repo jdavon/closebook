@@ -437,10 +437,6 @@
     page-break-after: avoid;
   }
 
-  tbody {
-    page-break-inside: avoid;
-  }
-
   /* ---- Variance colors ---- */
   .stmt-positive,
   .text-green-600 {

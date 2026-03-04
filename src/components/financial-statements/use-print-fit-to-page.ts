@@ -18,15 +18,14 @@ export function getDataColumnCount(
 }
 
 /**
- * Scales each .stmt-single-page element to fill exactly one printed page.
+ * Ensures each .stmt-single-page element fits on exactly one printed page.
  *
- * Always landscape US Letter with 0.3in top/bottom, 0.4in left/right margins.
+ * Portrait US Letter with 0.3in top/bottom, 0.4in left/right margins.
  *
  * On beforeprint:
  *  - Measures each statement's screen height
- *  - Estimates its print height (screen→print ratio ~0.75)
- *  - If content overflows the page: applies CSS zoom to shrink
- *  - If content underflows: increases font-size to fill the page
+ *  - Estimates its print height (screen→print ratio ~0.92)
+ *  - If content would overflow: applies CSS zoom to shrink it to fit
  *
  * On afterprint: resets all inline styles.
  */
@@ -35,20 +34,18 @@ export function usePrintFitToPage() {
 
   useEffect(() => {
     // Portrait letter usable height:
-    // 11in total - 0.3in top - 0.3in bottom = 10.4in × 96 = 998px
-    // Use 960 to leave breathing room at the bottom.
-    const PAGE_HEIGHT = 960;
+    // 11in - 0.3in top - 0.3in bottom = 10.4in × 96 = 998px
+    // Use 940 for safety margin (headers/footers can eat into this).
+    const PAGE_HEIGHT = 940;
 
     // Screen→print height ratio.
-    // Print CSS: 10pt font (~13px) + 2.5pt cell padding (~3px) → ~20px/row
-    // Screen CSS: 14px font + ~6px cell padding → ~26px/row
-    // Ratio ≈ 0.77. Use 0.75 conservatively.
-    const HEIGHT_RATIO = 0.75;
+    // Print: 10pt (~13.3px) font + ~3px cell padding → ~19px/row
+    // Screen: 14px font + ~6px cell padding → ~22px/row
+    // Including line-height (~1.3-1.5×), actual ratio is ~0.90-0.95.
+    // Use 0.92 — slightly conservative to ensure we zoom when needed.
+    const HEIGHT_RATIO = 0.92;
 
-    // Bounds
     const MIN_ZOOM = 0.5;
-    const MAX_FONT_PT = 14;
-    const BASE_FONT_PT = 10; // matches the @media print base in globals.css
 
     function handleBeforePrint() {
       const pages =
@@ -60,23 +57,16 @@ export function usePrintFitToPage() {
 
         // Reset any previous adjustments
         page.style.zoom = "";
-        page.style.fontSize = "";
 
         const estimatedPrintH = page.scrollHeight * HEIGHT_RATIO;
-        const scale = PAGE_HEIGHT / estimatedPrintH;
 
-        if (scale < 0.98) {
-          // Content overflows — shrink with CSS zoom
+        if (estimatedPrintH > PAGE_HEIGHT) {
+          // Content would overflow — shrink with CSS zoom
           const zoom = Math.max(
-            Math.floor(scale * 100) / 100,
+            Math.floor((PAGE_HEIGHT / estimatedPrintH) * 100) / 100,
             MIN_ZOOM,
           );
           page.style.zoom = String(zoom);
-          modifiedEls.current.push(page);
-        } else if (scale > 1.08) {
-          // Content underflows — increase font-size to fill the page
-          const newFontPt = Math.min(BASE_FONT_PT * scale, MAX_FONT_PT);
-          page.style.fontSize = `${newFontPt.toFixed(1)}pt`;
           modifiedEls.current.push(page);
         }
       });
@@ -85,7 +75,6 @@ export function usePrintFitToPage() {
     function handleAfterPrint() {
       modifiedEls.current.forEach((el) => {
         el.style.zoom = "";
-        el.style.fontSize = "";
       });
       modifiedEls.current = [];
     }
