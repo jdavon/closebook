@@ -130,12 +130,16 @@ export default function SubleaseFromPDFPage() {
 
       if (!res.ok) {
         let errorMsg = `Server error (${res.status})`;
-        try {
-          const data = await res.json();
-          errorMsg = data.error || errorMsg;
-        } catch {
-          const text = await res.text().catch(() => "");
-          console.error("Non-JSON error response:", res.status, text.slice(0, 500));
+        if (res.status === 504) {
+          errorMsg = "AI extraction timed out — the PDF may be too large. Try a shorter document or check your Vercel plan (Pro required for >10s).";
+        } else {
+          try {
+            const data = await res.json();
+            errorMsg = data.error || errorMsg;
+          } catch {
+            const text = await res.text().catch(() => "");
+            console.error("Non-JSON error response:", res.status, text.slice(0, 500));
+          }
         }
         toast.error(errorMsg);
         setExtracting(false);

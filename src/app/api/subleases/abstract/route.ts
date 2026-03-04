@@ -3,8 +3,8 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import Anthropic from "@anthropic-ai/sdk";
 
-// Allow up to 60 seconds for AI extraction (default is 10-15s on Vercel)
-export const maxDuration = 60;
+// Allow up to 300 seconds for AI extraction (requires Vercel Pro plan; Hobby caps at 10s)
+export const maxDuration = 300;
 
 /**
  * POST /api/subleases/abstract
