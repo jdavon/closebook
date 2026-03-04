@@ -20,13 +20,13 @@ export function getDataColumnCount(
 /**
  * Scales each .stmt-single-page element to fill exactly one printed page.
  *
- * Always landscape US Letter with 0.3in/0.4in margins.
+ * Always landscape US Letter with 0.3in top/bottom, 0.4in left/right margins.
  *
  * On beforeprint:
- *  - Measures each statement's natural screen height
- *  - Estimates its printed height using a screen→print ratio
+ *  - Measures each statement's screen height
+ *  - Estimates its print height (screen→print ratio ~0.75)
  *  - If content overflows the page: applies CSS zoom to shrink
- *  - If content underflows: increases font-size so it fills the page
+ *  - If content underflows: increases font-size to fill the page
  *
  * On afterprint: resets all inline styles.
  */
@@ -34,13 +34,16 @@ export function usePrintFitToPage() {
   const modifiedEls = useRef<HTMLElement[]>([]);
 
   useEffect(() => {
-    // Landscape letter with 0.3in top/bottom margins → 10.2in × 96 ≈ 979px usable height
-    // But we use a conservative target to leave breathing room
-    const PAGE_HEIGHT = 940;
+    // Landscape letter usable height:
+    // 8.5in total - 0.3in top - 0.3in bottom = 7.9in × 96 = 758px
+    // Use 720 to leave breathing room at the bottom.
+    const PAGE_HEIGHT = 720;
 
-    // Screen→print height ratio: print CSS uses ~10pt font + compact padding
-    // vs ~14px screen font + generous padding, so print is ~55% of screen height.
-    const HEIGHT_RATIO = 0.55;
+    // Screen→print height ratio.
+    // Print CSS: 10pt font (~13px) + 2.5pt cell padding (~3px) → ~20px/row
+    // Screen CSS: 14px font + ~6px cell padding → ~26px/row
+    // Ratio ≈ 0.77. Use 0.75 conservatively.
+    const HEIGHT_RATIO = 0.75;
 
     // Bounds
     const MIN_ZOOM = 0.5;
@@ -62,7 +65,7 @@ export function usePrintFitToPage() {
         const estimatedPrintH = page.scrollHeight * HEIGHT_RATIO;
         const scale = PAGE_HEIGHT / estimatedPrintH;
 
-        if (scale < 1) {
+        if (scale < 0.98) {
           // Content overflows — shrink with CSS zoom
           const zoom = Math.max(
             Math.floor(scale * 100) / 100,
@@ -70,7 +73,7 @@ export function usePrintFitToPage() {
           );
           page.style.zoom = String(zoom);
           modifiedEls.current.push(page);
-        } else if (scale > 1.05) {
+        } else if (scale > 1.08) {
           // Content underflows — increase font-size to fill the page
           const newFontPt = Math.min(BASE_FONT_PT * scale, MAX_FONT_PT);
           page.style.fontSize = `${newFontPt.toFixed(1)}pt`;
