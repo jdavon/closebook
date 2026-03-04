@@ -57,6 +57,8 @@ export function usePrintFitToPage(dataColumnCount?: number) {
 
     // Never zoom below this floor — text becomes unreadable.
     const MIN_ZOOM = 0.45;
+    // Never zoom above this ceiling — keeps it professional, not blown-up.
+    const MAX_ZOOM = 1.5;
 
     function handleBeforePrint() {
       const pages =
@@ -94,16 +96,23 @@ export function usePrintFitToPage(dataColumnCount?: number) {
         const estimatedPrintW = page.scrollWidth * WIDTH_RATIO;
         const estimatedPrintH = page.scrollHeight * HEIGHT_RATIO;
 
-        const widthZoom = estimatedPrintW > availW ? availW / estimatedPrintW : 1;
-        const heightZoom = estimatedPrintH > availH ? availH / estimatedPrintH : 1;
+        // Compute zoom for each axis.  Values > 1 mean the content is
+        // smaller than the page — we scale UP to fill the space.
+        // Values < 1 mean it overflows — we scale DOWN to fit.
+        const widthZoom = availW / estimatedPrintW;
+        const heightZoom = availH / estimatedPrintH;
 
-        // Use the tighter of the two so content fits in both dimensions.
+        // Use the tighter of the two so content fits in both dimensions,
+        // clamped between MIN_ZOOM (readable) and MAX_ZOOM (professional).
         const zoom = Math.max(
-          Math.floor(Math.min(widthZoom, heightZoom) * 100) / 100,
+          Math.min(
+            Math.floor(Math.min(widthZoom, heightZoom) * 100) / 100,
+            MAX_ZOOM,
+          ),
           MIN_ZOOM,
         );
 
-        if (zoom < 1) {
+        if (zoom !== 1) {
           page.style.zoom = String(zoom);
           zoomedElements.current.push(page);
         }
