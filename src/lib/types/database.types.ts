@@ -2400,6 +2400,48 @@ export type Database = {
         }
         Relationships: []
       }
+      lease_cost_splits: {
+        Row: {
+          id: string
+          lease_id: string
+          source_entity_id: string
+          destination_entity_id: string
+          split_type: string
+          split_percentage: number | null
+          split_fixed_amount: number | null
+          description: string | null
+          is_active: boolean
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          lease_id: string
+          source_entity_id: string
+          destination_entity_id: string
+          split_type?: string
+          split_percentage?: number | null
+          split_fixed_amount?: number | null
+          description?: string | null
+          is_active?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          lease_id?: string
+          source_entity_id?: string
+          destination_entity_id?: string
+          split_type?: string
+          split_percentage?: number | null
+          split_fixed_amount?: number | null
+          description?: string | null
+          is_active?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       lease_options: {
         Row: {
           id: string

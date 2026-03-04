@@ -180,6 +180,10 @@ export type SubleaseDocumentType =
   | "insurance_cert"
   | "other";
 
+// -- Lease Cost Splits --
+
+export type SplitType = "percentage" | "fixed_amount";
+
 // -- Rebate Tracker --
 
 export type AgreementType = "commercial" | "freelancer";
