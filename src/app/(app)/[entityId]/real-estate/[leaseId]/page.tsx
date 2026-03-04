@@ -780,12 +780,33 @@ export default function LeaseDetailPage() {
     setEscalationSheetOpen(true);
   }
 
-  /** Compute percentage & amount from a new rent target */
+  /** Walk prior escalations to get the effective rent just before a given date */
+  function getEffectiveRentAt(effectiveDate: string): number {
+    if (!lease) return 0;
+    let rent = lease.base_rent_monthly;
+    // Apply all existing escalations (sorted by date) that precede this date
+    const sorted = [...escalations]
+      .filter((e) => e.id !== editingEscId) // exclude the one being edited
+      .sort((a, b) => a.effective_date.localeCompare(b.effective_date));
+    for (const esc of sorted) {
+      if (esc.effective_date >= effectiveDate) break;
+      if (esc.escalation_type === "fixed_percentage" && esc.percentage_increase != null) {
+        rent = rent * (1 + esc.percentage_increase);
+      } else if (esc.escalation_type === "fixed_amount" && esc.amount_increase != null) {
+        rent = rent + esc.amount_increase;
+      }
+    }
+    return rent;
+  }
+
+  /** Compute percentage & amount from a new rent target, based on effective rent at that date */
   function handleNewRentChange(val: string) {
     setNewEscNewRent(val);
     if (!val || !lease) return;
     const newRent = parseFloat(val);
-    const currentMonthly = lease.base_rent_monthly;
+    const currentMonthly = newEscDate
+      ? getEffectiveRentAt(newEscDate)
+      : lease.base_rent_monthly;
     if (currentMonthly > 0 && !isNaN(newRent)) {
       const diff = newRent - currentMonthly;
       const pct = diff / currentMonthly;
@@ -1945,26 +1966,46 @@ export default function LeaseDetailPage() {
                         <Input
                           type="date"
                           value={newEscDate}
-                          onChange={(e) => setNewEscDate(e.target.value)}
+                          onChange={(e) => {
+                            setNewEscDate(e.target.value);
+                            // Recalculate if new rent is already entered
+                            if (newEscNewRent && e.target.value) {
+                              const eff = getEffectiveRentAt(e.target.value);
+                              const nr = parseFloat(newEscNewRent);
+                              if (eff > 0 && !isNaN(nr)) {
+                                const diff = nr - eff;
+                                const pct = diff / eff;
+                                setNewEscAmount(String(Math.round(diff * 100) / 100));
+                                setNewEscPercent(String(Math.round(pct * 1000000) / 1000000));
+                              }
+                            }
+                          }}
                         />
                       </div>
 
-                      {/* New Monthly Rent — back-calculates increase */}
-                      {newEscType !== "cpi" && lease && lease.base_rent_monthly > 0 && (
-                        <div className="space-y-2">
-                          <Label>New Monthly Rent</Label>
-                          <Input
-                            type="number"
-                            step="0.01"
-                            placeholder={`Current: ${formatCurrency(lease.base_rent_monthly)}`}
-                            value={newEscNewRent}
-                            onChange={(e) => handleNewRentChange(e.target.value)}
-                          />
-                          <p className="text-xs text-muted-foreground">
-                            Enter the new monthly amount — increase & percentage will be calculated automatically.
-                          </p>
-                        </div>
-                      )}
+                      {/* New Monthly Rent — back-calculates increase from effective rent at date */}
+                      {newEscType !== "cpi" && lease && lease.base_rent_monthly > 0 && (() => {
+                        const effectiveRent = newEscDate
+                          ? getEffectiveRentAt(newEscDate)
+                          : lease.base_rent_monthly;
+                        return (
+                          <div className="space-y-2">
+                            <Label>New Monthly Rent</Label>
+                            <Input
+                              type="number"
+                              step="0.01"
+                              placeholder={`Current: ${formatCurrency(effectiveRent)}`}
+                              value={newEscNewRent}
+                              onChange={(e) => handleNewRentChange(e.target.value)}
+                            />
+                            <p className="text-xs text-muted-foreground">
+                              {newEscDate && effectiveRent !== lease.base_rent_monthly
+                                ? `Effective rent at ${newEscDate}: ${formatCurrency(effectiveRent)}`
+                                : "Enter the new monthly amount — increase & percentage will be calculated automatically."}
+                            </p>
+                          </div>
+                        );
+                      })()}
 
                       <div className="relative flex items-center gap-2 py-1">
                         <div className="flex-1 border-t" />
