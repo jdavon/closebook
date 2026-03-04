@@ -34,10 +34,10 @@ export function usePrintFitToPage() {
   const modifiedEls = useRef<HTMLElement[]>([]);
 
   useEffect(() => {
-    // Landscape letter usable height:
-    // 8.5in total - 0.3in top - 0.3in bottom = 7.9in × 96 = 758px
-    // Use 720 to leave breathing room at the bottom.
-    const PAGE_HEIGHT = 720;
+    // Portrait letter usable height:
+    // 11in total - 0.3in top - 0.3in bottom = 10.4in × 96 = 998px
+    // Use 960 to leave breathing room at the bottom.
+    const PAGE_HEIGHT = 960;
 
     // Screen→print height ratio.
     // Print CSS: 10pt font (~13px) + 2.5pt cell padding (~3px) → ~20px/row
