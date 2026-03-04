@@ -785,10 +785,10 @@ export default function LeaseDetailPage() {
     setNewEscNewRent(val);
     if (!val || !lease) return;
     const newRent = parseFloat(val);
-    const currentAnnual = lease.base_rent_monthly * 12;
-    if (currentAnnual > 0 && !isNaN(newRent)) {
-      const diff = (newRent * 12) - currentAnnual;
-      const pct = diff / currentAnnual;
+    const currentMonthly = lease.base_rent_monthly;
+    if (currentMonthly > 0 && !isNaN(newRent)) {
+      const diff = newRent - currentMonthly;
+      const pct = diff / currentMonthly;
       setNewEscAmount(String(Math.round(diff * 100) / 100));
       setNewEscPercent(String(Math.round(pct * 1000000) / 1000000));
       if (diff >= 0) {
@@ -1906,7 +1906,7 @@ export default function LeaseDetailPage() {
                       Add Escalation
                     </Button>
                   </SheetTrigger>
-                  <SheetContent>
+                  <SheetContent className="px-6 pt-6 overflow-y-auto">
                     <SheetHeader>
                       <SheetTitle>
                         {editingEscId ? "Edit Escalation" : "Add Escalation"}
@@ -1917,7 +1917,7 @@ export default function LeaseDetailPage() {
                           : "Define a rent escalation rule"}
                       </SheetDescription>
                     </SheetHeader>
-                    <div className="space-y-4 mt-6">
+                    <div className="space-y-4 mt-6 pb-6">
                       <div className="space-y-2">
                         <Label>Type</Label>
                         <Select
@@ -1989,7 +1989,7 @@ export default function LeaseDetailPage() {
                       )}
                       {newEscType === "fixed_amount" && (
                         <div className="space-y-2">
-                          <Label>Amount Increase (annual)</Label>
+                          <Label>Amount Increase (monthly)</Label>
                           <Input
                             type="number"
                             step="0.01"

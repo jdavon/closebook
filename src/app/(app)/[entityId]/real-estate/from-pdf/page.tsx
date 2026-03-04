@@ -73,12 +73,12 @@ export default function LeaseFromPDFPage() {
     }));
   }
 
-  /** Update escalation: when user enters a dollar amount, compute percentage (and vice versa) */
+  /** Update escalation: when user enters a monthly dollar amount, compute percentage (and vice versa) */
   function handleEscAmountChange(index: number, amount: number | null) {
     const baseRent = getVal("base_rent_monthly") as number | null;
     setEscVal(index, "amount_increase", amount);
     if (amount != null && baseRent && baseRent > 0) {
-      setEscVal(index, "percentage_increase", amount / (baseRent * 12));
+      setEscVal(index, "percentage_increase", amount / baseRent);
       setEscVal(index, "escalation_type", "fixed_amount");
     } else if (amount == null) {
       setEscVal(index, "percentage_increase", null);
@@ -90,7 +90,7 @@ export default function LeaseFromPDFPage() {
     const pctDecimal = pctDisplay != null ? pctDisplay / 100 : null;
     setEscVal(index, "percentage_increase", pctDecimal);
     if (pctDecimal != null && baseRent && baseRent > 0) {
-      setEscVal(index, "amount_increase", Math.round(pctDecimal * baseRent * 12 * 100) / 100);
+      setEscVal(index, "amount_increase", Math.round(pctDecimal * baseRent * 100) / 100);
       setEscVal(index, "escalation_type", "fixed_percentage");
     } else if (pctDecimal == null) {
       setEscVal(index, "amount_increase", null);
@@ -644,7 +644,7 @@ export default function LeaseFromPDFPage() {
                       <TableRow>
                         <TableHead>Type</TableHead>
                         <TableHead>Effective Date</TableHead>
-                        <TableHead>$ Increase (annual)</TableHead>
+                        <TableHead>$ Increase (monthly)</TableHead>
                         <TableHead>% Increase</TableHead>
                         <TableHead>Frequency</TableHead>
                         <TableHead className="w-10" />
