@@ -174,6 +174,7 @@ function getMonthlySubleaseIncome(
 function getSubleaseIncomeForPeriod(
   leaseId: string,
   subleases: SubleaseRow[],
+  subleaseEscMap: Record<string, EscalationRule[]>,
   year: number,
   month: number,
 ): number {
@@ -186,8 +187,12 @@ function getSubleaseIncomeForPeriod(
   });
   let income = 0;
   for (const sub of activeSubs) {
+    const subEscs = subleaseEscMap[sub.id] ?? [];
+    const currentSubRent = subEscs.length > 0
+      ? getCurrentRent(sub.base_rent_monthly, subEscs, periodDate)
+      : sub.base_rent_monthly;
     income +=
-      sub.base_rent_monthly +
+      currentSubRent +
       sub.cam_recovery_monthly +
       sub.insurance_recovery_monthly +
       sub.property_tax_recovery_monthly +
@@ -215,9 +220,17 @@ function getCurrentMonthlyGross(
   );
 }
 
-function getBaseMonthlyGross(lease: LeaseRow): number {
+function getMonthlyGrossForPeriod(
+  lease: LeaseRow,
+  escalations: EscalationRule[],
+  asOfDate: Date,
+): number {
+  const currentRent =
+    escalations.length > 0
+      ? getCurrentRent(lease.base_rent_monthly, escalations, asOfDate)
+      : lease.base_rent_monthly;
   return (
-    lease.base_rent_monthly +
+    currentRent +
     lease.cam_monthly +
     lease.insurance_monthly +
     lease.property_tax_annual / 12 +
@@ -489,8 +502,8 @@ export default function OrgRealEstatePage() {
         const periodDate = new Date(m.year, m.month - 1, 15);
         if (periodDate < start || periodDate > end) continue;
 
-        const gross = getBaseMonthlyGross(l);
-        const subIncome = getSubleaseIncomeForPeriod(l.id, subleases, m.year, m.month);
+        const gross = getMonthlyGrossForPeriod(l, escalationsByLease[l.id] ?? [], periodDate);
+        const subIncome = getSubleaseIncomeForPeriod(l.id, subleases, subleaseEscMap, m.year, m.month);
         const net = gross - subIncome;
         leaseNetForPeriod.set(l.id, net);
 
@@ -528,7 +541,7 @@ export default function OrgRealEstatePage() {
       row.total = Math.round(total);
       return row;
     });
-  }, [activeLeases, entities, subleases, costSplits]);
+  }, [activeLeases, entities, subleases, costSplits, escalationsByLease, subleaseEscMap]);
 
   // --- Entity cost breakdown (pie) including allocations ---
 
