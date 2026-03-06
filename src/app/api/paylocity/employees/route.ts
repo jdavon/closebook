@@ -56,7 +56,7 @@ export async function GET() {
       clients.map(async (client) => {
         const raw = await client.getEmployees({
           activeOnly: true,
-          include: ["info", "position", "payrate"],
+          include: ["info", "position", "payrate", "status"],
         });
         return { companyId: client.companyId, employees: raw };
       })
