@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Card,
+  CardAction,
   CardContent,
   CardDescription,
   CardHeader,
@@ -49,7 +50,22 @@ import {
   Upload,
   Calendar,
   Check,
+  Pencil,
+  X,
+  Trash2,
 } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import { cn } from "@/lib/utils";
 import {
   formatCurrency,
   formatPercentage,
@@ -57,6 +73,7 @@ import {
   getPeriodLabel,
 } from "@/lib/utils/dates";
 import { generateSubleasePaymentSchedule } from "@/lib/utils/sublease-payments";
+import { getCurrentRent } from "@/lib/utils/lease-payments";
 import type {
   SubleaseStatus,
   MaintenanceType,
@@ -260,6 +277,8 @@ export default function SubleaseDetailPage() {
   // Payment period selector
   const [periodYear, setPeriodYear] = useState(current.year);
   const [periodMonth, setPeriodMonth] = useState(current.month);
+  // Full income schedule for grid view
+  const [allSubleasePayments, setAllSubleasePayments] = useState<SubleasePaymentRow[]>([]);
 
   // GL account editing
   const [subleaseIncomeAccountId, setSubleaseIncomeAccountId] = useState("");
@@ -271,13 +290,15 @@ export default function SubleaseDetailPage() {
   const [optionSheetOpen, setOptionSheetOpen] = useState(false);
   const [dateSheetOpen, setDateSheetOpen] = useState(false);
 
-  // New escalation form
+  // Escalation form (shared for add/edit)
+  const [editingEscId, setEditingEscId] = useState<string | null>(null);
   const [newEscType, setNewEscType] = useState<EscalationType>(
     "fixed_percentage"
   );
   const [newEscDate, setNewEscDate] = useState("");
   const [newEscPercent, setNewEscPercent] = useState("");
   const [newEscAmount, setNewEscAmount] = useState("");
+  const [newEscNewRent, setNewEscNewRent] = useState("");
   const [newEscFrequency, setNewEscFrequency] =
     useState<EscalationFrequency>("annual");
 
@@ -300,6 +321,37 @@ export default function SubleaseDetailPage() {
 
   // Document upload state
   const [uploadingDoc, setUploadingDoc] = useState(false);
+
+  // Editable summary fields
+  const [editingDetails, setEditingDetails] = useState(false);
+  const [savingDetails, setSavingDetails] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  // Sublease terms edit fields
+  const [editSubleaseName, setEditSubleaseName] = useState("");
+  const [editSubtenantName, setEditSubtenantName] = useState("");
+  const [editSubtenantContact, setEditSubtenantContact] = useState("");
+  const [editStatus, setEditStatus] = useState<SubleaseStatus>("draft");
+  const [editCommencementDate, setEditCommencementDate] = useState("");
+  const [editRentCommencementDate, setEditRentCommencementDate] = useState("");
+  const [editExpirationDate, setEditExpirationDate] = useState("");
+  const [editTermMonths, setEditTermMonths] = useState("");
+  const [editSubleasedSf, setEditSubleasedSf] = useState("");
+  const [editFloorSuite, setEditFloorSuite] = useState("");
+  const [editMaintenanceType, setEditMaintenanceType] = useState<MaintenanceType>("triple_net");
+  const [editPermittedUse, setEditPermittedUse] = useState("");
+  const [editNotes, setEditNotes] = useState("");
+  // Income terms edit fields
+  const [editBaseRent, setEditBaseRent] = useState("");
+  const [editRentPerSf, setEditRentPerSf] = useState("");
+  const [editSecurityDeposit, setEditSecurityDeposit] = useState("");
+  const [editAbatementMonths, setEditAbatementMonths] = useState("");
+  const [editAbatementAmount, setEditAbatementAmount] = useState("");
+  const [editCamRecovery, setEditCamRecovery] = useState("");
+  const [editInsuranceRecovery, setEditInsuranceRecovery] = useState("");
+  const [editPropertyTaxRecovery, setEditPropertyTaxRecovery] = useState("");
+  const [editUtilitiesRecovery, setEditUtilitiesRecovery] = useState("");
+  const [editOtherRecovery, setEditOtherRecovery] = useState("");
+  const [editOtherRecoveryDesc, setEditOtherRecoveryDesc] = useState("");
 
   const years = Array.from({ length: 10 }, (_, i) => current.year - 2 + i);
   const months = Array.from({ length: 12 }, (_, i) => i + 1);
@@ -329,6 +381,14 @@ export default function SubleaseDetailPage() {
       .eq("sublease_id", subleaseId)
       .eq("period_year", periodYear)
       .eq("period_month", periodMonth)
+      .order("payment_type");
+
+    const allPaymentsResult = await supabase
+      .from("sublease_payments")
+      .select("*")
+      .eq("sublease_id", subleaseId)
+      .order("period_year")
+      .order("period_month")
       .order("payment_type");
 
     const escalationsResult = await supabase
@@ -369,10 +429,15 @@ export default function SubleaseDetailPage() {
       setSubleaseIncomeAccountId(s.sublease_income_account_id ?? "");
       setCamRecoveryAccountId(s.cam_recovery_account_id ?? "");
       setOtherIncomeAccountId(s.other_income_account_id ?? "");
+      // Init editable fields
+      initEditFields(s);
     }
 
     setPayments(
       (paymentsResult.data as unknown as SubleasePaymentRow[]) ?? []
+    );
+    setAllSubleasePayments(
+      (allPaymentsResult.data as unknown as SubleasePaymentRow[]) ?? []
     );
     setEscalations(
       (escalationsResult.data as unknown as SubleaseEscalationRow[]) ?? []
@@ -410,6 +475,100 @@ export default function SubleaseDetailPage() {
     if (error) toast.error(error.message);
     else toast.success("GL accounts updated");
     setSaving(false);
+  }
+
+  function initEditFields(s: SubleaseData) {
+    setEditSubleaseName(s.sublease_name);
+    setEditSubtenantName(s.subtenant_name);
+    setEditSubtenantContact(s.subtenant_contact_info ?? "");
+    setEditStatus(s.status);
+    setEditCommencementDate(s.commencement_date);
+    setEditRentCommencementDate(s.rent_commencement_date ?? "");
+    setEditExpirationDate(s.expiration_date);
+    setEditTermMonths(String(s.sublease_term_months));
+    setEditSubleasedSf(s.subleased_square_footage != null ? String(s.subleased_square_footage) : "");
+    setEditFloorSuite(s.floor_suite ?? "");
+    setEditMaintenanceType(s.maintenance_type);
+    setEditPermittedUse(s.permitted_use ?? "");
+    setEditNotes(s.notes ?? "");
+    setEditBaseRent(String(s.base_rent_monthly));
+    setEditRentPerSf(s.rent_per_sf != null ? String(s.rent_per_sf) : "");
+    setEditSecurityDeposit(String(s.security_deposit_held));
+    setEditAbatementMonths(String(s.rent_abatement_months));
+    setEditAbatementAmount(String(s.rent_abatement_amount));
+    setEditCamRecovery(String(s.cam_recovery_monthly));
+    setEditInsuranceRecovery(String(s.insurance_recovery_monthly));
+    setEditPropertyTaxRecovery(String(s.property_tax_recovery_monthly));
+    setEditUtilitiesRecovery(String(s.utilities_recovery_monthly));
+    setEditOtherRecovery(String(s.other_recovery_monthly));
+    setEditOtherRecoveryDesc(s.other_recovery_description ?? "");
+  }
+
+  async function handleSaveDetails() {
+    setSavingDetails(true);
+    const baseRent = parseFloat(editBaseRent) || 0;
+    const { error } = await supabase
+      .from("subleases")
+      .update({
+        sublease_name: editSubleaseName.trim(),
+        subtenant_name: editSubtenantName.trim(),
+        subtenant_contact_info: editSubtenantContact.trim() || null,
+        status: editStatus,
+        commencement_date: editCommencementDate,
+        rent_commencement_date: editRentCommencementDate || null,
+        expiration_date: editExpirationDate,
+        sublease_term_months: parseInt(editTermMonths) || 0,
+        subleased_square_footage: editSubleasedSf ? parseFloat(editSubleasedSf) : null,
+        floor_suite: editFloorSuite.trim() || null,
+        maintenance_type: editMaintenanceType,
+        permitted_use: editPermittedUse.trim() || null,
+        notes: editNotes.trim() || null,
+        base_rent_monthly: baseRent,
+        rent_per_sf: editRentPerSf ? parseFloat(editRentPerSf) : null,
+        security_deposit_held: parseFloat(editSecurityDeposit) || 0,
+        rent_abatement_months: parseInt(editAbatementMonths) || 0,
+        rent_abatement_amount: parseFloat(editAbatementAmount) || 0,
+        cam_recovery_monthly: parseFloat(editCamRecovery) || 0,
+        insurance_recovery_monthly: parseFloat(editInsuranceRecovery) || 0,
+        property_tax_recovery_monthly: parseFloat(editPropertyTaxRecovery) || 0,
+        utilities_recovery_monthly: parseFloat(editUtilitiesRecovery) || 0,
+        other_recovery_monthly: parseFloat(editOtherRecovery) || 0,
+        other_recovery_description: editOtherRecoveryDesc.trim() || null,
+      })
+      .eq("id", subleaseId);
+
+    if (error) {
+      toast.error(error.message);
+    } else {
+      toast.success("Sublease details updated");
+      setEditingDetails(false);
+      loadData();
+    }
+    setSavingDetails(false);
+  }
+
+  function handleCancelEditDetails() {
+    if (sublease) initEditFields(sublease);
+    setEditingDetails(false);
+  }
+
+  async function handleDeleteSublease() {
+    setDeleting(true);
+    // Delete child records first
+    await supabase.from("sublease_payments").delete().eq("sublease_id", subleaseId);
+    await supabase.from("sublease_escalations").delete().eq("sublease_id", subleaseId);
+    await supabase.from("sublease_options").delete().eq("sublease_id", subleaseId);
+    await supabase.from("sublease_critical_dates").delete().eq("sublease_id", subleaseId);
+    await supabase.from("sublease_documents").delete().eq("sublease_id", subleaseId);
+
+    const { error } = await supabase.from("subleases").delete().eq("id", subleaseId);
+    if (error) {
+      toast.error("Failed to delete sublease: " + error.message);
+      setDeleting(false);
+    } else {
+      toast.success("Sublease deleted");
+      router.push(`/${entityId}/real-estate/${leaseId}`);
+    }
   }
 
   async function handleToggleReceived(
@@ -506,25 +665,107 @@ export default function SubleaseDetailPage() {
     loadData();
   }
 
-  async function handleAddEscalation() {
-    const { error } = await supabase.from("sublease_escalations").insert({
-      sublease_id: subleaseId,
+  function resetEscForm() {
+    setEditingEscId(null);
+    setNewEscType("fixed_percentage");
+    setNewEscDate("");
+    setNewEscPercent("");
+    setNewEscAmount("");
+    setNewEscNewRent("");
+    setNewEscFrequency("annual");
+  }
+
+  function openEditEscalation(esc: SubleaseEscalationRow) {
+    setEditingEscId(esc.id);
+    setNewEscType(esc.escalation_type);
+    setNewEscDate(esc.effective_date);
+    setNewEscPercent(esc.percentage_increase != null ? String(esc.percentage_increase) : "");
+    setNewEscAmount(esc.amount_increase != null ? String(esc.amount_increase) : "");
+    setNewEscNewRent("");
+    setNewEscFrequency(esc.frequency);
+    setEscalationSheetOpen(true);
+  }
+
+  /** Walk prior escalations to get the effective rent just before a given date */
+  function getEffectiveRentAt(effectiveDate: string): number {
+    if (!sublease) return 0;
+    let rent = sublease.base_rent_monthly;
+    const sorted = [...escalations]
+      .filter((e) => e.id !== editingEscId)
+      .sort((a, b) => a.effective_date.localeCompare(b.effective_date));
+    for (const esc of sorted) {
+      if (esc.effective_date >= effectiveDate) break;
+      if (esc.escalation_type === "fixed_percentage" && esc.percentage_increase != null) {
+        rent = rent * (1 + esc.percentage_increase);
+      } else if (esc.escalation_type === "fixed_amount" && esc.amount_increase != null) {
+        rent = rent + esc.amount_increase;
+      }
+    }
+    return rent;
+  }
+
+  /** Compute the cumulative rent after all escalations up to and including a given one */
+  function getResultingRentAfter(escId: string): number {
+    if (!sublease) return 0;
+    let rent = sublease.base_rent_monthly;
+    const sorted = [...escalations].sort((a, b) => a.effective_date.localeCompare(b.effective_date));
+    for (const esc of sorted) {
+      if (esc.escalation_type === "fixed_percentage" && esc.percentage_increase != null) {
+        rent = rent * (1 + esc.percentage_increase);
+      } else if (esc.escalation_type === "fixed_amount" && esc.amount_increase != null) {
+        rent = rent + esc.amount_increase;
+      }
+      if (esc.id === escId) break;
+    }
+    return Math.round(rent * 100) / 100;
+  }
+
+  /** Compute percentage & amount from a new rent target */
+  function handleNewRentChange(val: string) {
+    setNewEscNewRent(val);
+    if (!val || !sublease) return;
+    const newRent = parseFloat(val);
+    const currentMonthly = newEscDate
+      ? getEffectiveRentAt(newEscDate)
+      : sublease.base_rent_monthly;
+    if (currentMonthly > 0 && !isNaN(newRent)) {
+      const diff = newRent - currentMonthly;
+      const pct = diff / currentMonthly;
+      setNewEscAmount(String(Math.round(diff * 100) / 100));
+      setNewEscPercent(String(Math.round(pct * 1000000) / 1000000));
+      if (diff >= 0) {
+        setNewEscType("fixed_amount");
+      }
+    }
+  }
+
+  async function handleSaveEscalation() {
+    const payload = {
       escalation_type: newEscType,
       effective_date: newEscDate,
       percentage_increase: newEscPercent ? parseFloat(newEscPercent) : null,
       amount_increase: newEscAmount ? parseFloat(newEscAmount) : null,
       frequency: newEscFrequency,
-    });
+    };
 
-    if (error) toast.error(error.message);
-    else {
+    if (editingEscId) {
+      const { error } = await supabase
+        .from("sublease_escalations")
+        .update(payload)
+        .eq("id", editingEscId);
+      if (error) { toast.error(error.message); return; }
+      toast.success("Escalation updated");
+    } else {
+      const { error } = await supabase
+        .from("sublease_escalations")
+        .insert({ ...payload, sublease_id: subleaseId });
+      if (error) { toast.error(error.message); return; }
       toast.success("Escalation added");
-      setEscalationSheetOpen(false);
-      setNewEscDate("");
-      setNewEscPercent("");
-      setNewEscAmount("");
-      loadData();
     }
+
+    setEscalationSheetOpen(false);
+    resetEscForm();
+    loadData();
   }
 
   async function handleAddOption() {
@@ -648,8 +889,22 @@ export default function SubleaseDetailPage() {
 
   // --- Helpers ---
 
+  // Current rent after applying all escalations effective on or before today
+  const currentBaseRent = sublease
+    ? getCurrentRent(
+        sublease.base_rent_monthly,
+        escalations.map((e) => ({
+          escalation_type: e.escalation_type,
+          effective_date: e.effective_date,
+          percentage_increase: e.percentage_increase,
+          amount_increase: e.amount_increase,
+          frequency: e.frequency,
+        }))
+      )
+    : 0;
+
   const totalMonthlyIncome = sublease
-    ? sublease.base_rent_monthly +
+    ? currentBaseRent +
       sublease.cam_recovery_monthly +
       sublease.insurance_recovery_monthly +
       sublease.property_tax_recovery_monthly +
@@ -728,6 +983,18 @@ export default function SubleaseDetailPage() {
     0
   );
 
+  // Build full income grid: year → month → total scheduled
+  const MONTH_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const incomeGrid: Record<number, Record<number, number>> = {};
+  for (const p of allSubleasePayments) {
+    if (!incomeGrid[p.period_year]) incomeGrid[p.period_year] = {};
+    incomeGrid[p.period_year][p.period_month] =
+      (incomeGrid[p.period_year][p.period_month] || 0) + p.scheduled_amount;
+  }
+  const gridYears = Object.keys(incomeGrid)
+    .map(Number)
+    .sort((a, b) => a - b);
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -761,6 +1028,34 @@ export default function SubleaseDetailPage() {
             )}
           </p>
         </div>
+        <AlertDialog>
+          <AlertDialogTrigger asChild>
+            <Button variant="destructive" size="sm" disabled={deleting}>
+              <Trash2 className="mr-2 h-4 w-4" />
+              {deleting ? "Deleting..." : "Delete Sublease"}
+            </Button>
+          </AlertDialogTrigger>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete this sublease?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This will permanently delete{" "}
+                <span className="font-semibold">{sublease.sublease_name}</span>{" "}
+                and all associated data including payments, escalations, options,
+                critical dates, and documents. This action cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={handleDeleteSublease}
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              >
+                Delete
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </div>
 
       {/* Summary Bar */}
@@ -769,7 +1064,7 @@ export default function SubleaseDetailPage() {
           <div>
             <p className="text-xs text-muted-foreground">Base Rent</p>
             <p className="text-lg font-semibold tabular-nums text-green-600">
-              {formatCurrency(sublease.base_rent_monthly)}
+              {formatCurrency(currentBaseRent)}
             </p>
           </div>
           <div>
@@ -827,64 +1122,200 @@ export default function SubleaseDetailPage() {
             <Card>
               <CardHeader>
                 <CardTitle>Sublease Terms</CardTitle>
+                <CardAction>
+                  {!editingDetails ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setEditingDetails(true)}
+                    >
+                      <Pencil className="mr-2 h-4 w-4" />
+                      Edit
+                    </Button>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleCancelEditDetails}
+                      >
+                        <X className="mr-2 h-4 w-4" />
+                        Cancel
+                      </Button>
+                      <Button
+                        size="sm"
+                        onClick={handleSaveDetails}
+                        disabled={savingDetails}
+                      >
+                        <Save className="mr-2 h-4 w-4" />
+                        {savingDetails ? "Saving..." : "Save"}
+                      </Button>
+                    </div>
+                  )}
+                </CardAction>
               </CardHeader>
               <CardContent className="space-y-3 text-sm">
-                <div className="grid grid-cols-2 gap-2">
-                  <span className="text-muted-foreground">Subtenant</span>
-                  <span>{sublease.subtenant_name}</span>
-                  <span className="text-muted-foreground">Contact Info</span>
-                  <span>{sublease.subtenant_contact_info ?? "---"}</span>
-                  <span className="text-muted-foreground">Status</span>
-                  <span>
-                    <Badge
-                      variant={SUBLEASE_STATUS_VARIANTS[sublease.status]}
-                    >
-                      {SUBLEASE_STATUS_LABELS[sublease.status]}
-                    </Badge>
-                  </span>
-                  <span className="text-muted-foreground">Commencement</span>
-                  <span>
-                    {new Date(
-                      sublease.commencement_date + "T00:00:00"
-                    ).toLocaleDateString()}
-                  </span>
-                  <span className="text-muted-foreground">
-                    Rent Commencement
-                  </span>
-                  <span>
-                    {sublease.rent_commencement_date
-                      ? new Date(
-                          sublease.rent_commencement_date + "T00:00:00"
-                        ).toLocaleDateString()
-                      : "---"}
-                  </span>
-                  <span className="text-muted-foreground">Expiration</span>
-                  <span>
-                    {new Date(
-                      sublease.expiration_date + "T00:00:00"
-                    ).toLocaleDateString()}
-                  </span>
-                  <span className="text-muted-foreground">Term</span>
-                  <span>{sublease.sublease_term_months} months</span>
-                  <span className="text-muted-foreground">Subleased SF</span>
-                  <span>
-                    {sublease.subleased_square_footage
-                      ? sublease.subleased_square_footage.toLocaleString()
-                      : "---"}
-                  </span>
-                  <span className="text-muted-foreground">Floor / Suite</span>
-                  <span>{sublease.floor_suite ?? "---"}</span>
-                  <span className="text-muted-foreground">Maintenance</span>
-                  <span>{MAINTENANCE_LABELS[sublease.maintenance_type]}</span>
-                  <span className="text-muted-foreground">Permitted Use</span>
-                  <span>{sublease.permitted_use ?? "---"}</span>
-                </div>
-
-                {sublease.notes && (
-                  <div className="pt-3 border-t">
-                    <p className="text-muted-foreground mb-1">Notes</p>
-                    <p className="whitespace-pre-wrap">{sublease.notes}</p>
+                {editingDetails ? (
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-2 gap-3 items-center">
+                      <Label className="text-muted-foreground">Sublease Name</Label>
+                      <Input
+                        value={editSubleaseName}
+                        onChange={(e) => setEditSubleaseName(e.target.value)}
+                      />
+                      <Label className="text-muted-foreground">Subtenant</Label>
+                      <Input
+                        value={editSubtenantName}
+                        onChange={(e) => setEditSubtenantName(e.target.value)}
+                      />
+                      <Label className="text-muted-foreground">Contact Info</Label>
+                      <Input
+                        value={editSubtenantContact}
+                        onChange={(e) => setEditSubtenantContact(e.target.value)}
+                        placeholder="Phone, email, etc."
+                      />
+                      <Label className="text-muted-foreground">Status</Label>
+                      <Select
+                        value={editStatus}
+                        onValueChange={(v) => setEditStatus(v as SubleaseStatus)}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="draft">Draft</SelectItem>
+                          <SelectItem value="active">Active</SelectItem>
+                          <SelectItem value="expired">Expired</SelectItem>
+                          <SelectItem value="terminated">Terminated</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <Label className="text-muted-foreground">Commencement</Label>
+                      <Input
+                        type="date"
+                        value={editCommencementDate}
+                        onChange={(e) => setEditCommencementDate(e.target.value)}
+                      />
+                      <Label className="text-muted-foreground">Rent Commencement</Label>
+                      <Input
+                        type="date"
+                        value={editRentCommencementDate}
+                        onChange={(e) => setEditRentCommencementDate(e.target.value)}
+                      />
+                      <Label className="text-muted-foreground">Expiration</Label>
+                      <Input
+                        type="date"
+                        value={editExpirationDate}
+                        onChange={(e) => setEditExpirationDate(e.target.value)}
+                      />
+                      <Label className="text-muted-foreground">Term (Months)</Label>
+                      <Input
+                        type="number"
+                        value={editTermMonths}
+                        onChange={(e) => setEditTermMonths(e.target.value)}
+                      />
+                      <Label className="text-muted-foreground">Subleased SF</Label>
+                      <Input
+                        type="number"
+                        value={editSubleasedSf}
+                        onChange={(e) => setEditSubleasedSf(e.target.value)}
+                        placeholder="Square footage"
+                      />
+                      <Label className="text-muted-foreground">Floor / Suite</Label>
+                      <Input
+                        value={editFloorSuite}
+                        onChange={(e) => setEditFloorSuite(e.target.value)}
+                      />
+                      <Label className="text-muted-foreground">Maintenance</Label>
+                      <Select
+                        value={editMaintenanceType}
+                        onValueChange={(v) => setEditMaintenanceType(v as MaintenanceType)}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="triple_net">Triple Net (NNN)</SelectItem>
+                          <SelectItem value="gross">Gross</SelectItem>
+                          <SelectItem value="modified_gross">Modified Gross</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <Label className="text-muted-foreground">Permitted Use</Label>
+                      <Input
+                        value={editPermittedUse}
+                        onChange={(e) => setEditPermittedUse(e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-muted-foreground">Notes</Label>
+                      <Textarea
+                        value={editNotes}
+                        onChange={(e) => setEditNotes(e.target.value)}
+                        rows={3}
+                      />
+                    </div>
                   </div>
+                ) : (
+                  <>
+                    <div className="grid grid-cols-2 gap-2">
+                      <span className="text-muted-foreground">Sublease Name</span>
+                      <span>{sublease.sublease_name}</span>
+                      <span className="text-muted-foreground">Subtenant</span>
+                      <span>{sublease.subtenant_name}</span>
+                      <span className="text-muted-foreground">Contact Info</span>
+                      <span>{sublease.subtenant_contact_info ?? "---"}</span>
+                      <span className="text-muted-foreground">Status</span>
+                      <span>
+                        <Badge
+                          variant={SUBLEASE_STATUS_VARIANTS[sublease.status]}
+                        >
+                          {SUBLEASE_STATUS_LABELS[sublease.status]}
+                        </Badge>
+                      </span>
+                      <span className="text-muted-foreground">Commencement</span>
+                      <span>
+                        {new Date(
+                          sublease.commencement_date + "T00:00:00"
+                        ).toLocaleDateString()}
+                      </span>
+                      <span className="text-muted-foreground">
+                        Rent Commencement
+                      </span>
+                      <span>
+                        {sublease.rent_commencement_date
+                          ? new Date(
+                              sublease.rent_commencement_date + "T00:00:00"
+                            ).toLocaleDateString()
+                          : "---"}
+                      </span>
+                      <span className="text-muted-foreground">Expiration</span>
+                      <span>
+                        {new Date(
+                          sublease.expiration_date + "T00:00:00"
+                        ).toLocaleDateString()}
+                      </span>
+                      <span className="text-muted-foreground">Term</span>
+                      <span>{sublease.sublease_term_months} months</span>
+                      <span className="text-muted-foreground">Subleased SF</span>
+                      <span>
+                        {sublease.subleased_square_footage
+                          ? sublease.subleased_square_footage.toLocaleString()
+                          : "---"}
+                      </span>
+                      <span className="text-muted-foreground">Floor / Suite</span>
+                      <span>{sublease.floor_suite ?? "---"}</span>
+                      <span className="text-muted-foreground">Maintenance</span>
+                      <span>{MAINTENANCE_LABELS[sublease.maintenance_type]}</span>
+                      <span className="text-muted-foreground">Permitted Use</span>
+                      <span>{sublease.permitted_use ?? "---"}</span>
+                    </div>
+
+                    {sublease.notes && (
+                      <div className="pt-3 border-t">
+                        <p className="text-muted-foreground mb-1">Notes</p>
+                        <p className="whitespace-pre-wrap">{sublease.notes}</p>
+                      </div>
+                    )}
+                  </>
                 )}
               </CardContent>
             </Card>
@@ -895,80 +1326,161 @@ export default function SubleaseDetailPage() {
                 <CardTitle>Income Terms</CardTitle>
               </CardHeader>
               <CardContent className="space-y-3 text-sm">
-                <div className="grid grid-cols-2 gap-2">
-                  <span className="text-muted-foreground">
-                    Base Rent (Monthly)
-                  </span>
-                  <span className="text-green-600">
-                    {formatCurrency(sublease.base_rent_monthly)}
-                  </span>
-                  <span className="text-muted-foreground">
-                    Base Rent (Annual)
-                  </span>
-                  <span className="text-green-600">
-                    {formatCurrency(sublease.base_rent_annual)}
-                  </span>
-                  <span className="text-muted-foreground">Rent / SF</span>
-                  <span>
-                    {sublease.rent_per_sf
-                      ? formatCurrency(sublease.rent_per_sf)
-                      : "---"}
-                  </span>
-                  <span className="text-muted-foreground">
-                    Security Deposit Held
-                  </span>
-                  <span>{formatCurrency(sublease.security_deposit_held)}</span>
-                  <span className="text-muted-foreground">
-                    Rent Abatement Months
-                  </span>
-                  <span>{sublease.rent_abatement_months}</span>
-                  <span className="text-muted-foreground">
-                    Rent Abatement Amount
-                  </span>
-                  <span>{formatCurrency(sublease.rent_abatement_amount)}</span>
-                  <span className="text-muted-foreground">CAM Recovery</span>
-                  <span className="text-green-600">
-                    {formatCurrency(sublease.cam_recovery_monthly)}
-                  </span>
-                  <span className="text-muted-foreground">
-                    Insurance Recovery
-                  </span>
-                  <span className="text-green-600">
-                    {formatCurrency(sublease.insurance_recovery_monthly)}
-                  </span>
-                  <span className="text-muted-foreground">
-                    Property Tax Recovery
-                  </span>
-                  <span className="text-green-600">
-                    {formatCurrency(sublease.property_tax_recovery_monthly)}
-                  </span>
-                  <span className="text-muted-foreground">
-                    Utilities Recovery
-                  </span>
-                  <span className="text-green-600">
-                    {formatCurrency(sublease.utilities_recovery_monthly)}
-                  </span>
-                  <span className="text-muted-foreground">Other Recovery</span>
-                  <span className="text-green-600">
-                    {formatCurrency(sublease.other_recovery_monthly)}
-                  </span>
-                  {sublease.other_recovery_description && (
-                    <>
-                      <span className="text-muted-foreground">
-                        Other Description
-                      </span>
-                      <span>{sublease.other_recovery_description}</span>
-                    </>
-                  )}
-                </div>
+                {editingDetails ? (
+                  <div className="grid grid-cols-2 gap-3 items-center">
+                    <Label className="text-muted-foreground">Base Rent (Monthly)</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      value={editBaseRent}
+                      onChange={(e) => setEditBaseRent(e.target.value)}
+                    />
+                    <Label className="text-muted-foreground">Rent / SF</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      value={editRentPerSf}
+                      onChange={(e) => setEditRentPerSf(e.target.value)}
+                      placeholder="Optional"
+                    />
+                    <Label className="text-muted-foreground">Security Deposit Held</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      value={editSecurityDeposit}
+                      onChange={(e) => setEditSecurityDeposit(e.target.value)}
+                    />
+                    <Label className="text-muted-foreground">Abatement Months</Label>
+                    <Input
+                      type="number"
+                      value={editAbatementMonths}
+                      onChange={(e) => setEditAbatementMonths(e.target.value)}
+                    />
+                    <Label className="text-muted-foreground">Abatement Amount</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      value={editAbatementAmount}
+                      onChange={(e) => setEditAbatementAmount(e.target.value)}
+                    />
+                    <Label className="text-muted-foreground">CAM Recovery</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      value={editCamRecovery}
+                      onChange={(e) => setEditCamRecovery(e.target.value)}
+                    />
+                    <Label className="text-muted-foreground">Insurance Recovery</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      value={editInsuranceRecovery}
+                      onChange={(e) => setEditInsuranceRecovery(e.target.value)}
+                    />
+                    <Label className="text-muted-foreground">Property Tax Recovery</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      value={editPropertyTaxRecovery}
+                      onChange={(e) => setEditPropertyTaxRecovery(e.target.value)}
+                    />
+                    <Label className="text-muted-foreground">Utilities Recovery</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      value={editUtilitiesRecovery}
+                      onChange={(e) => setEditUtilitiesRecovery(e.target.value)}
+                    />
+                    <Label className="text-muted-foreground">Other Recovery</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      value={editOtherRecovery}
+                      onChange={(e) => setEditOtherRecovery(e.target.value)}
+                    />
+                    <Label className="text-muted-foreground">Other Description</Label>
+                    <Input
+                      value={editOtherRecoveryDesc}
+                      onChange={(e) => setEditOtherRecoveryDesc(e.target.value)}
+                      placeholder="Description of other recovery"
+                    />
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 gap-2">
+                    <span className="text-muted-foreground">
+                      Base Rent (Monthly)
+                    </span>
+                    <span className="text-green-600">
+                      {formatCurrency(sublease.base_rent_monthly)}
+                    </span>
+                    <span className="text-muted-foreground">
+                      Base Rent (Annual)
+                    </span>
+                    <span className="text-green-600">
+                      {formatCurrency(sublease.base_rent_annual)}
+                    </span>
+                    <span className="text-muted-foreground">Rent / SF</span>
+                    <span>
+                      {sublease.rent_per_sf
+                        ? formatCurrency(sublease.rent_per_sf)
+                        : "---"}
+                    </span>
+                    <span className="text-muted-foreground">
+                      Security Deposit Held
+                    </span>
+                    <span>{formatCurrency(sublease.security_deposit_held)}</span>
+                    <span className="text-muted-foreground">
+                      Rent Abatement Months
+                    </span>
+                    <span>{sublease.rent_abatement_months}</span>
+                    <span className="text-muted-foreground">
+                      Rent Abatement Amount
+                    </span>
+                    <span>{formatCurrency(sublease.rent_abatement_amount)}</span>
+                    <span className="text-muted-foreground">CAM Recovery</span>
+                    <span className="text-green-600">
+                      {formatCurrency(sublease.cam_recovery_monthly)}
+                    </span>
+                    <span className="text-muted-foreground">
+                      Insurance Recovery
+                    </span>
+                    <span className="text-green-600">
+                      {formatCurrency(sublease.insurance_recovery_monthly)}
+                    </span>
+                    <span className="text-muted-foreground">
+                      Property Tax Recovery
+                    </span>
+                    <span className="text-green-600">
+                      {formatCurrency(sublease.property_tax_recovery_monthly)}
+                    </span>
+                    <span className="text-muted-foreground">
+                      Utilities Recovery
+                    </span>
+                    <span className="text-green-600">
+                      {formatCurrency(sublease.utilities_recovery_monthly)}
+                    </span>
+                    <span className="text-muted-foreground">Other Recovery</span>
+                    <span className="text-green-600">
+                      {formatCurrency(sublease.other_recovery_monthly)}
+                    </span>
+                    {sublease.other_recovery_description && (
+                      <>
+                        <span className="text-muted-foreground">
+                          Other Description
+                        </span>
+                        <span>{sublease.other_recovery_description}</span>
+                      </>
+                    )}
+                  </div>
+                )}
               </CardContent>
             </Card>
 
             {/* GL Accounts Card (full width) */}
             <Card className="col-span-2">
               <CardHeader>
-                <div className="flex items-center justify-between">
-                  <CardTitle>GL Accounts</CardTitle>
+                <CardTitle>GL Accounts</CardTitle>
+                <CardAction>
                   <Button
                     size="sm"
                     onClick={handleSaveAccounts}
@@ -977,7 +1489,7 @@ export default function SubleaseDetailPage() {
                     <Save className="mr-2 h-4 w-4" />
                     {saving ? "Saving..." : "Save Accounts"}
                   </Button>
-                </div>
+                </CardAction>
               </CardHeader>
               <CardContent>
                 <div className="grid grid-cols-3 gap-6">
@@ -1009,16 +1521,131 @@ export default function SubleaseDetailPage() {
         </TabsContent>
 
         {/* === Income Schedule Tab === */}
-        <TabsContent value="income">
+        <TabsContent value="income" className="space-y-6">
+          {/* Full Schedule Grid */}
           <Card>
             <CardHeader>
-              <div className="flex items-center justify-between">
-                <div>
-                  <CardTitle>Income Schedule</CardTitle>
-                  <CardDescription>
-                    {getPeriodLabel(periodYear, periodMonth)}
-                  </CardDescription>
+              <CardTitle>Income Schedule</CardTitle>
+              <CardAction>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleRegenerateSchedule}
+                >
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                  Regenerate
+                </Button>
+              </CardAction>
+            </CardHeader>
+            <CardContent>
+              {gridYears.length === 0 ? (
+                <p className="text-sm text-muted-foreground py-4">
+                  No income schedule generated yet. Click Regenerate to create one.
+                </p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="sticky left-0 bg-background z-10 w-16">Year</TableHead>
+                        {MONTH_SHORT.map((m) => (
+                          <TableHead key={m} className="text-right text-xs min-w-[90px]">
+                            {m}
+                          </TableHead>
+                        ))}
+                        <TableHead className="text-right text-xs font-semibold min-w-[100px]">
+                          Annual
+                        </TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {gridYears.map((year) => {
+                        const monthData = incomeGrid[year] || {};
+                        const annualTotal = Object.values(monthData).reduce(
+                          (s, v) => s + v,
+                          0
+                        );
+                        return (
+                          <TableRow key={year}>
+                            <TableCell className="sticky left-0 bg-background z-10 font-medium tabular-nums">
+                              {year}
+                            </TableCell>
+                            {Array.from({ length: 12 }, (_, i) => i + 1).map(
+                              (month) => {
+                                const amt = monthData[month];
+                                const isSelected =
+                                  year === periodYear && month === periodMonth;
+                                return (
+                                  <TableCell
+                                    key={month}
+                                    className={cn(
+                                      "text-right tabular-nums text-sm text-green-600 cursor-pointer transition-colors hover:bg-muted/50",
+                                      isSelected && "bg-primary/10 font-medium ring-1 ring-primary/30 rounded"
+                                    )}
+                                    onClick={() => {
+                                      setPeriodYear(year);
+                                      setPeriodMonth(month);
+                                    }}
+                                  >
+                                    {amt != null
+                                      ? formatCurrency(amt)
+                                      : <span className="text-muted-foreground">—</span>}
+                                  </TableCell>
+                                );
+                              }
+                            )}
+                            <TableCell className="text-right tabular-nums font-semibold text-sm text-green-600">
+                              {formatCurrency(annualTotal)}
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                      {/* Grand total row */}
+                      {gridYears.length > 1 && (
+                        <TableRow className="border-t-2 font-semibold">
+                          <TableCell className="sticky left-0 bg-background z-10">
+                            Total
+                          </TableCell>
+                          {Array.from({ length: 12 }, (_, i) => i + 1).map(
+                            (month) => {
+                              const colTotal = gridYears.reduce(
+                                (s, y) => s + (incomeGrid[y]?.[month] || 0),
+                                0
+                              );
+                              return (
+                                <TableCell
+                                  key={month}
+                                  className="text-right tabular-nums text-sm text-green-600"
+                                >
+                                  {colTotal > 0 ? formatCurrency(colTotal) : "—"}
+                                </TableCell>
+                              );
+                            }
+                          )}
+                          <TableCell className="text-right tabular-nums text-sm text-green-600">
+                            {formatCurrency(
+                              allSubleasePayments.reduce((s, p) => s + p.scheduled_amount, 0)
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </TableBody>
+                  </Table>
                 </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Selected Month Detail */}
+          <Card>
+            <CardHeader>
+                  <CardTitle className="text-base">
+                    {getPeriodLabel(periodYear, periodMonth)}
+                  </CardTitle>
+                  <CardDescription>
+                    Click any cell above to view that month
+                  </CardDescription>
+                <CardAction>
                 <div className="flex items-center gap-2">
                   <Select
                     value={String(periodYear)}
@@ -1050,16 +1677,8 @@ export default function SubleaseDetailPage() {
                       ))}
                     </SelectContent>
                   </Select>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handleRegenerateSchedule}
-                  >
-                    <RefreshCw className="mr-2 h-4 w-4" />
-                    Regenerate Schedule
-                  </Button>
                 </div>
-              </div>
+                </CardAction>
             </CardHeader>
             <CardContent>
               {payments.length === 0 ? (
@@ -1154,26 +1773,33 @@ export default function SubleaseDetailPage() {
         <TabsContent value="escalations">
           <Card>
             <CardHeader>
-              <div className="flex items-center justify-between">
                 <CardTitle>Rent Escalations</CardTitle>
+                <CardAction>
                 <Sheet
                   open={escalationSheetOpen}
-                  onOpenChange={setEscalationSheetOpen}
+                  onOpenChange={(open) => {
+                    setEscalationSheetOpen(open);
+                    if (!open) resetEscForm();
+                  }}
                 >
                   <SheetTrigger asChild>
-                    <Button size="sm">
+                    <Button size="sm" onClick={() => resetEscForm()}>
                       <Plus className="mr-2 h-4 w-4" />
                       Add Escalation
                     </Button>
                   </SheetTrigger>
-                  <SheetContent>
+                  <SheetContent className="px-6 pt-6 overflow-y-auto">
                     <SheetHeader>
-                      <SheetTitle>Add Escalation</SheetTitle>
+                      <SheetTitle>
+                        {editingEscId ? "Edit Escalation" : "Add Escalation"}
+                      </SheetTitle>
                       <SheetDescription>
-                        Define a rent escalation rule for this sublease
+                        {editingEscId
+                          ? "Update this escalation rule"
+                          : "Define a rent escalation rule for this sublease"}
                       </SheetDescription>
                     </SheetHeader>
-                    <div className="space-y-4 mt-6">
+                    <div className="space-y-4 mt-6 pb-6">
                       <div className="space-y-2">
                         <Label>Type</Label>
                         <Select
@@ -1201,9 +1827,44 @@ export default function SubleaseDetailPage() {
                         <Input
                           type="date"
                           value={newEscDate}
-                          onChange={(e) => setNewEscDate(e.target.value)}
+                          onChange={(e) => {
+                            setNewEscDate(e.target.value);
+                            if (newEscNewRent && e.target.value) {
+                              const eff = getEffectiveRentAt(e.target.value);
+                              const nr = parseFloat(newEscNewRent);
+                              if (eff > 0 && !isNaN(nr)) {
+                                const diff = nr - eff;
+                                const pct = diff / eff;
+                                setNewEscAmount(String(Math.round(diff * 100) / 100));
+                                setNewEscPercent(String(Math.round(pct * 1000000) / 1000000));
+                              }
+                            }
+                          }}
                         />
                       </div>
+
+                      {/* New Monthly Rent — back-calculates increase from effective rent at date */}
+                      {newEscType !== "cpi" && sublease && sublease.base_rent_monthly > 0 && (() => {
+                        const effectiveRent = newEscDate
+                          ? getEffectiveRentAt(newEscDate)
+                          : sublease.base_rent_monthly;
+                        return (
+                          <div className="space-y-2">
+                            <Label>New Monthly Rent</Label>
+                            <Input
+                              type="number"
+                              step="0.01"
+                              placeholder={`Current: ${formatCurrency(effectiveRent)}`}
+                              value={newEscNewRent}
+                              onChange={(e) => handleNewRentChange(e.target.value)}
+                            />
+                            <p className="text-xs text-muted-foreground">
+                              Enter the new rent and the increase will be calculated automatically
+                            </p>
+                          </div>
+                        );
+                      })()}
+
                       {(newEscType === "fixed_percentage" ||
                         newEscType === "cpi") && (
                         <div className="space-y-2">
@@ -1253,15 +1914,15 @@ export default function SubleaseDetailPage() {
                         </Select>
                       </div>
                       <Button
-                        onClick={handleAddEscalation}
+                        onClick={handleSaveEscalation}
                         className="w-full"
                       >
-                        Add Escalation
+                        {editingEscId ? "Save Changes" : "Add Escalation"}
                       </Button>
                     </div>
                   </SheetContent>
                 </Sheet>
-              </div>
+                </CardAction>
             </CardHeader>
             <CardContent>
               {escalations.length === 0 ? (
@@ -1274,6 +1935,7 @@ export default function SubleaseDetailPage() {
                     <TableRow>
                       <TableHead>Type</TableHead>
                       <TableHead>Effective Date</TableHead>
+                      <TableHead>New Monthly Rent</TableHead>
                       <TableHead>Increase</TableHead>
                       <TableHead>Frequency</TableHead>
                       <TableHead></TableHead>
@@ -1290,7 +1952,10 @@ export default function SubleaseDetailPage() {
                             esc.effective_date + "T00:00:00"
                           ).toLocaleDateString()}
                         </TableCell>
-                        <TableCell className="tabular-nums">
+                        <TableCell className="tabular-nums font-medium text-green-600">
+                          {formatCurrency(getResultingRentAfter(esc.id))}
+                        </TableCell>
+                        <TableCell className="tabular-nums text-muted-foreground">
                           {esc.percentage_increase != null
                             ? formatPercentage(esc.percentage_increase)
                             : esc.amount_increase != null
@@ -1301,15 +1966,24 @@ export default function SubleaseDetailPage() {
                           {esc.frequency.replace("_", " ")}
                         </TableCell>
                         <TableCell>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() =>
-                              handleDeleteEscalation(esc.id)
-                            }
-                          >
-                            &times;
-                          </Button>
+                          <div className="flex items-center gap-1">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => openEditEscalation(esc)}
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() =>
+                                handleDeleteEscalation(esc.id)
+                              }
+                            >
+                              &times;
+                            </Button>
+                          </div>
                         </TableCell>
                       </TableRow>
                     ))}
@@ -1324,8 +1998,8 @@ export default function SubleaseDetailPage() {
         <TabsContent value="options">
           <Card>
             <CardHeader>
-              <div className="flex items-center justify-between">
                 <CardTitle>Sublease Options</CardTitle>
+                <CardAction>
                 <Sheet
                   open={optionSheetOpen}
                   onOpenChange={setOptionSheetOpen}
@@ -1444,7 +2118,7 @@ export default function SubleaseDetailPage() {
                     </div>
                   </SheetContent>
                 </Sheet>
-              </div>
+                </CardAction>
             </CardHeader>
             <CardContent>
               {options.length === 0 ? (
@@ -1515,8 +2189,8 @@ export default function SubleaseDetailPage() {
         <TabsContent value="dates">
           <Card>
             <CardHeader>
-              <div className="flex items-center justify-between">
                 <CardTitle>Critical Dates</CardTitle>
+                <CardAction>
                 <Sheet
                   open={dateSheetOpen}
                   onOpenChange={setDateSheetOpen}
@@ -1600,7 +2274,7 @@ export default function SubleaseDetailPage() {
                     </div>
                   </SheetContent>
                 </Sheet>
-              </div>
+                </CardAction>
             </CardHeader>
             <CardContent>
               {criticalDates.length === 0 ? (
@@ -1672,13 +2346,11 @@ export default function SubleaseDetailPage() {
         <TabsContent value="documents">
           <Card>
             <CardHeader>
-              <div className="flex items-center justify-between">
-                <div>
                   <CardTitle>Documents</CardTitle>
                   <CardDescription>
                     Upload sublease-related documents
                   </CardDescription>
-                </div>
+                <CardAction>
                 <div className="flex items-center gap-2">
                   <label htmlFor="sublease-doc-upload">
                     <Button
@@ -1701,7 +2373,7 @@ export default function SubleaseDetailPage() {
                     onChange={handleDocumentUpload}
                   />
                 </div>
-              </div>
+                </CardAction>
             </CardHeader>
             <CardContent>
               {uploadingDoc && (

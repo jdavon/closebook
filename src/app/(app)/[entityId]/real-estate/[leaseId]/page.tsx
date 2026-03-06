@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Card,
+  CardAction,
   CardContent,
   CardDescription,
   CardHeader,
@@ -84,7 +85,8 @@ import {
   getCurrentPeriod,
   getPeriodLabel,
 } from "@/lib/utils/dates";
-import { generateLeasePaymentSchedule } from "@/lib/utils/lease-payments";
+import { generateLeasePaymentSchedule, getCurrentRent } from "@/lib/utils/lease-payments";
+import { generateSubleasePaymentSchedule } from "@/lib/utils/sublease-payments";
 import {
   generateASC842Schedule,
   generateInitialJournalEntries,
@@ -109,6 +111,8 @@ import type {
   CriticalDateType,
   LeaseDocumentType,
   SubleaseStatus,
+  SubleasePaymentType,
+  SplitType,
 } from "@/lib/types/database";
 
 // --- Interfaces ---
@@ -175,6 +179,27 @@ interface PaymentRow {
   actual_amount: number | null;
   is_paid: boolean;
   payment_date: string | null;
+}
+
+interface SubleasePaymentRow {
+  id: string;
+  sublease_id: string;
+  period_year: number;
+  period_month: number;
+  payment_type: SubleasePaymentType;
+  scheduled_amount: number;
+  actual_amount: number | null;
+  is_received: boolean;
+  received_date: string | null;
+}
+
+interface SubleaseEscalationRow {
+  id: string;
+  escalation_type: EscalationType;
+  effective_date: string;
+  percentage_increase: number | null;
+  amount_increase: number | null;
+  frequency: EscalationFrequency;
 }
 
 interface EscalationRow {
@@ -255,6 +280,24 @@ interface SubleaseListItem {
   floor_suite: string | null;
 }
 
+interface CostSplitRow {
+  id: string;
+  lease_id: string;
+  source_entity_id: string;
+  destination_entity_id: string;
+  split_type: SplitType;
+  split_percentage: number | null;
+  split_fixed_amount: number | null;
+  description: string | null;
+  is_active: boolean;
+}
+
+interface SiblingEntity {
+  id: string;
+  name: string;
+  code: string;
+}
+
 interface Account {
   id: string;
   name: string;
@@ -299,6 +342,15 @@ const PAYMENT_TYPE_LABELS: Record<PaymentType, string> = {
   insurance: "Insurance",
   utilities: "Utilities",
   other: "Other",
+};
+
+const SUBLEASE_PAYMENT_TYPE_LABELS: Record<SubleasePaymentType, string> = {
+  base_rent: "Base Rent",
+  cam_recovery: "CAM Recovery",
+  property_tax_recovery: "Property Tax Recovery",
+  insurance_recovery: "Insurance Recovery",
+  utilities_recovery: "Utilities Recovery",
+  other_recovery: "Other Recovery",
 };
 
 const OPTION_TYPE_LABELS: Record<OptionType, string> = {
@@ -387,6 +439,10 @@ export default function LeaseDetailPage() {
   const [periodMonth, setPeriodMonth] = useState(current.month);
   // Full payment schedule for grid view
   const [allPayments, setAllPayments] = useState<PaymentRow[]>([]);
+  // Sublease income schedule for grid view
+  const [allSubleasePayments, setAllSubleasePayments] = useState<SubleasePaymentRow[]>([]);
+  // Sublease escalations keyed by sublease_id — for computing current income
+  const [subleaseEscalationsMap, setSubleaseEscalationsMap] = useState<Record<string, SubleaseEscalationRow[]>>({});
 
   // GL account editing
   const [rouAssetAccountId, setRouAssetAccountId] = useState("");
@@ -451,7 +507,37 @@ export default function LeaseDetailPage() {
   const [editSecurityDeposit, setEditSecurityDeposit] = useState("");
   const [editTiAllowance, setEditTiAllowance] = useState("");
   const [editNotes, setEditNotes] = useState("");
+  // Lease financial term fields
+  const [editBaseRent, setEditBaseRent] = useState("");
+  const [editCamMonthly, setEditCamMonthly] = useState("");
+  const [editInsuranceMonthly, setEditInsuranceMonthly] = useState("");
+  const [editPropertyTaxAnnual, setEditPropertyTaxAnnual] = useState("");
+  const [editPropertyTaxFrequency, setEditPropertyTaxFrequency] = useState<PropertyTaxFrequency>("monthly");
+  const [editUtilitiesMonthly, setEditUtilitiesMonthly] = useState("");
+  const [editOtherMonthlyCosts, setEditOtherMonthlyCosts] = useState("");
+  const [editOtherDescription, setEditOtherDescription] = useState("");
+  const [editAbatementMonths, setEditAbatementMonths] = useState("");
+  const [editAbatementAmount, setEditAbatementAmount] = useState("");
+  // Lease date fields
+  const [editCommencementDate, setEditCommencementDate] = useState("");
+  const [editRentCommencementDate, setEditRentCommencementDate] = useState("");
+  const [editExpirationDate, setEditExpirationDate] = useState("");
+  const [editLeaseTermMonths, setEditLeaseTermMonths] = useState("");
+  const [editStatus, setEditStatus] = useState<LeaseStatus>("active");
+  const [editLeaseType, setEditLeaseType] = useState<LeaseType>("operating");
   const [deleting, setDeleting] = useState(false);
+
+  // Cost split state
+  const [costSplits, setCostSplits] = useState<CostSplitRow[]>([]);
+  const [siblingEntities, setSiblingEntities] = useState<SiblingEntity[]>([]);
+  const [splitSheetOpen, setSplitSheetOpen] = useState(false);
+  const [editingSplitId, setEditingSplitId] = useState<string | null>(null);
+  const [splitDestEntity, setSplitDestEntity] = useState("");
+  const [splitType, setSplitType] = useState<SplitType>("percentage");
+  const [splitPercentage, setSplitPercentage] = useState("");
+  const [splitFixedAmount, setSplitFixedAmount] = useState("");
+  const [splitDescription, setSplitDescription] = useState("");
+  const [savingSplit, setSavingSplit] = useState(false);
 
   const years = Array.from({ length: 10 }, (_, i) => current.year - 2 + i);
   const months = Array.from({ length: 12 }, (_, i) => i + 1);
@@ -544,6 +630,35 @@ export default function LeaseDetailPage() {
       .eq("lease_id", leaseId)
       .order("sublease_name");
 
+    // Fetch sublease payments for all subleases of this lease
+    const subleaseIds = ((subleasesResult.data as unknown as SubleaseListItem[]) ?? []).map((s) => s.id);
+    let subleasePaymentsData: SubleasePaymentRow[] = [];
+    if (subleaseIds.length > 0) {
+      const spResult = await supabase
+        .from("sublease_payments")
+        .select("*")
+        .in("sublease_id", subleaseIds)
+        .order("period_year")
+        .order("period_month")
+        .order("payment_type");
+      subleasePaymentsData = (spResult.data as unknown as SubleasePaymentRow[]) ?? [];
+    }
+
+    // Fetch sublease escalations for all subleases (needed for current income calc)
+    const subleaseEscsMap: Record<string, SubleaseEscalationRow[]> = {};
+    if (subleaseIds.length > 0) {
+      const seResult = await supabase
+        .from("sublease_escalations")
+        .select("id, sublease_id, escalation_type, effective_date, percentage_increase, amount_increase, frequency")
+        .in("sublease_id", subleaseIds)
+        .order("effective_date");
+      const allSubEscs = (seResult.data as unknown as (SubleaseEscalationRow & { sublease_id: string })[]) ?? [];
+      for (const e of allSubEscs) {
+        if (!subleaseEscsMap[e.sublease_id]) subleaseEscsMap[e.sublease_id] = [];
+        subleaseEscsMap[e.sublease_id].push(e);
+      }
+    }
+
     if (leaseResult.data) {
       const l = leaseResult.data as unknown as LeaseData;
       setLease(l);
@@ -563,10 +678,30 @@ export default function LeaseDetailPage() {
       setEditSecurityDeposit(String(l.security_deposit));
       setEditTiAllowance(String(l.tenant_improvement_allowance));
       setEditNotes(l.notes ?? "");
+      // Init date/term fields
+      setEditCommencementDate(l.commencement_date);
+      setEditRentCommencementDate(l.rent_commencement_date ?? "");
+      setEditExpirationDate(l.expiration_date);
+      setEditLeaseTermMonths(String(l.lease_term_months));
+      setEditStatus(l.status);
+      setEditLeaseType(l.lease_type);
+      // Init lease financial term fields
+      setEditBaseRent(String(l.base_rent_monthly));
+      setEditCamMonthly(String(l.cam_monthly));
+      setEditInsuranceMonthly(String(l.insurance_monthly));
+      setEditPropertyTaxAnnual(String(l.property_tax_annual));
+      setEditPropertyTaxFrequency(l.property_tax_frequency);
+      setEditUtilitiesMonthly(String(l.utilities_monthly));
+      setEditOtherMonthlyCosts(String(l.other_monthly_costs));
+      setEditOtherDescription(l.other_monthly_costs_description ?? "");
+      setEditAbatementMonths(String(l.rent_abatement_months));
+      setEditAbatementAmount(String(l.rent_abatement_amount));
     }
 
     setPayments((paymentsResult.data as unknown as PaymentRow[]) ?? []);
     setAllPayments((allPaymentsResult.data as unknown as PaymentRow[]) ?? []);
+    setAllSubleasePayments(subleasePaymentsData);
+    setSubleaseEscalationsMap(subleaseEscsMap);
     setEscalations((escalationsResult.data as unknown as EscalationRow[]) ?? []);
     setOptions((optionsResult.data as unknown as OptionRow[]) ?? []);
     setCriticalDates((criticalDatesResult.data as unknown as CriticalDateRow[]) ?? []);
@@ -574,6 +709,34 @@ export default function LeaseDetailPage() {
     setAmendments((amendmentsResult.data as unknown as AmendmentRow[]) ?? []);
     setSubleases((subleasesResult.data as unknown as SubleaseListItem[]) ?? []);
     setAccounts((accountsResult.data as Account[]) ?? []);
+
+    // Cost splits for this lease
+    const splitsResult = await supabase
+      .from("lease_cost_splits")
+      .select("id, lease_id, source_entity_id, destination_entity_id, split_type, split_percentage, split_fixed_amount, description, is_active")
+      .eq("lease_id", leaseId)
+      .eq("is_active", true);
+    setCostSplits((splitsResult.data as unknown as CostSplitRow[]) ?? []);
+
+    // Sibling entities (same org, different entity)
+    if (leaseResult.data) {
+      const entityResult = await supabase
+        .from("entities")
+        .select("id, organization_id")
+        .eq("id", entityId)
+        .single();
+      if (entityResult.data) {
+        const siblingsResult = await supabase
+          .from("entities")
+          .select("id, name, code")
+          .eq("organization_id", (entityResult.data as { id: string; organization_id: string }).organization_id)
+          .neq("id", entityId)
+          .eq("is_active", true)
+          .order("name");
+        setSiblingEntities((siblingsResult.data as unknown as SiblingEntity[]) ?? []);
+      }
+    }
+
     setLoading(false);
   }, [supabase, leaseId, entityId, periodYear, periodMonth]);
 
@@ -608,6 +771,16 @@ export default function LeaseDetailPage() {
     const rentPerSf = editRentPerSf ? parseFloat(editRentPerSf) : null;
     const securityDeposit = parseFloat(editSecurityDeposit) || 0;
     const tiAllowance = parseFloat(editTiAllowance) || 0;
+    const baseRent = parseFloat(editBaseRent) || 0;
+    const camMonthly = parseFloat(editCamMonthly) || 0;
+    const insuranceMonthly = parseFloat(editInsuranceMonthly) || 0;
+    const propertyTaxAnnual = parseFloat(editPropertyTaxAnnual) || 0;
+    const utilitiesMonthly = parseFloat(editUtilitiesMonthly) || 0;
+    const otherMonthlyCosts = parseFloat(editOtherMonthlyCosts) || 0;
+    const abatementMonths = parseInt(editAbatementMonths) || 0;
+    const abatementAmount = parseFloat(editAbatementAmount) || 0;
+
+    const leaseTermMonths = parseInt(editLeaseTermMonths) || 0;
 
     const { error } = await supabase
       .from("leases")
@@ -619,6 +792,22 @@ export default function LeaseDetailPage() {
         security_deposit: securityDeposit,
         tenant_improvement_allowance: tiAllowance,
         notes: editNotes.trim() || null,
+        base_rent_monthly: baseRent,
+        cam_monthly: camMonthly,
+        insurance_monthly: insuranceMonthly,
+        property_tax_annual: propertyTaxAnnual,
+        property_tax_frequency: editPropertyTaxFrequency,
+        utilities_monthly: utilitiesMonthly,
+        other_monthly_costs: otherMonthlyCosts,
+        other_monthly_costs_description: editOtherDescription.trim() || null,
+        rent_abatement_months: abatementMonths,
+        rent_abatement_amount: abatementAmount,
+        commencement_date: editCommencementDate,
+        rent_commencement_date: editRentCommencementDate || null,
+        expiration_date: editExpirationDate,
+        lease_term_months: leaseTermMonths,
+        status: editStatus,
+        lease_type: editLeaseType,
       })
       .eq("id", leaseId);
 
@@ -641,6 +830,24 @@ export default function LeaseDetailPage() {
       setEditSecurityDeposit(String(lease.security_deposit));
       setEditTiAllowance(String(lease.tenant_improvement_allowance));
       setEditNotes(lease.notes ?? "");
+      // Reset financial term fields
+      setEditBaseRent(String(lease.base_rent_monthly));
+      setEditCamMonthly(String(lease.cam_monthly));
+      setEditInsuranceMonthly(String(lease.insurance_monthly));
+      setEditPropertyTaxAnnual(String(lease.property_tax_annual));
+      setEditPropertyTaxFrequency(lease.property_tax_frequency);
+      setEditUtilitiesMonthly(String(lease.utilities_monthly));
+      setEditOtherMonthlyCosts(String(lease.other_monthly_costs));
+      setEditOtherDescription(lease.other_monthly_costs_description ?? "");
+      setEditAbatementMonths(String(lease.rent_abatement_months));
+      setEditAbatementAmount(String(lease.rent_abatement_amount));
+      // Reset date/term fields
+      setEditCommencementDate(lease.commencement_date);
+      setEditRentCommencementDate(lease.rent_commencement_date ?? "");
+      setEditExpirationDate(lease.expiration_date);
+      setEditLeaseTermMonths(String(lease.lease_term_months));
+      setEditStatus(lease.status);
+      setEditLeaseType(lease.lease_type);
     }
     setEditingDetails(false);
   }
@@ -756,6 +963,61 @@ export default function LeaseDetailPage() {
     }
 
     toast.success("Payment schedule regenerated");
+    loadData();
+  }
+
+  async function handleRegenerateSubleaseSchedules() {
+    if (subleases.length === 0) return;
+
+    for (const sub of subleases) {
+      // Delete existing sublease payments
+      await supabase.from("sublease_payments").delete().eq("sublease_id", sub.id);
+
+      // Fetch sublease escalations
+      const { data: subEscs } = await supabase
+        .from("sublease_escalations")
+        .select("*")
+        .eq("sublease_id", sub.id)
+        .order("effective_date");
+
+      const schedule = generateSubleasePaymentSchedule(
+        {
+          commencement_date: sub.commencement_date,
+          rent_commencement_date: null,
+          expiration_date: sub.expiration_date,
+          base_rent_monthly: sub.base_rent_monthly,
+          cam_recovery_monthly: sub.cam_recovery_monthly,
+          insurance_recovery_monthly: sub.insurance_recovery_monthly,
+          property_tax_recovery_monthly: sub.property_tax_recovery_monthly,
+          utilities_recovery_monthly: sub.utilities_recovery_monthly,
+          other_recovery_monthly: sub.other_recovery_monthly,
+          rent_abatement_months: 0,
+          rent_abatement_amount: 0,
+        },
+        ((subEscs as unknown as SubleaseEscalationRow[]) ?? []).map((e) => ({
+          escalation_type: e.escalation_type,
+          effective_date: e.effective_date,
+          percentage_increase: e.percentage_increase,
+          amount_increase: e.amount_increase,
+          frequency: e.frequency,
+        }))
+      );
+
+      if (schedule.length > 0) {
+        const rows = schedule.map((entry) => ({
+          sublease_id: sub.id,
+          period_year: entry.period_year,
+          period_month: entry.period_month,
+          payment_type: entry.payment_type,
+          scheduled_amount: entry.scheduled_amount,
+        }));
+        for (let i = 0; i < rows.length; i += 500) {
+          await supabase.from("sublease_payments").insert(rows.slice(i, i + 500));
+        }
+      }
+    }
+
+    toast.success("Sublease income schedules regenerated");
     loadData();
   }
 
@@ -1143,14 +1405,64 @@ export default function LeaseDetailPage() {
 
   // --- Helpers ---
 
+  // Current rent after applying all escalations effective on or before today
+  const currentBaseRent = lease
+    ? getCurrentRent(
+        lease.base_rent_monthly,
+        escalations.map((e) => ({
+          escalation_type: e.escalation_type,
+          effective_date: e.effective_date,
+          percentage_increase: e.percentage_increase,
+          amount_increase: e.amount_increase,
+          frequency: e.frequency,
+        }))
+      )
+    : 0;
+
   const totalMonthly = lease
-    ? lease.base_rent_monthly +
+    ? currentBaseRent +
       lease.cam_monthly +
       lease.insurance_monthly +
       lease.property_tax_annual / 12 +
       lease.utilities_monthly +
       lease.other_monthly_costs
     : 0;
+
+  // Active sublease income total (current, after escalations)
+  const activeSubleases = subleases.filter((s) => s.status === "active");
+  const hasActiveSubleases = activeSubleases.length > 0;
+
+  // Current sublease income after applying sublease escalations
+  function currentSubleaseBaseRent(s: SubleaseListItem): number {
+    const escs = subleaseEscalationsMap[s.id] ?? [];
+    return getCurrentRent(
+      s.base_rent_monthly,
+      escs.map((e) => ({
+        escalation_type: e.escalation_type,
+        effective_date: e.effective_date,
+        percentage_increase: e.percentage_increase,
+        amount_increase: e.amount_increase,
+        frequency: e.frequency,
+      }))
+    );
+  }
+
+  function currentSubleaseMonthlyIncome(s: SubleaseListItem): number {
+    return (
+      currentSubleaseBaseRent(s) +
+      s.cam_recovery_monthly +
+      s.insurance_recovery_monthly +
+      s.property_tax_recovery_monthly +
+      s.utilities_recovery_monthly +
+      s.other_recovery_monthly
+    );
+  }
+
+  const totalSubleaseIncome = activeSubleases.reduce(
+    (sum, s) => sum + currentSubleaseMonthlyIncome(s),
+    0
+  );
+  const netMonthly = totalMonthly - totalSubleaseIncome;
 
   const assetAccounts = accounts.filter((a) => a.classification === "Asset");
   const liabilityAccounts = accounts.filter((a) => a.classification === "Liability");
@@ -1333,6 +1645,89 @@ export default function LeaseDetailPage() {
     return "";
   }
 
+  // --- Cost Split Handlers ---
+
+  function resetSplitForm() {
+    setEditingSplitId(null);
+    setSplitDestEntity("");
+    setSplitType("percentage");
+    setSplitPercentage("");
+    setSplitFixedAmount("");
+    setSplitDescription("");
+  }
+
+  function openEditSplit(split: CostSplitRow) {
+    setEditingSplitId(split.id);
+    setSplitDestEntity(split.destination_entity_id);
+    setSplitType(split.split_type);
+    setSplitPercentage(split.split_percentage != null ? String(split.split_percentage * 100) : "");
+    setSplitFixedAmount(split.split_fixed_amount != null ? String(split.split_fixed_amount) : "");
+    setSplitDescription(split.description ?? "");
+    setSplitSheetOpen(true);
+  }
+
+  async function handleSaveSplit() {
+    if (!splitDestEntity) {
+      toast.error("Select a destination entity");
+      return;
+    }
+    setSavingSplit(true);
+    const pct = splitType === "percentage" ? parseFloat(splitPercentage) / 100 : null;
+    const amt = splitType === "fixed_amount" ? parseFloat(splitFixedAmount) : null;
+    if (splitType === "percentage" && (pct == null || isNaN(pct) || pct <= 0 || pct >= 1)) {
+      toast.error("Percentage must be between 0% and 100% (exclusive)");
+      setSavingSplit(false);
+      return;
+    }
+    if (splitType === "fixed_amount" && (amt == null || isNaN(amt) || amt <= 0)) {
+      toast.error("Fixed amount must be greater than 0");
+      setSavingSplit(false);
+      return;
+    }
+
+    const payload = {
+      lease_id: leaseId,
+      source_entity_id: entityId,
+      destination_entity_id: splitDestEntity,
+      split_type: splitType,
+      split_percentage: pct,
+      split_fixed_amount: amt,
+      description: splitDescription.trim() || null,
+      is_active: true,
+    };
+
+    if (editingSplitId) {
+      const { error } = await supabase
+        .from("lease_cost_splits")
+        .update(payload)
+        .eq("id", editingSplitId);
+      if (error) toast.error(error.message);
+      else toast.success("Cost split updated");
+    } else {
+      const { error } = await supabase
+        .from("lease_cost_splits")
+        .insert(payload);
+      if (error) toast.error(error.message);
+      else toast.success("Cost split added");
+    }
+    setSavingSplit(false);
+    setSplitSheetOpen(false);
+    resetSplitForm();
+    loadData();
+  }
+
+  async function handleDeleteSplit(splitId: string) {
+    const { error } = await supabase
+      .from("lease_cost_splits")
+      .delete()
+      .eq("id", splitId);
+    if (error) toast.error(error.message);
+    else {
+      toast.success("Cost split removed");
+      loadData();
+    }
+  }
+
   // --- Render ---
 
   if (loading) {
@@ -1365,6 +1760,36 @@ export default function LeaseDetailPage() {
       (paymentGrid[p.period_year][p.period_month] || 0) + p.scheduled_amount;
   }
   const gridYears = Object.keys(paymentGrid)
+    .map(Number)
+    .sort((a, b) => a - b);
+
+  // Build sublease income grid: year → month → total income
+  const subleaseGrid: Record<number, Record<number, number>> = {};
+  for (const p of allSubleasePayments) {
+    if (!subleaseGrid[p.period_year]) subleaseGrid[p.period_year] = {};
+    subleaseGrid[p.period_year][p.period_month] =
+      (subleaseGrid[p.period_year][p.period_month] || 0) + p.scheduled_amount;
+  }
+  const subleaseGridYears = Object.keys(subleaseGrid)
+    .map(Number)
+    .sort((a, b) => a - b);
+  const hasSubleasePayments = allSubleasePayments.length > 0;
+
+  // Build net payment grid: lease cost - sublease income
+  const netGrid: Record<number, Record<number, number>> = {};
+  const allNetYears = new Set([...gridYears, ...subleaseGridYears]);
+  for (const year of allNetYears) {
+    netGrid[year] = {};
+    for (let month = 1; month <= 12; month++) {
+      const leaseCost = paymentGrid[year]?.[month] || 0;
+      const subleaseIncome = subleaseGrid[year]?.[month] || 0;
+      const net = leaseCost - subleaseIncome;
+      if (leaseCost > 0 || subleaseIncome > 0) {
+        netGrid[year][month] = net;
+      }
+    }
+  }
+  const netGridYears = Object.keys(netGrid)
     .map(Number)
     .sort((a, b) => a - b);
 
@@ -1425,11 +1850,11 @@ export default function LeaseDetailPage() {
 
       {/* Summary Bar */}
       <div className="rounded-lg border bg-muted/40 p-4">
-        <div className="grid grid-cols-6 gap-4">
+        <div className={cn("grid gap-4", hasActiveSubleases ? "grid-cols-8" : "grid-cols-6")}>
           <div>
             <p className="text-xs text-muted-foreground">Base Rent</p>
             <p className="text-lg font-semibold tabular-nums">
-              {formatCurrency(lease.base_rent_monthly)}
+              {formatCurrency(currentBaseRent)}
             </p>
           </div>
           <div>
@@ -1438,6 +1863,22 @@ export default function LeaseDetailPage() {
               {formatCurrency(totalMonthly)}
             </p>
           </div>
+          {hasActiveSubleases && (
+            <div>
+              <p className="text-xs text-muted-foreground">Sublease Income</p>
+              <p className="text-lg font-semibold tabular-nums text-green-600">
+                {formatCurrency(totalSubleaseIncome)}
+              </p>
+            </div>
+          )}
+          {hasActiveSubleases && (
+            <div>
+              <p className="text-xs text-muted-foreground">Net Monthly</p>
+              <p className="text-lg font-semibold tabular-nums">
+                {formatCurrency(netMonthly)}
+              </p>
+            </div>
+          )}
           <div>
             <p className="text-xs text-muted-foreground">Lease Term</p>
             <p className="text-lg font-semibold">{lease.lease_term_months} mo</p>
@@ -1487,8 +1928,8 @@ export default function LeaseDetailPage() {
           <div className="grid grid-cols-2 gap-6">
             <Card>
               <CardHeader>
-                <div className="flex items-center justify-between">
-                  <CardTitle>Property & Lease Details</CardTitle>
+                <CardTitle>Property & Lease Details</CardTitle>
+                <CardAction>
                   {!editingDetails ? (
                     <Button
                       variant="outline"
@@ -1518,7 +1959,7 @@ export default function LeaseDetailPage() {
                       </Button>
                     </div>
                   )}
-                </div>
+                </CardAction>
               </CardHeader>
               <CardContent className="space-y-3 text-sm">
                 {editingDetails ? (
@@ -1591,6 +2032,64 @@ export default function LeaseDetailPage() {
                       />
                     </div>
                     <div className="pt-3 border-t">
+                      <p className="text-sm font-medium mb-3">Lease Dates & Classification</p>
+                      <div className="grid grid-cols-2 gap-3 items-center">
+                        <Label className="text-muted-foreground">Status</Label>
+                        <Select
+                          value={editStatus}
+                          onValueChange={(v) => setEditStatus(v as LeaseStatus)}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="draft">Draft</SelectItem>
+                            <SelectItem value="active">Active</SelectItem>
+                            <SelectItem value="expired">Expired</SelectItem>
+                            <SelectItem value="terminated">Terminated</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <Label className="text-muted-foreground">Lease Type</Label>
+                        <Select
+                          value={editLeaseType}
+                          onValueChange={(v) => setEditLeaseType(v as LeaseType)}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="operating">Operating</SelectItem>
+                            <SelectItem value="finance">Finance</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <Label className="text-muted-foreground">Commencement Date</Label>
+                        <Input
+                          type="date"
+                          value={editCommencementDate}
+                          onChange={(e) => setEditCommencementDate(e.target.value)}
+                        />
+                        <Label className="text-muted-foreground">Rent Commencement</Label>
+                        <Input
+                          type="date"
+                          value={editRentCommencementDate}
+                          onChange={(e) => setEditRentCommencementDate(e.target.value)}
+                          placeholder="Same as commencement if blank"
+                        />
+                        <Label className="text-muted-foreground">Expiration Date</Label>
+                        <Input
+                          type="date"
+                          value={editExpirationDate}
+                          onChange={(e) => setEditExpirationDate(e.target.value)}
+                        />
+                        <Label className="text-muted-foreground">Lease Term (months)</Label>
+                        <Input
+                          type="number"
+                          value={editLeaseTermMonths}
+                          onChange={(e) => setEditLeaseTermMonths(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                    <div className="pt-3 border-t">
                       <Label className="text-muted-foreground mb-2 block">Notes</Label>
                       <Textarea
                         value={editNotes}
@@ -1644,6 +2143,31 @@ export default function LeaseDetailPage() {
                       </span>
                     </div>
 
+                    <div className="pt-3 border-t">
+                      <div className="grid grid-cols-2 gap-2">
+                        <span className="text-muted-foreground">Status</span>
+                        <span>
+                          <Badge variant={STATUS_VARIANTS[lease.status]}>
+                            {STATUS_LABELS[lease.status]}
+                          </Badge>
+                        </span>
+                        <span className="text-muted-foreground">Lease Type</span>
+                        <span>{TYPE_LABELS[lease.lease_type]}</span>
+                        <span className="text-muted-foreground">Commencement</span>
+                        <span>{new Date(lease.commencement_date + "T00:00:00").toLocaleDateString()}</span>
+                        {lease.rent_commencement_date && (
+                          <>
+                            <span className="text-muted-foreground">Rent Commencement</span>
+                            <span>{new Date(lease.rent_commencement_date + "T00:00:00").toLocaleDateString()}</span>
+                          </>
+                        )}
+                        <span className="text-muted-foreground">Expiration</span>
+                        <span>{new Date(lease.expiration_date + "T00:00:00").toLocaleDateString()}</span>
+                        <span className="text-muted-foreground">Lease Term</span>
+                        <span>{lease.lease_term_months} months</span>
+                      </div>
+                    </div>
+
                     {lease.notes && (
                       <div className="pt-3 border-t">
                         <p className="text-muted-foreground mb-1">Notes</p>
@@ -1655,10 +2179,335 @@ export default function LeaseDetailPage() {
               </CardContent>
             </Card>
 
+            {/* Lease Terms Card */}
             <Card>
               <CardHeader>
-                <div className="flex items-center justify-between">
-                  <CardTitle>GL Accounts</CardTitle>
+                <CardTitle>Lease Terms</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3 text-sm">
+                {editingDetails ? (
+                  <div className="grid grid-cols-2 gap-3 items-center">
+                    <Label className="text-muted-foreground">Base Rent (Monthly)</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      value={editBaseRent}
+                      onChange={(e) => setEditBaseRent(e.target.value)}
+                    />
+                    <Label className="text-muted-foreground">Base Rent (Annual)</Label>
+                    <span className="text-muted-foreground tabular-nums">
+                      {formatCurrency((parseFloat(editBaseRent) || 0) * 12)}
+                    </span>
+                    <Label className="text-muted-foreground">Rent Abatement Months</Label>
+                    <Input
+                      type="number"
+                      value={editAbatementMonths}
+                      onChange={(e) => setEditAbatementMonths(e.target.value)}
+                    />
+                    <Label className="text-muted-foreground">Rent Abatement Amount</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      value={editAbatementAmount}
+                      onChange={(e) => setEditAbatementAmount(e.target.value)}
+                    />
+                    <Label className="text-muted-foreground">CAM (Monthly)</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      value={editCamMonthly}
+                      onChange={(e) => setEditCamMonthly(e.target.value)}
+                    />
+                    <Label className="text-muted-foreground">Insurance (Monthly)</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      value={editInsuranceMonthly}
+                      onChange={(e) => setEditInsuranceMonthly(e.target.value)}
+                    />
+                    <Label className="text-muted-foreground">Property Tax (Annual)</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      value={editPropertyTaxAnnual}
+                      onChange={(e) => setEditPropertyTaxAnnual(e.target.value)}
+                    />
+                    <Label className="text-muted-foreground">Property Tax Frequency</Label>
+                    <Select
+                      value={editPropertyTaxFrequency}
+                      onValueChange={(v) => setEditPropertyTaxFrequency(v as PropertyTaxFrequency)}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="monthly">Monthly</SelectItem>
+                        <SelectItem value="semi_annual">Semi-Annual</SelectItem>
+                        <SelectItem value="annual">Annual</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <Label className="text-muted-foreground">Utilities (Monthly)</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      value={editUtilitiesMonthly}
+                      onChange={(e) => setEditUtilitiesMonthly(e.target.value)}
+                    />
+                    <Label className="text-muted-foreground">Other Costs (Monthly)</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      value={editOtherMonthlyCosts}
+                      onChange={(e) => setEditOtherMonthlyCosts(e.target.value)}
+                    />
+                    <Label className="text-muted-foreground">Other Description</Label>
+                    <Input
+                      value={editOtherDescription}
+                      onChange={(e) => setEditOtherDescription(e.target.value)}
+                      placeholder="Description of other costs"
+                    />
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 gap-2">
+                    <span className="text-muted-foreground">Base Rent (Monthly)</span>
+                    <span className="tabular-nums">{formatCurrency(lease.base_rent_monthly)}</span>
+                    <span className="text-muted-foreground">Base Rent (Annual)</span>
+                    <span className="tabular-nums">{formatCurrency(lease.base_rent_annual)}</span>
+                    <span className="text-muted-foreground">Rent Abatement Months</span>
+                    <span>{lease.rent_abatement_months}</span>
+                    <span className="text-muted-foreground">Rent Abatement Amount</span>
+                    <span className="tabular-nums">{formatCurrency(lease.rent_abatement_amount)}</span>
+                    <span className="text-muted-foreground">CAM (Monthly)</span>
+                    <span className="tabular-nums">{formatCurrency(lease.cam_monthly)}</span>
+                    <span className="text-muted-foreground">Insurance (Monthly)</span>
+                    <span className="tabular-nums">{formatCurrency(lease.insurance_monthly)}</span>
+                    <span className="text-muted-foreground">Property Tax (Annual)</span>
+                    <span className="tabular-nums">{formatCurrency(lease.property_tax_annual)}</span>
+                    <span className="text-muted-foreground">Property Tax Frequency</span>
+                    <span className="capitalize">{lease.property_tax_frequency.replace("_", " ")}</span>
+                    <span className="text-muted-foreground">Utilities (Monthly)</span>
+                    <span className="tabular-nums">{formatCurrency(lease.utilities_monthly)}</span>
+                    <span className="text-muted-foreground">Other Costs (Monthly)</span>
+                    <span className="tabular-nums">{formatCurrency(lease.other_monthly_costs)}</span>
+                    {lease.other_monthly_costs_description && (
+                      <>
+                        <span className="text-muted-foreground">Other Description</span>
+                        <span className="whitespace-pre-wrap">{lease.other_monthly_costs_description}</span>
+                      </>
+                    )}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Cost Splits */}
+            <Card className="col-span-2">
+              <CardHeader>
+                <CardTitle>Cost Splits</CardTitle>
+                <CardDescription>
+                  Allocate a portion of this lease cost to other entities in your organization
+                </CardDescription>
+                <CardAction>
+                  <Sheet open={splitSheetOpen} onOpenChange={(open) => {
+                    setSplitSheetOpen(open);
+                    if (!open) resetSplitForm();
+                  }}>
+                    <SheetTrigger asChild>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          resetSplitForm();
+                          setSplitSheetOpen(true);
+                        }}
+                        disabled={siblingEntities.length === 0}
+                      >
+                        <Plus className="mr-2 h-4 w-4" /> Add Split
+                      </Button>
+                    </SheetTrigger>
+                    <SheetContent>
+                      <SheetHeader>
+                        <SheetTitle>{editingSplitId ? "Edit Cost Split" : "Add Cost Split"}</SheetTitle>
+                        <SheetDescription>
+                          Allocate part of this lease cost to another entity
+                        </SheetDescription>
+                      </SheetHeader>
+                      <div className="space-y-4 mt-6">
+                        <div className="space-y-2">
+                          <Label>Destination Entity</Label>
+                          <Select value={splitDestEntity} onValueChange={setSplitDestEntity}>
+                            <SelectTrigger>
+                              <SelectValue placeholder="Select entity..." />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {siblingEntities.map((e) => (
+                                <SelectItem key={e.id} value={e.id}>
+                                  {e.name} ({e.code})
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="space-y-2">
+                          <Label>Split Type</Label>
+                          <Select value={splitType} onValueChange={(v) => setSplitType(v as SplitType)}>
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="percentage">Percentage</SelectItem>
+                              <SelectItem value="fixed_amount">Fixed Amount</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        {splitType === "percentage" ? (
+                          <div className="space-y-2">
+                            <Label>Percentage (%)</Label>
+                            <Input
+                              type="number"
+                              step="0.1"
+                              min="0.1"
+                              max="99.9"
+                              placeholder="e.g. 50"
+                              value={splitPercentage}
+                              onChange={(e) => setSplitPercentage(e.target.value)}
+                            />
+                            <p className="text-xs text-muted-foreground">
+                              Percentage of net cost allocated to the destination entity (0-100%)
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="space-y-2">
+                            <Label>Fixed Amount ($/month)</Label>
+                            <Input
+                              type="number"
+                              step="0.01"
+                              min="0.01"
+                              placeholder="e.g. 1500.00"
+                              value={splitFixedAmount}
+                              onChange={(e) => setSplitFixedAmount(e.target.value)}
+                            />
+                          </div>
+                        )}
+                        <div className="space-y-2">
+                          <Label>Description (optional)</Label>
+                          <Textarea
+                            placeholder="e.g. Shared warehouse space"
+                            value={splitDescription}
+                            onChange={(e) => setSplitDescription(e.target.value)}
+                          />
+                        </div>
+                        <Button className="w-full" onClick={handleSaveSplit} disabled={savingSplit}>
+                          <Save className="mr-2 h-4 w-4" />
+                          {savingSplit ? "Saving..." : editingSplitId ? "Update Split" : "Add Split"}
+                        </Button>
+                      </div>
+                    </SheetContent>
+                  </Sheet>
+                </CardAction>
+              </CardHeader>
+              <CardContent>
+                {siblingEntities.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">
+                    No sibling entities found in your organization. Cost splits require multiple entities.
+                  </p>
+                ) : costSplits.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">
+                    No cost splits configured. Click &ldquo;Add Split&rdquo; to allocate part of this lease cost to another entity.
+                  </p>
+                ) : (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Partner Entity</TableHead>
+                        <TableHead>Type</TableHead>
+                        <TableHead className="text-right">Value</TableHead>
+                        <TableHead className="text-right">Allocated Amount</TableHead>
+                        <TableHead>Description</TableHead>
+                        <TableHead></TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {costSplits.map((split) => {
+                        const destEntity = siblingEntities.find((e) => e.id === split.destination_entity_id);
+                        const leaseNet = lease
+                          ? (currentBaseRent + lease.cam_monthly + lease.insurance_monthly +
+                             lease.property_tax_annual / 12 + lease.utilities_monthly + lease.other_monthly_costs) -
+                            subleases.filter((s) => s.status === "active").reduce(
+                              (sum, s) => sum + currentSubleaseMonthlyIncome(s), 0
+                            )
+                          : 0;
+                        const allocatedAmt =
+                          split.split_type === "percentage"
+                            ? leaseNet * (split.split_percentage ?? 0)
+                            : (split.split_fixed_amount ?? 0);
+                        return (
+                          <TableRow key={split.id}>
+                            <TableCell className="font-medium">
+                              {destEntity?.name ?? "Unknown"} ({destEntity?.code ?? "?"})
+                            </TableCell>
+                            <TableCell>
+                              <Badge variant="outline">
+                                {split.split_type === "percentage" ? "%" : "$"}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums">
+                              {split.split_type === "percentage"
+                                ? `${((split.split_percentage ?? 0) * 100).toFixed(1)}%`
+                                : formatCurrency(split.split_fixed_amount ?? 0)}
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums font-medium">
+                              {formatCurrency(allocatedAmt)}
+                            </TableCell>
+                            <TableCell className="text-muted-foreground">
+                              {split.description ?? "---"}
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex items-center gap-1">
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => openEditSplit(split)}
+                                >
+                                  <Pencil className="h-3 w-3" />
+                                </Button>
+                                <AlertDialog>
+                                  <AlertDialogTrigger asChild>
+                                    <Button variant="ghost" size="sm">
+                                      <Trash2 className="h-3 w-3 text-red-500" />
+                                    </Button>
+                                  </AlertDialogTrigger>
+                                  <AlertDialogContent>
+                                    <AlertDialogHeader>
+                                      <AlertDialogTitle>Remove Cost Split</AlertDialogTitle>
+                                      <AlertDialogDescription>
+                                        This will remove the cost allocation to{" "}
+                                        {destEntity?.name ?? "this entity"}. This action cannot be undone.
+                                      </AlertDialogDescription>
+                                    </AlertDialogHeader>
+                                    <AlertDialogFooter>
+                                      <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                      <AlertDialogAction onClick={() => handleDeleteSplit(split.id)}>
+                                        Remove
+                                      </AlertDialogAction>
+                                    </AlertDialogFooter>
+                                  </AlertDialogContent>
+                                </AlertDialog>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card className="col-span-2">
+              <CardHeader>
+                <CardTitle>GL Accounts</CardTitle>
+                <CardAction>
                   <Button
                     size="sm"
                     onClick={handleSaveAccounts}
@@ -1667,7 +2516,7 @@ export default function LeaseDetailPage() {
                     <Save className="mr-2 h-4 w-4" />
                     {saving ? "Saving..." : "Save"}
                   </Button>
-                </div>
+                </CardAction>
               </CardHeader>
               <CardContent className="space-y-4">
                 {renderAccountSelect(
@@ -1729,8 +2578,8 @@ export default function LeaseDetailPage() {
           {/* Full Schedule Grid */}
           <Card>
             <CardHeader>
-              <div className="flex items-center justify-between">
-                <CardTitle>Payment Schedule</CardTitle>
+              <CardTitle>Payment Schedule</CardTitle>
+              <CardAction>
                 <Button
                   variant="outline"
                   size="sm"
@@ -1739,7 +2588,7 @@ export default function LeaseDetailPage() {
                   <RefreshCw className="mr-2 h-4 w-4" />
                   Regenerate
                 </Button>
-              </div>
+              </CardAction>
             </CardHeader>
             <CardContent>
               {gridYears.length === 0 ? (
@@ -1840,19 +2689,243 @@ export default function LeaseDetailPage() {
             </CardContent>
           </Card>
 
+          {/* Sublease Income Schedule */}
+          {subleases.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Sublease Income Schedule</CardTitle>
+                <CardAction>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleRegenerateSubleaseSchedules}
+                  >
+                    <RefreshCw className="mr-2 h-4 w-4" />
+                    Regenerate
+                  </Button>
+                </CardAction>
+              </CardHeader>
+              <CardContent>
+                {!hasSubleasePayments ? (
+                  <p className="text-sm text-muted-foreground py-4">
+                    No sublease income schedule generated yet. Click Regenerate to create one.
+                  </p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="sticky left-0 bg-background z-10 w-16">Year</TableHead>
+                          {MONTH_SHORT.map((m) => (
+                            <TableHead key={m} className="text-right text-xs min-w-[90px]">
+                              {m}
+                            </TableHead>
+                          ))}
+                          <TableHead className="text-right text-xs font-semibold min-w-[100px]">
+                            Annual
+                          </TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {subleaseGridYears.map((year) => {
+                          const monthData = subleaseGrid[year] || {};
+                          const annualTotal = Object.values(monthData).reduce(
+                            (s, v) => s + v,
+                            0
+                          );
+                          return (
+                            <TableRow key={year}>
+                              <TableCell className="sticky left-0 bg-background z-10 font-medium tabular-nums">
+                                {year}
+                              </TableCell>
+                              {Array.from({ length: 12 }, (_, i) => i + 1).map(
+                                (month) => {
+                                  const amt = monthData[month];
+                                  const isSelected =
+                                    year === periodYear && month === periodMonth;
+                                  return (
+                                    <TableCell
+                                      key={month}
+                                      className={cn(
+                                        "text-right tabular-nums text-sm text-green-600 cursor-pointer transition-colors hover:bg-muted/50",
+                                        isSelected && "bg-green-50 dark:bg-green-950/30 font-medium ring-1 ring-green-400/40 rounded"
+                                      )}
+                                      onClick={() => {
+                                        setPeriodYear(year);
+                                        setPeriodMonth(month);
+                                      }}
+                                    >
+                                      {amt != null
+                                        ? formatCurrency(amt)
+                                        : <span className="text-muted-foreground">—</span>}
+                                    </TableCell>
+                                  );
+                                }
+                              )}
+                              <TableCell className="text-right tabular-nums font-semibold text-sm text-green-600">
+                                {formatCurrency(annualTotal)}
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })}
+                        {subleaseGridYears.length > 1 && (
+                          <TableRow className="border-t-2 font-semibold">
+                            <TableCell className="sticky left-0 bg-background z-10">
+                              Total
+                            </TableCell>
+                            {Array.from({ length: 12 }, (_, i) => i + 1).map(
+                              (month) => {
+                                const colTotal = subleaseGridYears.reduce(
+                                  (s, y) => s + (subleaseGrid[y]?.[month] || 0),
+                                  0
+                                );
+                                return (
+                                  <TableCell
+                                    key={month}
+                                    className="text-right tabular-nums text-sm text-green-600"
+                                  >
+                                    {colTotal > 0 ? formatCurrency(colTotal) : "—"}
+                                  </TableCell>
+                                );
+                              }
+                            )}
+                            <TableCell className="text-right tabular-nums text-sm text-green-600">
+                              {formatCurrency(
+                                allSubleasePayments.reduce((s, p) => s + p.scheduled_amount, 0)
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        )}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Net Payment Schedule (Lease Cost - Sublease Income) */}
+          {hasSubleasePayments && gridYears.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Net Payment Schedule</CardTitle>
+                <CardDescription>
+                  Lease costs minus sublease income recoveries
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="sticky left-0 bg-background z-10 w-16">Year</TableHead>
+                        {MONTH_SHORT.map((m) => (
+                          <TableHead key={m} className="text-right text-xs min-w-[90px]">
+                            {m}
+                          </TableHead>
+                        ))}
+                        <TableHead className="text-right text-xs font-semibold min-w-[100px]">
+                          Annual
+                        </TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {netGridYears.map((year) => {
+                        const monthData = netGrid[year] || {};
+                        const annualTotal = Object.values(monthData).reduce(
+                          (s, v) => s + v,
+                          0
+                        );
+                        return (
+                          <TableRow key={year}>
+                            <TableCell className="sticky left-0 bg-background z-10 font-medium tabular-nums">
+                              {year}
+                            </TableCell>
+                            {Array.from({ length: 12 }, (_, i) => i + 1).map(
+                              (month) => {
+                                const amt = monthData[month];
+                                const hasData =
+                                  (paymentGrid[year]?.[month] || 0) > 0 ||
+                                  (subleaseGrid[year]?.[month] || 0) > 0;
+                                return (
+                                  <TableCell
+                                    key={month}
+                                    className={cn(
+                                      "text-right tabular-nums text-sm",
+                                      amt != null && amt < 0 && "text-green-600"
+                                    )}
+                                  >
+                                    {hasData
+                                      ? formatCurrency(amt ?? 0)
+                                      : <span className="text-muted-foreground">—</span>}
+                                  </TableCell>
+                                );
+                              }
+                            )}
+                            <TableCell className={cn(
+                              "text-right tabular-nums font-semibold text-sm",
+                              annualTotal < 0 && "text-green-600"
+                            )}>
+                              {formatCurrency(annualTotal)}
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                      {netGridYears.length > 1 && (
+                        <TableRow className="border-t-2 font-semibold">
+                          <TableCell className="sticky left-0 bg-background z-10">
+                            Total
+                          </TableCell>
+                          {Array.from({ length: 12 }, (_, i) => i + 1).map(
+                            (month) => {
+                              const colTotal = netGridYears.reduce(
+                                (s, y) => s + (netGrid[y]?.[month] || 0),
+                                0
+                              );
+                              return (
+                                <TableCell
+                                  key={month}
+                                  className={cn(
+                                    "text-right tabular-nums text-sm",
+                                    colTotal < 0 && "text-green-600"
+                                  )}
+                                >
+                                  {colTotal !== 0 ? formatCurrency(colTotal) : "—"}
+                                </TableCell>
+                              );
+                            }
+                          )}
+                          <TableCell className={cn(
+                            "text-right tabular-nums text-sm",
+                            (() => {
+                              const grandTotal = allPayments.reduce((s, p) => s + p.scheduled_amount, 0) -
+                                allSubleasePayments.reduce((s, p) => s + p.scheduled_amount, 0);
+                              return grandTotal < 0;
+                            })() && "text-green-600"
+                          )}>
+                            {formatCurrency(
+                              allPayments.reduce((s, p) => s + p.scheduled_amount, 0) -
+                                allSubleasePayments.reduce((s, p) => s + p.scheduled_amount, 0)
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </TableBody>
+                  </Table>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
           {/* Selected Month Detail */}
           <Card>
             <CardHeader className="pb-3">
-              <div className="flex items-center justify-between">
-                <div>
-                  <CardTitle className="text-base">
-                    {getPeriodLabel(periodYear, periodMonth)}
-                  </CardTitle>
-                  <CardDescription>
-                    Click any cell above to view that month
-                  </CardDescription>
-                </div>
-              </div>
+              <CardTitle className="text-base">
+                {getPeriodLabel(periodYear, periodMonth)}
+              </CardTitle>
+              <CardDescription>
+                Click any cell above to view that month
+              </CardDescription>
             </CardHeader>
             <CardContent>
               {payments.length === 0 ? (
@@ -1912,8 +2985,8 @@ export default function LeaseDetailPage() {
         <TabsContent value="escalations">
           <Card>
             <CardHeader>
-              <div className="flex items-center justify-between">
-                <CardTitle>Rent Escalations</CardTitle>
+              <CardTitle>Rent Escalations</CardTitle>
+              <CardAction>
                 <Sheet
                   open={escalationSheetOpen}
                   onOpenChange={(open) => {
@@ -2066,7 +3139,7 @@ export default function LeaseDetailPage() {
                     </div>
                   </SheetContent>
                 </Sheet>
-              </div>
+              </CardAction>
             </CardHeader>
             <CardContent>
               {escalations.length === 0 ? (
@@ -2138,8 +3211,8 @@ export default function LeaseDetailPage() {
         <TabsContent value="options">
           <Card>
             <CardHeader>
-              <div className="flex items-center justify-between">
-                <CardTitle>Lease Options</CardTitle>
+              <CardTitle>Lease Options</CardTitle>
+              <CardAction>
                 <Sheet open={optionSheetOpen} onOpenChange={setOptionSheetOpen}>
                   <SheetTrigger asChild>
                     <Button size="sm">
@@ -2253,7 +3326,7 @@ export default function LeaseDetailPage() {
                     </div>
                   </SheetContent>
                 </Sheet>
-              </div>
+              </CardAction>
             </CardHeader>
             <CardContent>
               {options.length === 0 ? (
@@ -2332,8 +3405,8 @@ export default function LeaseDetailPage() {
         <TabsContent value="dates">
           <Card>
             <CardHeader>
-              <div className="flex items-center justify-between">
-                <CardTitle>Critical Dates</CardTitle>
+              <CardTitle>Critical Dates</CardTitle>
+              <CardAction>
                 <Sheet open={dateSheetOpen} onOpenChange={setDateSheetOpen}>
                   <SheetTrigger asChild>
                     <Button size="sm">
@@ -2409,7 +3482,7 @@ export default function LeaseDetailPage() {
                     </div>
                   </SheetContent>
                 </Sheet>
-              </div>
+              </CardAction>
             </CardHeader>
             <CardContent>
               {criticalDates.length === 0 ? (
@@ -2483,13 +3556,11 @@ export default function LeaseDetailPage() {
         <TabsContent value="subleases">
           <Card>
             <CardHeader>
-              <div className="flex items-center justify-between">
-                <div>
-                  <CardTitle>Subleases</CardTitle>
-                  <CardDescription>
-                    Subtenants renting space under this lease — track income, escalations, and critical dates
-                  </CardDescription>
-                </div>
+              <CardTitle>Subleases</CardTitle>
+              <CardDescription>
+                Subtenants renting space under this lease — track income, escalations, and critical dates
+              </CardDescription>
+              <CardAction>
                 <div className="flex items-center gap-2">
                   <Link href={`/${entityId}/real-estate/${leaseId}/subleases/from-pdf`}>
                     <Button size="sm" variant="outline">
@@ -2504,7 +3575,7 @@ export default function LeaseDetailPage() {
                     </Button>
                   </Link>
                 </div>
-              </div>
+              </CardAction>
             </CardHeader>
             <CardContent>
               {subleases.length === 0 ? (
@@ -2525,13 +3596,9 @@ export default function LeaseDetailPage() {
                       </p>
                     </div>
                     <div className="rounded-lg border p-3">
-                      <p className="text-xs text-muted-foreground">Monthly Income</p>
+                      <p className="text-xs text-muted-foreground">Current Monthly Income</p>
                       <p className="text-2xl font-bold text-green-600">
-                        {formatCurrency(
-                          subleases
-                            .filter((s) => s.status === "active")
-                            .reduce((sum, s) => sum + subleaseMonthlyIncome(s), 0)
-                        )}
+                        {formatCurrency(totalSubleaseIncome)}
                       </p>
                     </div>
                     <div className="rounded-lg border p-3">
@@ -2552,8 +3619,8 @@ export default function LeaseDetailPage() {
                         <TableHead>Subtenant</TableHead>
                         <TableHead>Status</TableHead>
                         <TableHead>Space</TableHead>
-                        <TableHead className="text-right">Monthly Rent</TableHead>
-                        <TableHead className="text-right">Total Monthly</TableHead>
+                        <TableHead className="text-right">Current Rent</TableHead>
+                        <TableHead className="text-right">Current Total</TableHead>
                         <TableHead>Expiration</TableHead>
                       </TableRow>
                     </TableHeader>
@@ -2581,10 +3648,10 @@ export default function LeaseDetailPage() {
                               : ""}
                           </TableCell>
                           <TableCell className="text-right">
-                            {formatCurrency(s.base_rent_monthly)}
+                            {formatCurrency(currentSubleaseBaseRent(s))}
                           </TableCell>
                           <TableCell className="text-right font-medium text-green-600">
-                            {formatCurrency(subleaseMonthlyIncome(s))}
+                            {formatCurrency(currentSubleaseMonthlyIncome(s))}
                           </TableCell>
                           <TableCell>
                             {new Date(s.expiration_date + "T00:00:00").toLocaleDateString()}
@@ -2712,20 +3779,18 @@ export default function LeaseDetailPage() {
               {/* Classification info */}
               <Card>
                 <CardHeader>
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <CardTitle>
-                        {lease.lease_type === "operating"
-                          ? "Operating Lease"
-                          : "Finance Lease"}{" "}
-                        — ASC 842 Amortization Schedule
-                      </CardTitle>
-                      <CardDescription>
-                        {lease.lease_type === "operating"
-                          ? "Single straight-line lease expense with liability effective-interest amortization. ROU amortization is the plug."
-                          : "Separate interest expense (effective interest) and ROU amortization (straight-line). Front-loaded total expense."}
-                      </CardDescription>
-                    </div>
+                  <CardTitle>
+                    {lease.lease_type === "operating"
+                      ? "Operating Lease"
+                      : "Finance Lease"}{" "}
+                    — ASC 842 Amortization Schedule
+                  </CardTitle>
+                  <CardDescription>
+                    {lease.lease_type === "operating"
+                      ? "Single straight-line lease expense with liability effective-interest amortization. ROU amortization is the plug."
+                      : "Separate interest expense (effective interest) and ROU amortization (straight-line). Front-loaded total expense."}
+                  </CardDescription>
+                  <CardAction>
                     <Button
                       variant="outline"
                       size="sm"
@@ -2737,7 +3802,7 @@ export default function LeaseDetailPage() {
                         ? "Hide Journal Entries"
                         : "Show Journal Entries"}
                     </Button>
-                  </div>
+                  </CardAction>
                 </CardHeader>
                 <CardContent>
                   <div className="overflow-x-auto">
@@ -3014,13 +4079,11 @@ export default function LeaseDetailPage() {
           <div className="space-y-6">
             <Card>
               <CardHeader>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <CardTitle>Documents</CardTitle>
-                    <CardDescription>
-                      Upload lease documents. Use AI Extract to auto-fill lease fields from a PDF.
-                    </CardDescription>
-                  </div>
+                <CardTitle>Documents</CardTitle>
+                <CardDescription>
+                  Upload lease documents. Use AI Extract to auto-fill lease fields from a PDF.
+                </CardDescription>
+                <CardAction>
                   <div className="flex items-center gap-2">
                     <label htmlFor="doc-upload">
                       <Button
@@ -3073,7 +4136,7 @@ export default function LeaseDetailPage() {
                       disabled={extracting}
                     />
                   </div>
-                </div>
+                </CardAction>
               </CardHeader>
               <CardContent>
                 {uploadingDoc && (
@@ -3124,20 +4187,18 @@ export default function LeaseDetailPage() {
             {extractedData && (
               <Card className="border-blue-200 bg-blue-50/30">
                 <CardHeader>
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <CardTitle>AI Extracted Fields</CardTitle>
-                      <CardDescription>
-                        Review the extracted data below. Click &quot;Apply to
-                        Lease&quot; to update this lease with the extracted
-                        values, or dismiss to ignore.
-                        {extractedData.confidence_notes && (
-                          <span className="block mt-1 text-yellow-700">
-                            AI Notes: {extractedData.confidence_notes}
-                          </span>
-                        )}
-                      </CardDescription>
-                    </div>
+                  <CardTitle>AI Extracted Fields</CardTitle>
+                  <CardDescription>
+                    Review the extracted data below. Click &quot;Apply to
+                    Lease&quot; to update this lease with the extracted
+                    values, or dismiss to ignore.
+                    {extractedData.confidence_notes && (
+                      <span className="block mt-1 text-yellow-700">
+                        AI Notes: {extractedData.confidence_notes}
+                      </span>
+                    )}
+                  </CardDescription>
+                  <CardAction>
                     <div className="flex items-center gap-2">
                       <Button
                         size="sm"
@@ -3155,7 +4216,7 @@ export default function LeaseDetailPage() {
                         Dismiss
                       </Button>
                     </div>
-                  </div>
+                  </CardAction>
                 </CardHeader>
                 <CardContent>
                   <div className="grid grid-cols-2 gap-x-8 gap-y-2 text-sm">

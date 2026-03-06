@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
@@ -39,6 +39,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
 import {
   RefreshCw,
@@ -48,8 +49,12 @@ import {
   Users,
   Clock,
   Banknote,
+  Search,
+  Loader2,
 } from "lucide-react";
 import { formatCurrency, getCurrentPeriod, getPeriodLabel } from "@/lib/utils/dates";
+
+// --- Types ---
 
 interface PayrollAccrual {
   id: string;
@@ -63,14 +68,24 @@ interface PayrollAccrual {
   notes: string | null;
 }
 
-interface PaylocityConnection {
+interface MappedEmployee {
   id: string;
-  company_id: string;
-  environment: string;
-  sync_status: string;
-  last_sync_at: string | null;
-  sync_error: string | null;
+  displayName: string;
+  firstName: string;
+  lastName: string;
+  jobTitle: string;
+  payType: string;
+  annualComp: number;
+  baseRate: number;
+  hireDate: string | null;
+  costCenterCode: string;
+  department: string;
+  operatingEntityId: string;
+  operatingEntityCode: string;
+  operatingEntityName: string;
 }
+
+// --- Constants ---
 
 const TYPE_LABELS: Record<string, string> = {
   wages: "Accrued Wages",
@@ -98,6 +113,17 @@ const STATUS_VARIANTS: Record<string, "default" | "secondary" | "outline"> = {
   reversed: "secondary",
 };
 
+function formatComp(value: number): string {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  }).format(value);
+}
+
+// --- Page ---
+
 export default function PayrollPage() {
   const params = useParams();
   const entityId = params.entityId as string;
@@ -107,11 +133,13 @@ export default function PayrollPage() {
   const [periodYear, setPeriodYear] = useState(current.year);
   const [periodMonth, setPeriodMonth] = useState(current.month);
   const [accruals, setAccruals] = useState<PayrollAccrual[]>([]);
-  const [connection, setConnection] = useState<PaylocityConnection | null>(
-    null
-  );
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+
+  // Employees tab
+  const [employees, setEmployees] = useState<MappedEmployee[]>([]);
+  const [empLoading, setEmpLoading] = useState(false);
+  const [empSearch, setEmpSearch] = useState("");
 
   // Manual add dialog
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -121,19 +149,11 @@ export default function PayrollPage() {
   const [manualNotes, setManualNotes] = useState("");
   const [addingManual, setAddingManual] = useState(false);
 
-  const loadData = useCallback(async () => {
+  // --- Data Loading ---
+
+  const loadAccruals = useCallback(async () => {
     setLoading(true);
 
-    // Load connection
-    const { data: conn } = await supabase
-      .from("paylocity_connections")
-      .select("id, company_id, environment, sync_status, last_sync_at, sync_error")
-      .eq("entity_id", entityId)
-      .single();
-
-    setConnection((conn as unknown as PaylocityConnection) ?? null);
-
-    // Load accruals for period
     const { data: acc } = await supabase
       .from("payroll_accruals")
       .select("*")
@@ -147,18 +167,49 @@ export default function PayrollPage() {
     setLoading(false);
   }, [supabase, entityId, periodYear, periodMonth]);
 
+  const loadEmployees = useCallback(async () => {
+    if (employees.length > 0) return; // already loaded
+    setEmpLoading(true);
+    try {
+      const res = await fetch("/api/paylocity/employees");
+      if (res.ok) {
+        const data = await res.json();
+        setEmployees(data.employees ?? []);
+      }
+    } catch {
+      // silent fail — employees tab will show empty
+    }
+    setEmpLoading(false);
+  }, [employees.length]);
+
   useEffect(() => {
-    loadData();
-  }, [loadData]);
+    loadAccruals();
+  }, [loadAccruals]);
+
+  // Filter employees for this entity
+  const entityEmployees = useMemo(() => {
+    const filtered = employees.filter((e) => e.operatingEntityId === entityId);
+    if (!empSearch) return filtered;
+    const q = empSearch.toLowerCase();
+    return filtered.filter(
+      (e) =>
+        e.displayName.toLowerCase().includes(q) ||
+        e.jobTitle.toLowerCase().includes(q) ||
+        e.department.toLowerCase().includes(q)
+    );
+  }, [employees, entityId, empSearch]);
+
+  const entityTotalComp = entityEmployees.reduce((s, e) => s + e.annualComp, 0);
+
+  // --- Handlers ---
 
   async function handleSync() {
     setSyncing(true);
-
     try {
       const res = await fetch("/api/paylocity/sync", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ entityId, periodYear, periodMonth }),
+        body: JSON.stringify({ periodYear, periodMonth }),
       });
 
       const json = await res.json();
@@ -167,14 +218,13 @@ export default function PayrollPage() {
         toast.error(json.error || "Sync failed");
       } else {
         toast.success(
-          `Synced ${json.employeesSynced} employees — wages: ${formatCurrency(json.accruals.wages)}, tax: ${formatCurrency(json.accruals.payrollTax)}`
+          `Synced ${json.employeeCount} employees — wages: ${formatCurrency(json.totalWageAccrual)}, tax: ${formatCurrency(json.totalTaxAccrual)}`
         );
-        loadData();
+        loadAccruals();
       }
     } catch {
       toast.error("Sync failed — network error");
     }
-
     setSyncing(false);
   }
 
@@ -216,13 +266,13 @@ export default function PayrollPage() {
       setManualDesc("");
       setManualAmount("");
       setManualNotes("");
-      loadData();
+      loadAccruals();
     }
-
     setAddingManual(false);
   }
 
-  // Group totals by type
+  // --- Computed ---
+
   const totals = accruals.reduce(
     (acc, a) => {
       acc[a.accrual_type] = (acc[a.accrual_type] ?? 0) + a.amount;
@@ -235,15 +285,16 @@ export default function PayrollPage() {
   const years = Array.from({ length: 5 }, (_, i) => current.year - 2 + i);
   const months = Array.from({ length: 12 }, (_, i) => i + 1);
 
+  // --- Render ---
+
   return (
     <div className="space-y-6">
+      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">
-            Payroll Accruals
-          </h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Payroll</h1>
           <p className="text-muted-foreground">
-            Accrued wages, payroll taxes, and PTO liability
+            Accruals, employees, and payroll cost allocation
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -253,284 +304,400 @@ export default function PayrollPage() {
               Settings
             </Button>
           </Link>
-          {connection && (
-            <Button
-              variant="outline"
-              onClick={handleSync}
-              disabled={syncing}
-            >
-              <RefreshCw
-                className={`mr-2 h-4 w-4 ${syncing ? "animate-spin" : ""}`}
-              />
-              {syncing ? "Syncing..." : "Sync from Paylocity"}
-            </Button>
-          )}
-          <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-            <DialogTrigger asChild>
-              <Button>
-                <Plus className="mr-2 h-4 w-4" />
-                Add Manual
-              </Button>
-            </DialogTrigger>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>Add Manual Accrual</DialogTitle>
-                <DialogDescription>
-                  Add a manual payroll accrual entry for{" "}
-                  {getPeriodLabel(periodYear, periodMonth)}
-                </DialogDescription>
-              </DialogHeader>
-              <form onSubmit={handleAddManual} className="space-y-4">
-                <div className="space-y-2">
-                  <Label>Accrual Type</Label>
-                  <Select value={manualType} onValueChange={setManualType}>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="wages">Accrued Wages</SelectItem>
-                      <SelectItem value="payroll_tax">Payroll Tax</SelectItem>
-                      <SelectItem value="pto">PTO Liability</SelectItem>
-                      <SelectItem value="benefits">Benefits</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label>Description</Label>
-                  <Input
-                    placeholder="e.g., Accrued Wages - Jan 16-31"
-                    value={manualDesc}
-                    onChange={(e) => setManualDesc(e.target.value)}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label>Amount</Label>
-                  <Input
-                    type="number"
-                    step="0.01"
-                    placeholder="0.00"
-                    value={manualAmount}
-                    onChange={(e) => setManualAmount(e.target.value)}
-                    required
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label>Notes</Label>
-                  <Textarea
-                    placeholder="Optional notes..."
-                    value={manualNotes}
-                    onChange={(e) => setManualNotes(e.target.value)}
-                  />
-                </div>
-                <Button type="submit" disabled={addingManual}>
-                  {addingManual ? "Adding..." : "Add Accrual"}
-                </Button>
-              </form>
-            </DialogContent>
-          </Dialog>
         </div>
       </div>
 
-      {/* Connection Status */}
-      {!connection && (
-        <Card className="border-dashed">
-          <CardContent className="pt-6">
-            <div className="flex items-center gap-4">
-              <Users className="h-8 w-8 text-muted-foreground" />
-              <div>
-                <p className="font-medium">Paylocity Not Connected</p>
-                <p className="text-sm text-muted-foreground">
-                  Connect your Paylocity account to auto-sync payroll accruals,
-                  or add entries manually.
+      {/* Tabs */}
+      <Tabs defaultValue="accruals" className="space-y-4">
+        <TabsList>
+          <TabsTrigger value="accruals">Accruals</TabsTrigger>
+          <TabsTrigger value="employees" onClick={loadEmployees}>
+            Employees
+          </TabsTrigger>
+        </TabsList>
+
+        {/* ═══ Accruals Tab ═══ */}
+        <TabsContent value="accruals" className="space-y-4">
+          {/* Period Selector + Actions */}
+          <div className="flex items-center gap-4">
+            <Select
+              value={String(periodYear)}
+              onValueChange={(v) => setPeriodYear(Number(v))}
+            >
+              <SelectTrigger className="w-[120px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {years.map((y) => (
+                  <SelectItem key={y} value={String(y)}>
+                    {y}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select
+              value={String(periodMonth)}
+              onValueChange={(v) => setPeriodMonth(Number(v))}
+            >
+              <SelectTrigger className="w-[150px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {months.map((m) => (
+                  <SelectItem key={m} value={String(m)}>
+                    {getPeriodLabel(current.year, m).split(" ")[0]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <span className="text-sm text-muted-foreground">
+              {getPeriodLabel(periodYear, periodMonth)}
+            </span>
+            <div className="ml-auto flex items-center gap-2">
+              <Button
+                variant="outline"
+                onClick={handleSync}
+                disabled={syncing}
+              >
+                <RefreshCw
+                  className={`mr-2 h-4 w-4 ${syncing ? "animate-spin" : ""}`}
+                />
+                {syncing ? "Syncing..." : "Sync from Paylocity"}
+              </Button>
+              <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+                <DialogTrigger asChild>
+                  <Button>
+                    <Plus className="mr-2 h-4 w-4" />
+                    Add Manual
+                  </Button>
+                </DialogTrigger>
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>Add Manual Accrual</DialogTitle>
+                    <DialogDescription>
+                      Add a manual payroll accrual entry for{" "}
+                      {getPeriodLabel(periodYear, periodMonth)}
+                    </DialogDescription>
+                  </DialogHeader>
+                  <form onSubmit={handleAddManual} className="space-y-4">
+                    <div className="space-y-2">
+                      <Label>Accrual Type</Label>
+                      <Select value={manualType} onValueChange={setManualType}>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="wages">Accrued Wages</SelectItem>
+                          <SelectItem value="payroll_tax">Payroll Tax</SelectItem>
+                          <SelectItem value="pto">PTO Liability</SelectItem>
+                          <SelectItem value="benefits">Benefits</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Description</Label>
+                      <Input
+                        placeholder="e.g., Accrued Wages - Jan 16-31"
+                        value={manualDesc}
+                        onChange={(e) => setManualDesc(e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Amount</Label>
+                      <Input
+                        type="number"
+                        step="0.01"
+                        placeholder="0.00"
+                        value={manualAmount}
+                        onChange={(e) => setManualAmount(e.target.value)}
+                        required
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Notes</Label>
+                      <Textarea
+                        placeholder="Optional notes..."
+                        value={manualNotes}
+                        onChange={(e) => setManualNotes(e.target.value)}
+                      />
+                    </div>
+                    <Button type="submit" disabled={addingManual}>
+                      {addingManual ? "Adding..." : "Add Accrual"}
+                    </Button>
+                  </form>
+                </DialogContent>
+              </Dialog>
+            </div>
+          </div>
+
+          {/* Summary Cards */}
+          <div className="grid grid-cols-4 gap-4">
+            <Card>
+              <CardContent className="pt-6">
+                <div className="flex items-center gap-2">
+                  <Banknote className="h-4 w-4 text-muted-foreground" />
+                  <p className="text-sm text-muted-foreground">Accrued Wages</p>
+                </div>
+                <p className="text-2xl font-semibold tabular-nums mt-1">
+                  {formatCurrency(totals["wages"] ?? 0)}
                 </p>
-              </div>
-              <Link href={`/${entityId}/payroll/settings`} className="ml-auto">
-                <Button variant="outline">Connect</Button>
-              </Link>
-            </div>
-          </CardContent>
-        </Card>
-      )}
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="pt-6">
+                <div className="flex items-center gap-2">
+                  <DollarSign className="h-4 w-4 text-muted-foreground" />
+                  <p className="text-sm text-muted-foreground">Payroll Tax</p>
+                </div>
+                <p className="text-2xl font-semibold tabular-nums mt-1">
+                  {formatCurrency(totals["payroll_tax"] ?? 0)}
+                </p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="pt-6">
+                <div className="flex items-center gap-2">
+                  <Clock className="h-4 w-4 text-muted-foreground" />
+                  <p className="text-sm text-muted-foreground">PTO Liability</p>
+                </div>
+                <p className="text-2xl font-semibold tabular-nums mt-1">
+                  {formatCurrency(totals["pto"] ?? 0)}
+                </p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="pt-6">
+                <div className="flex items-center gap-2">
+                  <DollarSign className="h-4 w-4 text-muted-foreground" />
+                  <p className="text-sm text-muted-foreground">Total Accruals</p>
+                </div>
+                <p className="text-2xl font-semibold tabular-nums mt-1">
+                  {formatCurrency(totals.total)}
+                </p>
+              </CardContent>
+            </Card>
+          </div>
 
-      {connection?.sync_error && (
-        <Card className="border-destructive">
-          <CardContent className="pt-6">
-            <p className="text-sm text-destructive">
-              Last sync error: {connection.sync_error}
-            </p>
-          </CardContent>
-        </Card>
-      )}
+          {/* Accruals Table */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Accrual Entries</CardTitle>
+              <CardDescription>
+                {accruals.length} entr{accruals.length !== 1 ? "ies" : "y"} for{" "}
+                {getPeriodLabel(periodYear, periodMonth)}
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {loading ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                </div>
+              ) : accruals.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-12">
+                  <Banknote className="h-12 w-12 text-muted-foreground mb-4" />
+                  <h3 className="text-lg font-medium mb-2">No Accruals</h3>
+                  <p className="text-muted-foreground text-center mb-4">
+                    Sync from Paylocity or add manual accrual entries for this period.
+                  </p>
+                </div>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Type</TableHead>
+                      <TableHead>Description</TableHead>
+                      <TableHead className="text-right">Amount</TableHead>
+                      <TableHead>Source</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Notes</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {accruals.map((a) => {
+                      const Icon = TYPE_ICONS[a.accrual_type] ?? DollarSign;
+                      return (
+                        <TableRow key={a.id}>
+                          <TableCell>
+                            <div className="flex items-center gap-2">
+                              <Icon className="h-4 w-4 text-muted-foreground" />
+                              <span className="font-medium">
+                                {TYPE_LABELS[a.accrual_type] ?? a.accrual_type}
+                              </span>
+                            </div>
+                          </TableCell>
+                          <TableCell>{a.description}</TableCell>
+                          <TableCell className="text-right tabular-nums font-medium">
+                            {formatCurrency(a.amount)}
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant="outline">
+                              {a.source === "paylocity_sync" ? "Paylocity" : "Manual"}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant={STATUS_VARIANTS[a.status] ?? "outline"}>
+                              {STATUS_LABELS[a.status] ?? a.status}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-muted-foreground text-sm max-w-[200px] truncate">
+                            {a.notes ?? "---"}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                    <TableRow className="font-semibold border-t-2">
+                      <TableCell colSpan={2}>Total</TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {formatCurrency(totals.total)}
+                      </TableCell>
+                      <TableCell colSpan={3} />
+                    </TableRow>
+                  </TableBody>
+                </Table>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
 
-      {/* Period Selector */}
-      <div className="flex items-center gap-4">
-        <Select
-          value={String(periodYear)}
-          onValueChange={(v) => setPeriodYear(Number(v))}
-        >
-          <SelectTrigger className="w-[120px]">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {years.map((y) => (
-              <SelectItem key={y} value={String(y)}>
-                {y}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Select
-          value={String(periodMonth)}
-          onValueChange={(v) => setPeriodMonth(Number(v))}
-        >
-          <SelectTrigger className="w-[150px]">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {months.map((m) => (
-              <SelectItem key={m} value={String(m)}>
-                {getPeriodLabel(current.year, m).split(" ")[0]}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <span className="text-sm text-muted-foreground">
-          {getPeriodLabel(periodYear, periodMonth)}
-        </span>
-      </div>
-
-      {/* Summary Cards */}
-      <div className="grid grid-cols-4 gap-4">
-        <Card>
-          <CardContent className="pt-6">
-            <div className="flex items-center gap-2">
-              <Banknote className="h-4 w-4 text-muted-foreground" />
-              <p className="text-sm text-muted-foreground">Accrued Wages</p>
-            </div>
-            <p className="text-2xl font-semibold tabular-nums mt-1">
-              {formatCurrency(totals["wages"] ?? 0)}
-            </p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-6">
-            <div className="flex items-center gap-2">
-              <DollarSign className="h-4 w-4 text-muted-foreground" />
-              <p className="text-sm text-muted-foreground">Payroll Tax</p>
-            </div>
-            <p className="text-2xl font-semibold tabular-nums mt-1">
-              {formatCurrency(totals["payroll_tax"] ?? 0)}
-            </p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-6">
-            <div className="flex items-center gap-2">
-              <Clock className="h-4 w-4 text-muted-foreground" />
-              <p className="text-sm text-muted-foreground">PTO Liability</p>
-            </div>
-            <p className="text-2xl font-semibold tabular-nums mt-1">
-              {formatCurrency(totals["pto"] ?? 0)}
-            </p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-6">
-            <div className="flex items-center gap-2">
-              <DollarSign className="h-4 w-4 text-muted-foreground" />
-              <p className="text-sm text-muted-foreground">Total Accruals</p>
-            </div>
-            <p className="text-2xl font-semibold tabular-nums mt-1">
-              {formatCurrency(totals.total)}
-            </p>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Accruals Table */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Accrual Entries</CardTitle>
-          <CardDescription>
-            {accruals.length} entr{accruals.length !== 1 ? "ies" : "y"} for{" "}
-            {getPeriodLabel(periodYear, periodMonth)}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {loading ? (
-            <p className="text-sm text-muted-foreground">Loading...</p>
-          ) : accruals.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-12">
-              <Banknote className="h-12 w-12 text-muted-foreground mb-4" />
-              <h3 className="text-lg font-medium mb-2">No Accruals</h3>
-              <p className="text-muted-foreground text-center mb-4">
-                {connection
-                  ? "Sync from Paylocity or add manual accrual entries."
-                  : "Connect Paylocity or add manual accrual entries for this period."}
-              </p>
+        {/* ═══ Employees Tab ═══ */}
+        <TabsContent value="employees" className="space-y-4">
+          {empLoading ? (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
             </div>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Description</TableHead>
-                  <TableHead className="text-right">Amount</TableHead>
-                  <TableHead>Source</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Notes</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {accruals.map((a) => {
-                  const Icon = TYPE_ICONS[a.accrual_type] ?? DollarSign;
-                  return (
-                    <TableRow key={a.id}>
-                      <TableCell>
-                        <div className="flex items-center gap-2">
-                          <Icon className="h-4 w-4 text-muted-foreground" />
-                          <span className="font-medium">
-                            {TYPE_LABELS[a.accrual_type] ?? a.accrual_type}
-                          </span>
-                        </div>
-                      </TableCell>
-                      <TableCell>{a.description}</TableCell>
-                      <TableCell className="text-right tabular-nums font-medium">
-                        {formatCurrency(a.amount)}
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant="outline">
-                          {a.source === "paylocity_sync"
-                            ? "Paylocity"
-                            : "Manual"}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        <Badge
-                          variant={STATUS_VARIANTS[a.status] ?? "outline"}
-                        >
-                          {STATUS_LABELS[a.status] ?? a.status}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-muted-foreground text-sm max-w-[200px] truncate">
-                        {a.notes ?? "---"}
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-                {/* Total Row */}
-                <TableRow className="font-semibold border-t-2">
-                  <TableCell colSpan={2}>Total</TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {formatCurrency(totals.total)}
-                  </TableCell>
-                  <TableCell colSpan={3} />
-                </TableRow>
-              </TableBody>
-            </Table>
+            <>
+              {/* Employee Summary */}
+              <div className="grid grid-cols-3 gap-4">
+                <Card>
+                  <CardContent className="pt-6">
+                    <div className="flex items-center gap-2">
+                      <Users className="h-4 w-4 text-muted-foreground" />
+                      <p className="text-sm text-muted-foreground">Employees</p>
+                    </div>
+                    <p className="text-2xl font-semibold mt-1">
+                      {entityEmployees.length}
+                    </p>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="pt-6">
+                    <div className="flex items-center gap-2">
+                      <DollarSign className="h-4 w-4 text-muted-foreground" />
+                      <p className="text-sm text-muted-foreground">Annual Payroll</p>
+                    </div>
+                    <p className="text-2xl font-semibold tabular-nums mt-1">
+                      {formatComp(entityTotalComp)}
+                    </p>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="pt-6">
+                    <div className="flex items-center gap-2">
+                      <Banknote className="h-4 w-4 text-muted-foreground" />
+                      <p className="text-sm text-muted-foreground">Monthly Payroll</p>
+                    </div>
+                    <p className="text-2xl font-semibold tabular-nums mt-1">
+                      {formatComp(entityTotalComp / 12)}
+                    </p>
+                  </CardContent>
+                </Card>
+              </div>
+
+              {/* Search */}
+              <div className="relative max-w-md">
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  placeholder="Search employees..."
+                  value={empSearch}
+                  onChange={(e) => setEmpSearch(e.target.value)}
+                  className="pl-9"
+                />
+              </div>
+
+              {/* Employee Table */}
+              <Card>
+                <CardHeader>
+                  <CardTitle>Employee Roster</CardTitle>
+                  <CardDescription>
+                    {entityEmployees.length} employee{entityEmployees.length !== 1 ? "s" : ""} allocated to this entity
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {entityEmployees.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center py-12">
+                      <Users className="h-12 w-12 text-muted-foreground mb-4" />
+                      <h3 className="text-lg font-medium mb-2">No Employees</h3>
+                      <p className="text-muted-foreground text-center">
+                        No employees are assigned to this entity via cost centers.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto rounded-md border">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Name</TableHead>
+                            <TableHead>Department</TableHead>
+                            <TableHead>Job Title</TableHead>
+                            <TableHead>Pay Type</TableHead>
+                            <TableHead className="text-right">Annual Comp</TableHead>
+                            <TableHead className="text-right">Monthly</TableHead>
+                            <TableHead>Hire Date</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {entityEmployees.map((emp) => (
+                            <TableRow key={emp.id}>
+                              <TableCell className="font-medium">
+                                {emp.displayName}
+                              </TableCell>
+                              <TableCell>{emp.department}</TableCell>
+                              <TableCell className="max-w-[200px] truncate">
+                                {emp.jobTitle || "—"}
+                              </TableCell>
+                              <TableCell>
+                                <Badge
+                                  variant={
+                                    emp.payType === "Salary" ? "default" : "secondary"
+                                  }
+                                >
+                                  {emp.payType}
+                                </Badge>
+                              </TableCell>
+                              <TableCell className="text-right font-mono">
+                                {formatComp(emp.annualComp)}
+                              </TableCell>
+                              <TableCell className="text-right font-mono text-muted-foreground">
+                                {formatComp(emp.annualComp / 12)}
+                              </TableCell>
+                              <TableCell className="text-muted-foreground">
+                                {emp.hireDate
+                                  ? new Date(emp.hireDate).toLocaleDateString()
+                                  : "—"}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                          <TableRow className="font-semibold border-t-2">
+                            <TableCell colSpan={4}>Total</TableCell>
+                            <TableCell className="text-right font-mono">
+                              {formatComp(entityTotalComp)}
+                            </TableCell>
+                            <TableCell className="text-right font-mono">
+                              {formatComp(entityTotalComp / 12)}
+                            </TableCell>
+                            <TableCell />
+                          </TableRow>
+                        </TableBody>
+                      </Table>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </>
           )}
-        </CardContent>
-      </Card>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

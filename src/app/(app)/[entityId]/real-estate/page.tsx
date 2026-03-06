@@ -40,14 +40,21 @@ import {
   Calendar,
   Check,
 } from "lucide-react";
-import { formatCurrency, formatPercentage } from "@/lib/utils/dates";
+import { formatCurrency, formatPercentage, getCurrentPeriod } from "@/lib/utils/dates";
+import { cn } from "@/lib/utils";
 import {
   calculateLeaseLiability,
   calculateROUAsset,
 } from "@/lib/utils/lease-calculations";
 import { getCurrentRent } from "@/lib/utils/lease-payments";
 import type { EscalationRule } from "@/lib/utils/lease-payments";
-import type { LeaseStatus, LeaseType, CriticalDateType, SubleaseStatus } from "@/lib/types/database";
+import type { LeaseStatus, LeaseType, CriticalDateType, SubleaseStatus, SplitType } from "@/lib/types/database";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 // --- Interfaces ---
 
@@ -108,6 +115,41 @@ interface SubleaseListItem {
   other_recovery_monthly: number;
   subleased_square_footage: number | null;
   leases: { lease_name: string; nickname: string | null } | null;
+}
+
+interface CostSplitItem {
+  id: string;
+  lease_id: string;
+  source_entity_id: string;
+  destination_entity_id: string;
+  split_type: SplitType;
+  split_percentage: number | null;
+  split_fixed_amount: number | null;
+  description: string | null;
+  is_active: boolean;
+  dest_entity_name: string;
+  dest_entity_code: string;
+}
+
+interface AllocatedLeaseItem {
+  split_id: string;
+  lease_id: string;
+  lease_name: string;
+  lease_nickname: string | null;
+  source_entity_id: string;
+  source_entity_name: string;
+  source_entity_code: string;
+  split_type: SplitType;
+  split_percentage: number | null;
+  split_fixed_amount: number | null;
+  lease_total_monthly: number;
+  allocated_monthly: number;
+}
+
+interface EntityOption {
+  id: string;
+  name: string;
+  code: string;
 }
 
 // --- Constants ---
@@ -199,6 +241,301 @@ function urgencyBadge(days: number) {
   return <Badge variant="outline">{days}d</Badge>;
 }
 
+// --- Payment Schedule Grids ---
+
+const MONTH_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+function PaymentScheduleGrids({
+  leasePayments,
+  subleasePayments,
+}: {
+  leasePayments: Array<{ lease_id: string; period_year: number; period_month: number; scheduled_amount: number }>;
+  subleasePayments: Array<{ sublease_id: string; lease_id: string; period_year: number; period_month: number; scheduled_amount: number }>;
+}) {
+  const current = getCurrentPeriod();
+
+  // Build lease payment grid: year → month → total
+  const leaseGrid: Record<number, Record<number, number>> = {};
+  for (const p of leasePayments) {
+    if (!leaseGrid[p.period_year]) leaseGrid[p.period_year] = {};
+    leaseGrid[p.period_year][p.period_month] =
+      (leaseGrid[p.period_year][p.period_month] || 0) + p.scheduled_amount;
+  }
+
+  // Build sublease income grid: year → month → total
+  const subleaseGrid: Record<number, Record<number, number>> = {};
+  for (const p of subleasePayments) {
+    if (!subleaseGrid[p.period_year]) subleaseGrid[p.period_year] = {};
+    subleaseGrid[p.period_year][p.period_month] =
+      (subleaseGrid[p.period_year][p.period_month] || 0) + p.scheduled_amount;
+  }
+
+  // Combine years
+  const allYears = new Set([
+    ...Object.keys(leaseGrid).map(Number),
+    ...Object.keys(subleaseGrid).map(Number),
+  ]);
+  const sortedYears = [...allYears].sort((a, b) => a - b);
+
+  const hasSubleaseData = subleasePayments.length > 0;
+
+  const totalLeasePayments = leasePayments.reduce((s, p) => s + p.scheduled_amount, 0);
+  const totalSubleasePayments = subleasePayments.reduce((s, p) => s + p.scheduled_amount, 0);
+
+  return (
+    <div className="space-y-6 mt-6">
+      {/* Lease Payments Grid */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Lease Payment Schedule — All Leases</CardTitle>
+          <CardDescription>
+            Monthly lease obligations across all leases
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="sticky left-0 bg-background z-10 w-16">Year</TableHead>
+                  {MONTH_SHORT.map((m) => (
+                    <TableHead key={m} className="text-right text-xs min-w-[90px]">
+                      {m}
+                    </TableHead>
+                  ))}
+                  <TableHead className="text-right text-xs font-semibold min-w-[100px]">
+                    Annual
+                  </TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {sortedYears.map((year) => {
+                  const monthData = leaseGrid[year] || {};
+                  const annualTotal = Object.values(monthData).reduce((s, v) => s + v, 0);
+                  return (
+                    <TableRow key={year}>
+                      <TableCell className="sticky left-0 bg-background z-10 font-medium tabular-nums">
+                        {year}
+                      </TableCell>
+                      {Array.from({ length: 12 }, (_, i) => i + 1).map((month) => {
+                        const amt = monthData[month];
+                        const isCurrentMonth = year === current.year && month === current.month;
+                        return (
+                          <TableCell
+                            key={month}
+                            className={cn(
+                              "text-right tabular-nums text-sm",
+                              isCurrentMonth && "bg-primary/10 font-medium ring-1 ring-primary/30 rounded"
+                            )}
+                          >
+                            {amt != null
+                              ? formatCurrency(amt)
+                              : <span className="text-muted-foreground">—</span>}
+                          </TableCell>
+                        );
+                      })}
+                      <TableCell className="text-right tabular-nums font-semibold text-sm">
+                        {formatCurrency(annualTotal)}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+                {sortedYears.length > 1 && (
+                  <TableRow className="border-t-2 font-semibold">
+                    <TableCell className="sticky left-0 bg-background z-10">Total</TableCell>
+                    {Array.from({ length: 12 }, (_, i) => i + 1).map((month) => {
+                      const colTotal = sortedYears.reduce((s, y) => s + (leaseGrid[y]?.[month] || 0), 0);
+                      return (
+                        <TableCell key={month} className="text-right tabular-nums text-sm">
+                          {colTotal > 0 ? formatCurrency(colTotal) : "—"}
+                        </TableCell>
+                      );
+                    })}
+                    <TableCell className="text-right tabular-nums text-sm">
+                      {formatCurrency(totalLeasePayments)}
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Sublease Income Grid */}
+      {hasSubleaseData && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Sublease Income Schedule — All Subleases</CardTitle>
+            <CardDescription>
+              Monthly sublease income across all subleases
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="sticky left-0 bg-background z-10 w-16">Year</TableHead>
+                    {MONTH_SHORT.map((m) => (
+                      <TableHead key={m} className="text-right text-xs min-w-[90px]">
+                        {m}
+                      </TableHead>
+                    ))}
+                    <TableHead className="text-right text-xs font-semibold min-w-[100px]">
+                      Annual
+                    </TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {sortedYears.map((year) => {
+                    const monthData = subleaseGrid[year] || {};
+                    const annualTotal = Object.values(monthData).reduce((s, v) => s + v, 0);
+                    if (annualTotal === 0 && !subleaseGrid[year]) return null;
+                    return (
+                      <TableRow key={year}>
+                        <TableCell className="sticky left-0 bg-background z-10 font-medium tabular-nums">
+                          {year}
+                        </TableCell>
+                        {Array.from({ length: 12 }, (_, i) => i + 1).map((month) => {
+                          const amt = monthData[month];
+                          const isCurrentMonth = year === current.year && month === current.month;
+                          return (
+                            <TableCell
+                              key={month}
+                              className={cn(
+                                "text-right tabular-nums text-sm text-green-600",
+                                isCurrentMonth && "bg-green-50 dark:bg-green-950/30 font-medium ring-1 ring-green-400/40 rounded"
+                              )}
+                            >
+                              {amt != null
+                                ? formatCurrency(amt)
+                                : <span className="text-muted-foreground">—</span>}
+                            </TableCell>
+                          );
+                        })}
+                        <TableCell className="text-right tabular-nums font-semibold text-sm text-green-600">
+                          {formatCurrency(annualTotal)}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                  {sortedYears.length > 1 && (
+                    <TableRow className="border-t-2 font-semibold">
+                      <TableCell className="sticky left-0 bg-background z-10">Total</TableCell>
+                      {Array.from({ length: 12 }, (_, i) => i + 1).map((month) => {
+                        const colTotal = sortedYears.reduce((s, y) => s + (subleaseGrid[y]?.[month] || 0), 0);
+                        return (
+                          <TableCell key={month} className="text-right tabular-nums text-sm text-green-600">
+                            {colTotal > 0 ? formatCurrency(colTotal) : "—"}
+                          </TableCell>
+                        );
+                      })}
+                      <TableCell className="text-right tabular-nums text-sm text-green-600">
+                        {formatCurrency(totalSubleasePayments)}
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Net Cost Grid */}
+      {hasSubleaseData && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Net Payment Schedule</CardTitle>
+            <CardDescription>
+              Lease costs minus sublease income recoveries
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="sticky left-0 bg-background z-10 w-16">Year</TableHead>
+                    {MONTH_SHORT.map((m) => (
+                      <TableHead key={m} className="text-right text-xs min-w-[90px]">
+                        {m}
+                      </TableHead>
+                    ))}
+                    <TableHead className="text-right text-xs font-semibold min-w-[100px]">
+                      Annual
+                    </TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {sortedYears.map((year) => {
+                    const leaseData = leaseGrid[year] || {};
+                    const subData = subleaseGrid[year] || {};
+                    const annualNet = Object.keys({ ...leaseData, ...subData }).reduce(
+                      (s, k) => s + (leaseData[Number(k)] || 0) - (subData[Number(k)] || 0),
+                      0
+                    );
+                    return (
+                      <TableRow key={year}>
+                        <TableCell className="sticky left-0 bg-background z-10 font-medium tabular-nums">
+                          {year}
+                        </TableCell>
+                        {Array.from({ length: 12 }, (_, i) => i + 1).map((month) => {
+                          const leaseAmt = leaseGrid[year]?.[month] || 0;
+                          const subAmt = subleaseGrid[year]?.[month] || 0;
+                          const net = leaseAmt - subAmt;
+                          const hasData = leaseAmt > 0 || subAmt > 0;
+                          const isCurrentMonth = year === current.year && month === current.month;
+                          return (
+                            <TableCell
+                              key={month}
+                              className={cn(
+                                "text-right tabular-nums text-sm",
+                                net < 0 && "text-green-600",
+                                isCurrentMonth && "bg-primary/10 font-medium ring-1 ring-primary/30 rounded"
+                              )}
+                            >
+                              {hasData
+                                ? formatCurrency(net)
+                                : <span className="text-muted-foreground">—</span>}
+                            </TableCell>
+                          );
+                        })}
+                        <TableCell className="text-right tabular-nums font-semibold text-sm">
+                          {formatCurrency(annualNet)}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                  {sortedYears.length > 1 && (
+                    <TableRow className="border-t-2 font-semibold">
+                      <TableCell className="sticky left-0 bg-background z-10">Total</TableCell>
+                      {Array.from({ length: 12 }, (_, i) => i + 1).map((month) => {
+                        const leaseTotal = sortedYears.reduce((s, y) => s + (leaseGrid[y]?.[month] || 0), 0);
+                        const subTotal = sortedYears.reduce((s, y) => s + (subleaseGrid[y]?.[month] || 0), 0);
+                        const net = leaseTotal - subTotal;
+                        return (
+                          <TableCell key={month} className="text-right tabular-nums text-sm">
+                            {net !== 0 ? formatCurrency(net) : "—"}
+                          </TableCell>
+                        );
+                      })}
+                      <TableCell className="text-right tabular-nums text-sm">
+                        {formatCurrency(totalLeasePayments - totalSubleasePayments)}
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+}
+
 // --- Component ---
 
 export default function RealEstatePage() {
@@ -209,7 +546,13 @@ export default function RealEstatePage() {
   const [leases, setLeases] = useState<LeaseListItem[]>([]);
   const [escalationsByLease, setEscalationsByLease] = useState<Record<string, EscalationRule[]>>({});
   const [subleases, setSubleases] = useState<SubleaseListItem[]>([]);
+  const [subleaseEscalationsMap, setSubleaseEscalationsMap] = useState<Record<string, EscalationRule[]>>({});
   const [criticalDates, setCriticalDates] = useState<CriticalDateItem[]>([]);
+  const [costSplits, setCostSplits] = useState<CostSplitItem[]>([]);
+  const [allocatedLeases, setAllocatedLeases] = useState<AllocatedLeaseItem[]>([]);
+  // Payment schedule grids
+  const [allLeasePayments, setAllLeasePayments] = useState<Array<{ lease_id: string; period_year: number; period_month: number; scheduled_amount: number }>>([]);
+  const [allSubleasePayments, setAllSubleasePayments] = useState<Array<{ sublease_id: string; lease_id: string; period_year: number; period_month: number; scheduled_amount: number }>>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState<string>("active");
   const [typeFilter, setTypeFilter] = useState<string>("all");
@@ -271,10 +614,239 @@ export default function RealEstatePage() {
       }
     }
 
-    setLeases((leasesResult.data as unknown as LeaseListItem[]) ?? []);
+    const leasesData = (leasesResult.data as unknown as LeaseListItem[]) ?? [];
+    const subleasesData = (subleasesResult.data as unknown as SubleaseListItem[]) ?? [];
+
+    // Fetch sublease escalations for current income computation
+    const subIds = subleasesData.map((s) => s.id);
+    const subEscMap: Record<string, EscalationRule[]> = {};
+    if (subIds.length > 0) {
+      const subEscResult = await supabase
+        .from("sublease_escalations")
+        .select("sublease_id, escalation_type, effective_date, percentage_increase, amount_increase, frequency")
+        .in("sublease_id", subIds)
+        .order("effective_date");
+      for (const row of (subEscResult.data ?? []) as Array<{ sublease_id: string } & EscalationRule>) {
+        const sid = row.sublease_id;
+        if (!subEscMap[sid]) subEscMap[sid] = [];
+        subEscMap[sid].push(row as unknown as EscalationRule);
+      }
+    }
+
+    setLeases(leasesData);
     setEscalationsByLease(escMap);
-    setSubleases((subleasesResult.data as unknown as SubleaseListItem[]) ?? []);
+    setSubleases(subleasesData);
+    setSubleaseEscalationsMap(subEscMap);
     setCriticalDates((datesResult.data as unknown as CriticalDateItem[]) ?? []);
+
+    // Fetch all lease payments for the grids
+    const leaseIds = leasesData.map((l) => l.id);
+    if (leaseIds.length > 0) {
+      const lpResult = await supabase
+        .from("lease_payments")
+        .select("lease_id, period_year, period_month, scheduled_amount")
+        .in("lease_id", leaseIds)
+        .order("period_year")
+        .order("period_month");
+      setAllLeasePayments(
+        (lpResult.data as unknown as Array<{ lease_id: string; period_year: number; period_month: number; scheduled_amount: number }>) ?? []
+      );
+
+      // Fetch sublease payments (already have sublease IDs from subleasesData)
+      if (subIds.length > 0) {
+        const spResult = await supabase
+          .from("sublease_payments")
+          .select("sublease_id, period_year, period_month, scheduled_amount")
+          .in("sublease_id", subIds)
+          .order("period_year")
+          .order("period_month");
+        // Enrich with lease_id
+        const subIdToLeaseId: Record<string, string> = {};
+        for (const s of subleasesData) subIdToLeaseId[s.id] = s.lease_id;
+        const spData = ((spResult.data ?? []) as unknown as Array<{ sublease_id: string; period_year: number; period_month: number; scheduled_amount: number }>).map((p) => ({
+          ...p,
+          lease_id: subIdToLeaseId[p.sublease_id] ?? "",
+        }));
+        setAllSubleasePayments(spData);
+      } else {
+        setAllSubleasePayments([]);
+      }
+    } else {
+      setAllLeasePayments([]);
+      setAllSubleasePayments([]);
+    }
+
+    // --- Cost Splits: outgoing from this entity ---
+    const splitsResult = await supabase
+      .from("lease_cost_splits")
+      .select("id, lease_id, source_entity_id, destination_entity_id, split_type, split_percentage, split_fixed_amount, description, is_active")
+      .eq("source_entity_id", entityId)
+      .eq("is_active", true);
+
+    // Get destination entity names
+    const splitsRaw = (splitsResult.data ?? []) as Array<{
+      id: string; lease_id: string; source_entity_id: string; destination_entity_id: string;
+      split_type: SplitType; split_percentage: number | null; split_fixed_amount: number | null;
+      description: string | null; is_active: boolean;
+    }>;
+    const destIds = [...new Set(splitsRaw.map((s) => s.destination_entity_id))];
+    let destEntityMap: Record<string, { name: string; code: string }> = {};
+    if (destIds.length > 0) {
+      const entRes = await supabase
+        .from("entities")
+        .select("id, name, code")
+        .in("id", destIds);
+      for (const e of (entRes.data ?? []) as Array<{ id: string; name: string; code: string }>) {
+        destEntityMap[e.id] = { name: e.name, code: e.code };
+      }
+    }
+    const mappedSplits: CostSplitItem[] = splitsRaw.map((s) => ({
+      ...s,
+      dest_entity_name: destEntityMap[s.destination_entity_id]?.name ?? "Unknown",
+      dest_entity_code: destEntityMap[s.destination_entity_id]?.code ?? "?",
+    }));
+    setCostSplits(mappedSplits);
+
+    // --- Cost Splits: incoming to this entity from other entities ---
+    const incomingSplitsResult = await supabase
+      .from("lease_cost_splits")
+      .select("id, lease_id, source_entity_id, destination_entity_id, split_type, split_percentage, split_fixed_amount")
+      .eq("destination_entity_id", entityId)
+      .eq("is_active", true);
+
+    const incomingSplitsRaw = (incomingSplitsResult.data ?? []) as Array<{
+      id: string; lease_id: string; source_entity_id: string; destination_entity_id: string;
+      split_type: SplitType; split_percentage: number | null; split_fixed_amount: number | null;
+    }>;
+
+    if (incomingSplitsRaw.length > 0) {
+      // Fetch source leases, their escalations, their subleases + sublease escalations, and source entity names
+      const sourceLeaseIds = [...new Set(incomingSplitsRaw.map((s) => s.lease_id))];
+      const sourceEntityIds = [...new Set(incomingSplitsRaw.map((s) => s.source_entity_id))];
+
+      const srcLeasesRes = await supabase
+        .from("leases")
+        .select("id, lease_name, nickname, base_rent_monthly, cam_monthly, insurance_monthly, property_tax_annual, utilities_monthly, other_monthly_costs")
+        .in("id", sourceLeaseIds);
+
+      // Fetch escalations for source leases to compute current rent
+      const srcEscResult = await supabase
+        .from("lease_escalations")
+        .select("lease_id, escalation_type, effective_date, percentage_increase, amount_increase, frequency")
+        .in("lease_id", sourceLeaseIds)
+        .order("effective_date");
+      const srcEscMap: Record<string, EscalationRule[]> = {};
+      for (const row of (srcEscResult.data ?? []) as Array<{ lease_id: string } & EscalationRule>) {
+        if (!srcEscMap[row.lease_id]) srcEscMap[row.lease_id] = [];
+        srcEscMap[row.lease_id].push(row as unknown as EscalationRule);
+      }
+
+      // Fetch active subleases for source leases to compute net cost
+      const srcSubResult = await supabase
+        .from("subleases")
+        .select("id, lease_id, base_rent_monthly, cam_recovery_monthly, insurance_recovery_monthly, property_tax_recovery_monthly, utilities_recovery_monthly, other_recovery_monthly, status")
+        .in("lease_id", sourceLeaseIds)
+        .eq("status", "active");
+      const srcSubleases = (srcSubResult.data ?? []) as Array<{
+        id: string; lease_id: string; base_rent_monthly: number;
+        cam_recovery_monthly: number; insurance_recovery_monthly: number;
+        property_tax_recovery_monthly: number; utilities_recovery_monthly: number;
+        other_recovery_monthly: number; status: string;
+      }>;
+      const srcSubIds = srcSubleases.map((s) => s.id);
+
+      // Fetch sublease escalations for source subleases
+      let srcSubEscMap: Record<string, EscalationRule[]> = {};
+      if (srcSubIds.length > 0) {
+        const srcSubEscResult = await supabase
+          .from("sublease_escalations")
+          .select("sublease_id, escalation_type, effective_date, percentage_increase, amount_increase, frequency")
+          .in("sublease_id", srcSubIds)
+          .order("effective_date");
+        for (const row of (srcSubEscResult.data ?? []) as Array<{ sublease_id: string } & EscalationRule>) {
+          if (!srcSubEscMap[row.sublease_id]) srcSubEscMap[row.sublease_id] = [];
+          srcSubEscMap[row.sublease_id].push(row as unknown as EscalationRule);
+        }
+      }
+
+      // Group source subleases by lease_id
+      const srcSubByLease: Record<string, typeof srcSubleases> = {};
+      for (const s of srcSubleases) {
+        if (!srcSubByLease[s.lease_id]) srcSubByLease[s.lease_id] = [];
+        srcSubByLease[s.lease_id].push(s);
+      }
+
+      const srcEntitiesRes = await supabase
+        .from("entities")
+        .select("id, name, code")
+        .in("id", sourceEntityIds);
+
+      const srcLeaseMap: Record<string, { lease_name: string; nickname: string | null; net_monthly: number }> = {};
+      for (const l of ((srcLeasesRes.data ?? []) as unknown) as Array<{
+        id: string; lease_name: string; nickname: string | null;
+        base_rent_monthly: number; cam_monthly: number; insurance_monthly: number;
+        property_tax_annual: number; utilities_monthly: number; other_monthly_costs: number;
+      }>) {
+        // Compute current rent for source lease (same logic as source entity uses)
+        const escs = srcEscMap[l.id] ?? [];
+        const currentRent = escs.length > 0
+          ? getCurrentRent(l.base_rent_monthly, escs)
+          : l.base_rent_monthly;
+        const totalCost = currentRent + l.cam_monthly + l.insurance_monthly +
+          l.property_tax_annual / 12 + l.utilities_monthly + l.other_monthly_costs;
+
+        // Compute current sublease income for source lease
+        const leaseSubleases = srcSubByLease[l.id] ?? [];
+        let subleaseIncome = 0;
+        for (const sub of leaseSubleases) {
+          const subEscs = srcSubEscMap[sub.id] ?? [];
+          const currentSubBase = subEscs.length > 0
+            ? getCurrentRent(sub.base_rent_monthly, subEscs)
+            : sub.base_rent_monthly;
+          subleaseIncome += currentSubBase + sub.cam_recovery_monthly + sub.insurance_recovery_monthly +
+            sub.property_tax_recovery_monthly + sub.utilities_recovery_monthly + sub.other_recovery_monthly;
+        }
+
+        srcLeaseMap[l.id] = {
+          lease_name: l.lease_name,
+          nickname: l.nickname,
+          net_monthly: totalCost - subleaseIncome,
+        };
+      }
+
+      const srcEntityMap: Record<string, { name: string; code: string }> = {};
+      for (const e of (srcEntitiesRes.data ?? []) as Array<{ id: string; name: string; code: string }>) {
+        srcEntityMap[e.id] = { name: e.name, code: e.code };
+      }
+
+      const allocated: AllocatedLeaseItem[] = incomingSplitsRaw.map((s) => {
+        const lease = srcLeaseMap[s.lease_id];
+        const srcEntity = srcEntityMap[s.source_entity_id];
+        const leaseNet = lease?.net_monthly ?? 0;
+        const allocatedAmt =
+          s.split_type === "percentage"
+            ? leaseNet * (s.split_percentage ?? 0)
+            : (s.split_fixed_amount ?? 0);
+        return {
+          split_id: s.id,
+          lease_id: s.lease_id,
+          lease_name: lease?.lease_name ?? "Unknown",
+          lease_nickname: lease?.nickname ?? null,
+          source_entity_id: s.source_entity_id,
+          source_entity_name: srcEntity?.name ?? "Unknown",
+          source_entity_code: srcEntity?.code ?? "?",
+          split_type: s.split_type,
+          split_percentage: s.split_percentage,
+          split_fixed_amount: s.split_fixed_amount,
+          lease_total_monthly: leaseNet,
+          allocated_monthly: allocatedAmt,
+        };
+      });
+      setAllocatedLeases(allocated);
+    } else {
+      setAllocatedLeases([]);
+    }
+
     setLoading(false);
   }, [supabase, entityId]);
 
@@ -310,6 +882,74 @@ export default function RealEstatePage() {
     return currentRentMap[lease.id] ?? lease.base_rent_monthly;
   }
 
+  // Current sublease income using escalations
+  function currentSubleaseIncome(s: SubleaseListItem): number {
+    const escs = subleaseEscalationsMap[s.id] ?? [];
+    const currentBase = escs.length > 0
+      ? getCurrentRent(s.base_rent_monthly, escs)
+      : s.base_rent_monthly;
+    return (
+      currentBase +
+      s.cam_recovery_monthly +
+      s.insurance_recovery_monthly +
+      s.property_tax_recovery_monthly +
+      s.utilities_recovery_monthly +
+      s.other_recovery_monthly
+    );
+  }
+
+  // Group subleases by lease_id
+  const subleasesByLease = useMemo(() => {
+    const map: Record<string, SubleaseListItem[]> = {};
+    for (const s of subleases) {
+      if (s.status !== "active") continue;
+      if (!map[s.lease_id]) map[s.lease_id] = [];
+      map[s.lease_id].push(s);
+    }
+    return map;
+  }, [subleases]);
+
+  // Group cost splits by lease_id
+  const splitsByLease = useMemo(() => {
+    const map: Record<string, CostSplitItem[]> = {};
+    for (const s of costSplits) {
+      if (!map[s.lease_id]) map[s.lease_id] = [];
+      map[s.lease_id].push(s);
+    }
+    return map;
+  }, [costSplits]);
+
+  // Per-lease sublease income (current, after escalations)
+  function leaseSubleaseIncome(leaseId: string): number {
+    return (subleasesByLease[leaseId] ?? []).reduce(
+      (s, sub) => s + currentSubleaseIncome(sub),
+      0
+    );
+  }
+
+  // Per-lease net cost (total monthly - sublease income)
+  function leaseNetCost(lease: LeaseListItem): number {
+    return totalMonthlyCost(lease, leaseCurrentRent(lease)) - leaseSubleaseIncome(lease.id);
+  }
+
+  // Per-lease allocated-out amount (sum of split amounts going to partner entities)
+  function leaseAllocatedOut(lease: LeaseListItem): number {
+    const splits = splitsByLease[lease.id];
+    if (!splits || splits.length === 0) return 0;
+    const net = leaseNetCost(lease);
+    return splits.reduce((s, sp) => {
+      if (sp.split_type === "percentage") {
+        return s + net * (sp.split_percentage ?? 0);
+      }
+      return s + (sp.split_fixed_amount ?? 0);
+    }, 0);
+  }
+
+  // Effective net cost to this entity (net cost - allocated out)
+  function leaseEffectiveNetCost(lease: LeaseListItem): number {
+    return leaseNetCost(lease) - leaseAllocatedOut(lease);
+  }
+
   const activeLeases = leases.filter((l) => l.status === "active");
   const totalMonthly = activeLeases.reduce((s, l) => s + totalMonthlyCost(l, leaseCurrentRent(l)), 0);
   const totalAnnual = totalMonthly * 12;
@@ -319,14 +959,19 @@ export default function RealEstatePage() {
   );
   const avgCostPerSF = totalSF > 0 ? totalAnnual / totalSF : 0;
 
-  // Sublease income totals
+  // Sublease income totals (current, after escalations)
   const activeSubleases = subleases.filter((s) => s.status === "active");
   const totalSubleaseMonthlyIncome = activeSubleases.reduce(
-    (s, sub) => s + subleaseMonthlyIncome(sub),
+    (s, sub) => s + currentSubleaseIncome(sub),
     0
   );
   const totalSubleaseAnnualIncome = totalSubleaseMonthlyIncome * 12;
   const netMonthly = totalMonthly - totalSubleaseMonthlyIncome;
+
+  // Cost split totals
+  const totalAllocatedOut = activeLeases.reduce((s, l) => s + leaseAllocatedOut(l), 0);
+  const totalAllocatedIn = allocatedLeases.reduce((s, a) => s + a.allocated_monthly, 0);
+  const effectiveNetMonthly = netMonthly - totalAllocatedOut + totalAllocatedIn;
 
   // Critical dates within alertable range
   const upcomingDates = criticalDates.filter((cd) => {
@@ -479,16 +1124,30 @@ export default function RealEstatePage() {
             )}
           </CardContent>
         </Card>
-        <Card className={netMonthly < totalMonthly && totalSubleaseMonthlyIncome > 0 ? "border-green-200" : ""}>
+        <Card className={(totalSubleaseMonthlyIncome > 0 || totalAllocatedOut > 0 || totalAllocatedIn > 0) ? "border-green-200" : ""}>
           <CardContent className="pt-6">
-            <p className="text-sm text-muted-foreground">Net Monthly Cost</p>
+            <p className="text-sm text-muted-foreground">Effective Net Monthly</p>
             <p className="text-2xl font-semibold tabular-nums">
-              {formatCurrency(netMonthly)}
+              {formatCurrency(effectiveNetMonthly)}
             </p>
-            {totalSubleaseMonthlyIncome > 0 && (
-              <p className="text-xs text-green-600 mt-1">
-                {((totalSubleaseMonthlyIncome / totalMonthly) * 100).toFixed(0)}% offset by subleases
-              </p>
+            {(totalSubleaseMonthlyIncome > 0 || totalAllocatedOut > 0 || totalAllocatedIn > 0) && (
+              <div className="text-xs text-muted-foreground mt-1 space-y-0.5">
+                {totalSubleaseMonthlyIncome > 0 && (
+                  <p className="text-green-600">
+                    Subleases: -{formatCurrency(totalSubleaseMonthlyIncome)}
+                  </p>
+                )}
+                {totalAllocatedOut > 0 && (
+                  <p className="text-green-600">
+                    Split out: -{formatCurrency(totalAllocatedOut)}
+                  </p>
+                )}
+                {totalAllocatedIn > 0 && (
+                  <p className="text-amber-600">
+                    Allocated in: +{formatCurrency(totalAllocatedIn)}
+                  </p>
+                )}
+              </div>
             )}
           </CardContent>
         </Card>
@@ -611,106 +1270,242 @@ export default function RealEstatePage() {
                     )}
                 </div>
               ) : (
+                <>
                 <div className="overflow-x-auto">
+                  <TooltipProvider>
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead>Property</TableHead>
                         <TableHead>Lease Name</TableHead>
-                        <TableHead>Lessor</TableHead>
-                        <TableHead>Type</TableHead>
-                        <TableHead>Commencement</TableHead>
-                        <TableHead>Expiration</TableHead>
-                        <TableHead className="text-right">
-                          Monthly Rent
-                        </TableHead>
-                        <TableHead className="text-right">
-                          Total Monthly
-                        </TableHead>
+                        <TableHead className="text-right">Monthly Rent</TableHead>
+                        <TableHead className="text-right">Total Monthly</TableHead>
+                        <TableHead className="text-right">Sublease Income</TableHead>
+                        <TableHead className="text-right">Net Cost</TableHead>
+                        <TableHead className="text-right">Cost Split</TableHead>
+                        <TableHead className="text-muted-foreground">Property</TableHead>
+                        <TableHead className="text-muted-foreground">Expiration</TableHead>
                         <TableHead>Status</TableHead>
                         <TableHead></TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {filteredLeases.map((lease) => (
-                        <TableRow key={lease.id}>
-                          <TableCell className="font-medium">
-                            {lease.properties?.property_name ?? "---"}
-                          </TableCell>
-                          <TableCell>{lease.nickname || lease.lease_name}</TableCell>
-                          <TableCell className="text-muted-foreground">
-                            {lease.lessor_name ?? "---"}
-                          </TableCell>
-                          <TableCell>
-                            <Badge variant="outline">
-                              {TYPE_LABELS[lease.lease_type]}
-                            </Badge>
-                          </TableCell>
-                          <TableCell className="text-muted-foreground">
-                            {new Date(
-                              lease.commencement_date + "T00:00:00"
-                            ).toLocaleDateString()}
-                          </TableCell>
-                          <TableCell className="text-muted-foreground">
-                            {new Date(
-                              lease.expiration_date + "T00:00:00"
-                            ).toLocaleDateString()}
-                          </TableCell>
-                          <TableCell className="text-right tabular-nums">
-                            {formatCurrency(leaseCurrentRent(lease))}
-                          </TableCell>
-                          <TableCell className="text-right tabular-nums font-medium">
-                            {formatCurrency(totalMonthlyCost(lease, leaseCurrentRent(lease)))}
-                          </TableCell>
-                          <TableCell>
-                            <Badge
-                              variant={
-                                STATUS_VARIANTS[lease.status] ?? "outline"
-                              }
-                            >
-                              {STATUS_LABELS[lease.status] ?? lease.status}
-                            </Badge>
-                          </TableCell>
-                          <TableCell>
-                            <Link
-                              href={`/${entityId}/real-estate/${lease.id}`}
-                            >
-                              <Button variant="ghost" size="sm">
-                                <ArrowRight className="h-4 w-4" />
-                              </Button>
-                            </Link>
-                          </TableCell>
-                        </TableRow>
-                      ))}
+                      {filteredLeases.map((lease) => {
+                        const curRent = leaseCurrentRent(lease);
+                        const total = totalMonthlyCost(lease, curRent);
+                        const subIncome = leaseSubleaseIncome(lease.id);
+                        const net = leaseNetCost(lease);
+                        const splits = splitsByLease[lease.id] ?? [];
+                        const allocOut = leaseAllocatedOut(lease);
+                        const effectiveNet = leaseEffectiveNetCost(lease);
+
+                        return (
+                          <TableRow key={lease.id}>
+                            <TableCell className="font-medium">
+                              {lease.nickname || lease.lease_name}
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums">
+                              {formatCurrency(curRent)}
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums font-medium">
+                              {formatCurrency(total)}
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums">
+                              {subIncome > 0 ? (
+                                <span className="text-green-600">
+                                  {formatCurrency(subIncome)}
+                                </span>
+                              ) : (
+                                <span className="text-muted-foreground">---</span>
+                              )}
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums font-medium">
+                              {formatCurrency(net)}
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums">
+                              {splits.length > 0 ? (
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <div className="cursor-help text-right">
+                                      <div className="text-xs text-muted-foreground">
+                                        {splits.map((sp) => (
+                                          <span key={sp.id} className="block">
+                                            {sp.dest_entity_code}{" "}
+                                            {sp.split_type === "percentage"
+                                              ? `${((sp.split_percentage ?? 0) * 100).toFixed(0)}%`
+                                              : formatCurrency(sp.split_fixed_amount ?? 0)}
+                                          </span>
+                                        ))}
+                                      </div>
+                                      <div className="font-medium text-sm">
+                                        Net: {formatCurrency(effectiveNet)}
+                                      </div>
+                                    </div>
+                                  </TooltipTrigger>
+                                  <TooltipContent side="left" className="max-w-xs">
+                                    <div className="space-y-1 text-xs">
+                                      <p className="font-semibold">Cost Splits</p>
+                                      {splits.map((sp) => (
+                                        <p key={sp.id}>
+                                          {sp.dest_entity_name}:{" "}
+                                          {sp.split_type === "percentage"
+                                            ? `${((sp.split_percentage ?? 0) * 100).toFixed(1)}% = ${formatCurrency(
+                                                net * (sp.split_percentage ?? 0)
+                                              )}`
+                                            : `${formatCurrency(sp.split_fixed_amount ?? 0)}/mo`}
+                                          {sp.description ? ` — ${sp.description}` : ""}
+                                        </p>
+                                      ))}
+                                      <p className="pt-1 border-t font-medium">
+                                        Total allocated out: {formatCurrency(allocOut)}
+                                      </p>
+                                      <p className="font-semibold">
+                                        Effective net to us: {formatCurrency(effectiveNet)}
+                                      </p>
+                                    </div>
+                                  </TooltipContent>
+                                </Tooltip>
+                              ) : (
+                                <span className="text-muted-foreground">---</span>
+                              )}
+                            </TableCell>
+                            <TableCell className="text-muted-foreground">
+                              {lease.properties?.property_name ?? "---"}
+                            </TableCell>
+                            <TableCell className="text-muted-foreground">
+                              {new Date(
+                                lease.expiration_date + "T00:00:00"
+                              ).toLocaleDateString()}
+                            </TableCell>
+                            <TableCell>
+                              <Badge
+                                variant={STATUS_VARIANTS[lease.status] ?? "outline"}
+                              >
+                                {STATUS_LABELS[lease.status] ?? lease.status}
+                              </Badge>
+                            </TableCell>
+                            <TableCell>
+                              <Link href={`/${entityId}/real-estate/${lease.id}`}>
+                                <Button variant="ghost" size="sm">
+                                  <ArrowRight className="h-4 w-4" />
+                                </Button>
+                              </Link>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
                       <TableRow className="font-semibold border-t-2">
-                        <TableCell colSpan={6}>
-                          Totals ({filteredLeases.length} lease
-                          {filteredLeases.length !== 1 ? "s" : ""})
+                        <TableCell>
+                          Totals ({filteredLeases.length} lease{filteredLeases.length !== 1 ? "s" : ""})
                         </TableCell>
                         <TableCell className="text-right tabular-nums">
                           {formatCurrency(
-                            filteredLeases.reduce(
-                              (s, l) => s + leaseCurrentRent(l),
-                              0
-                            )
+                            filteredLeases.reduce((s, l) => s + leaseCurrentRent(l), 0)
                           )}
                         </TableCell>
                         <TableCell className="text-right tabular-nums">
                           {formatCurrency(
-                            filteredLeases.reduce(
-                              (s, l) => s + totalMonthlyCost(l, leaseCurrentRent(l)),
-                              0
-                            )
+                            filteredLeases.reduce((s, l) => s + totalMonthlyCost(l, leaseCurrentRent(l)), 0)
                           )}
                         </TableCell>
-                        <TableCell colSpan={2} />
+                        <TableCell className="text-right tabular-nums">
+                          {(() => {
+                            const totalSub = filteredLeases.reduce((s, l) => s + leaseSubleaseIncome(l.id), 0);
+                            return totalSub > 0 ? (
+                              <span className="text-green-600">{formatCurrency(totalSub)}</span>
+                            ) : (
+                              <span className="text-muted-foreground">---</span>
+                            );
+                          })()}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {formatCurrency(
+                            filteredLeases.reduce((s, l) => s + leaseNetCost(l), 0)
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {(() => {
+                            const totalOut = filteredLeases.reduce((s, l) => s + leaseAllocatedOut(l), 0);
+                            return totalOut > 0 ? (
+                              <div className="text-xs">
+                                <span className="text-muted-foreground block">
+                                  Out: {formatCurrency(totalOut)}
+                                </span>
+                                <span className="font-medium text-sm">
+                                  Net: {formatCurrency(
+                                    filteredLeases.reduce((s, l) => s + leaseEffectiveNetCost(l), 0)
+                                  )}
+                                </span>
+                              </div>
+                            ) : (
+                              <span className="text-muted-foreground">---</span>
+                            );
+                          })()}
+                        </TableCell>
+                        <TableCell colSpan={4} />
                       </TableRow>
                     </TableBody>
                   </Table>
+                  </TooltipProvider>
                 </div>
+
+                {/* Allocated from Other Entities */}
+                {allocatedLeases.length > 0 && (
+                  <div className="mt-6 pt-6 border-t">
+                    <h3 className="text-sm font-semibold text-muted-foreground mb-3">
+                      Allocated from Other Entities
+                    </h3>
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Lease</TableHead>
+                          <TableHead>From Entity</TableHead>
+                          <TableHead className="text-right">Split</TableHead>
+                          <TableHead className="text-right">Allocated Monthly</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {allocatedLeases.map((al) => (
+                          <TableRow key={al.split_id}>
+                            <TableCell className="font-medium">
+                              {al.lease_nickname || al.lease_name}
+                            </TableCell>
+                            <TableCell className="text-muted-foreground">
+                              {al.source_entity_name}
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums">
+                              {al.split_type === "percentage"
+                                ? `${((al.split_percentage ?? 0) * 100).toFixed(1)}%`
+                                : formatCurrency(al.split_fixed_amount ?? 0)}
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums font-medium text-amber-600">
+                              {formatCurrency(al.allocated_monthly)}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                        <TableRow className="font-semibold border-t-2">
+                          <TableCell colSpan={3}>
+                            Total Allocated In ({allocatedLeases.length} split{allocatedLeases.length !== 1 ? "s" : ""})
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums text-amber-600">
+                            {formatCurrency(allocatedLeases.reduce((s, a) => s + a.allocated_monthly, 0))}
+                          </TableCell>
+                        </TableRow>
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+                </>
               )}
             </CardContent>
           </Card>
+
+          {/* Payment Schedule Grids */}
+          {allLeasePayments.length > 0 && (
+            <PaymentScheduleGrids
+              leasePayments={allLeasePayments}
+              subleasePayments={allSubleasePayments}
+            />
+          )}
         </TabsContent>
 
         {/* === Analytics Tab === */}

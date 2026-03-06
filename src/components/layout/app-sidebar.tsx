@@ -187,6 +187,11 @@ export function AppSidebar({ user, entityId: entityIdProp }: AppSidebarProps) {
           icon: Building,
         },
         {
+          title: "Payroll",
+          url: "/payroll",
+          icon: Users,
+        },
+        {
           title: "IC Eliminations",
           url: "/ic-eliminations",
           icon: ArrowLeftRight,

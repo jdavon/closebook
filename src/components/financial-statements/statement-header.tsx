@@ -33,7 +33,7 @@ export function StatementHeader({
   );
 
   return (
-    <div className="text-center py-4 space-y-0.5">
+    <div className="stmt-header text-center py-4 space-y-0.5">
       <div className="text-sm font-bold uppercase tracking-wide">
         {companyName}
       </div>
