@@ -62,6 +62,15 @@ export async function GET() {
       })
     );
 
+    // Debug: include raw counts in response
+    const debug = results.map(r => ({
+      companyId: r.companyId,
+      rawCount: r.employees.length,
+      sampleStatusTypes: r.employees.slice(0, 3).map(e => ({
+        id: e.id, displayName: e.displayName, status: e.status, statusType: e.statusType,
+      })),
+    }));
+
     // Merge and map employees from all companies
     const employees: MappedEmployee[] = [];
 
@@ -98,7 +107,7 @@ export async function GET() {
     cachedData = { employees, fetchedAt: Date.now() };
 
     return NextResponse.json(
-      { employees, cached: false },
+      { employees, cached: false, debug },
       {
         headers: {
           "Cache-Control": "public, max-age=300, stale-while-revalidate=60",
