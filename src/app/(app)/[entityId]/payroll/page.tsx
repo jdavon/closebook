@@ -122,6 +122,31 @@ function formatComp(value: number): string {
   }).format(value);
 }
 
+// --- Employer Tax Rates (CA) ---
+const EMPLOYER_TAX_RATES = {
+  ficaSS: { rate: 0.062, wageBase: 176_100 },
+  medicare: { rate: 0.0145, wageBase: Infinity },
+  futa: { rate: 0.006, wageBase: 7_000 },
+  caSUI: { rate: 0.034, wageBase: 7_000 },
+  caETT: { rate: 0.001, wageBase: 7_000 },
+  caSDI: { rate: 0.011, wageBase: 145_600 },
+};
+
+function estimateMonthlyEmployerTax(annualComp: number, monthIndex: number): number {
+  // monthIndex: 0=Jan ... 11=Dec
+  // Estimate YTD wages at start of month
+  const monthlyWage = annualComp / 12;
+  const ytdBefore = monthlyWage * monthIndex;
+  let totalTax = 0;
+
+  for (const { rate, wageBase } of Object.values(EMPLOYER_TAX_RATES)) {
+    if (ytdBefore >= wageBase) continue; // already capped
+    const taxableThisMonth = Math.min(monthlyWage, Math.max(0, wageBase - ytdBefore));
+    totalTax += taxableThisMonth * rate;
+  }
+  return totalTax;
+}
+
 // --- Page ---
 
 export default function PayrollPage() {
@@ -186,20 +211,37 @@ export default function PayrollPage() {
     loadAccruals();
   }, [loadAccruals]);
 
-  // Filter employees for this entity
+  // Filter employees for this entity and compute per-employee accruals
   const entityEmployees = useMemo(() => {
     const filtered = employees.filter((e) => e.operatingEntityId === entityId);
-    if (!empSearch) return filtered;
-    const q = empSearch.toLowerCase();
-    return filtered.filter(
-      (e) =>
-        e.displayName.toLowerCase().includes(q) ||
-        e.jobTitle.toLowerCase().includes(q) ||
-        e.department.toLowerCase().includes(q)
-    );
-  }, [employees, entityId, empSearch]);
+    const searched = empSearch
+      ? filtered.filter((e) => {
+          const q = empSearch.toLowerCase();
+          return (
+            e.displayName.toLowerCase().includes(q) ||
+            e.jobTitle.toLowerCase().includes(q) ||
+            e.department.toLowerCase().includes(q)
+          );
+        })
+      : filtered;
+
+    const monthIdx = periodMonth - 1; // 0-indexed for tax calc
+    return searched.map((e) => {
+      const monthlyWage = e.annualComp / 12;
+      const monthlyTax = estimateMonthlyEmployerTax(e.annualComp, monthIdx);
+      return {
+        ...e,
+        monthlyWage,
+        monthlyTax,
+        monthlyTotal: monthlyWage + monthlyTax,
+      };
+    });
+  }, [employees, entityId, empSearch, periodMonth]);
 
   const entityTotalComp = entityEmployees.reduce((s, e) => s + e.annualComp, 0);
+  const entityTotalMonthlyWage = entityEmployees.reduce((s, e) => s + e.monthlyWage, 0);
+  const entityTotalMonthlyTax = entityEmployees.reduce((s, e) => s + e.monthlyTax, 0);
+  const entityTotalMonthlyAll = entityTotalMonthlyWage + entityTotalMonthlyTax;
 
   // --- Handlers ---
 
@@ -567,8 +609,13 @@ export default function PayrollPage() {
             </div>
           ) : (
             <>
+              {/* Period label */}
+              <p className="text-sm text-muted-foreground">
+                Estimated accruals for {getPeriodLabel(periodYear, periodMonth)}
+              </p>
+
               {/* Employee Summary */}
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-5 gap-4">
                 <Card>
                   <CardContent className="pt-6">
                     <div className="flex items-center gap-2">
@@ -595,10 +642,32 @@ export default function PayrollPage() {
                   <CardContent className="pt-6">
                     <div className="flex items-center gap-2">
                       <Banknote className="h-4 w-4 text-muted-foreground" />
-                      <p className="text-sm text-muted-foreground">Monthly Payroll</p>
+                      <p className="text-sm text-muted-foreground">Accrued Wages</p>
                     </div>
                     <p className="text-2xl font-semibold tabular-nums mt-1">
-                      {formatComp(entityTotalComp / 12)}
+                      {formatCurrency(entityTotalMonthlyWage)}
+                    </p>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="pt-6">
+                    <div className="flex items-center gap-2">
+                      <DollarSign className="h-4 w-4 text-muted-foreground" />
+                      <p className="text-sm text-muted-foreground">Employer Taxes</p>
+                    </div>
+                    <p className="text-2xl font-semibold tabular-nums mt-1">
+                      {formatCurrency(entityTotalMonthlyTax)}
+                    </p>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="pt-6">
+                    <div className="flex items-center gap-2">
+                      <DollarSign className="h-4 w-4 text-muted-foreground" />
+                      <p className="text-sm text-muted-foreground">Total Cost</p>
+                    </div>
+                    <p className="text-2xl font-semibold tabular-nums mt-1">
+                      {formatCurrency(entityTotalMonthlyAll)}
                     </p>
                   </CardContent>
                 </Card>
@@ -615,12 +684,12 @@ export default function PayrollPage() {
                 />
               </div>
 
-              {/* Employee Table */}
+              {/* Employee Accruals Table */}
               <Card>
                 <CardHeader>
-                  <CardTitle>Employee Roster</CardTitle>
+                  <CardTitle>Employee Accruals</CardTitle>
                   <CardDescription>
-                    {entityEmployees.length} employee{entityEmployees.length !== 1 ? "s" : ""} allocated to this entity
+                    {entityEmployees.length} employee{entityEmployees.length !== 1 ? "s" : ""} &mdash; estimated cost for {getPeriodLabel(periodYear, periodMonth)}
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
@@ -642,8 +711,9 @@ export default function PayrollPage() {
                             <TableHead>Job Title</TableHead>
                             <TableHead>Pay Type</TableHead>
                             <TableHead className="text-right">Annual Comp</TableHead>
-                            <TableHead className="text-right">Monthly</TableHead>
-                            <TableHead>Hire Date</TableHead>
+                            <TableHead className="text-right">Accrued Wages</TableHead>
+                            <TableHead className="text-right">Employer Tax</TableHead>
+                            <TableHead className="text-right">Total Cost</TableHead>
                           </TableRow>
                         </TableHeader>
                         <TableBody>
@@ -665,16 +735,17 @@ export default function PayrollPage() {
                                   {emp.payType}
                                 </Badge>
                               </TableCell>
-                              <TableCell className="text-right font-mono">
+                              <TableCell className="text-right font-mono text-muted-foreground">
                                 {formatComp(emp.annualComp)}
                               </TableCell>
-                              <TableCell className="text-right font-mono text-muted-foreground">
-                                {formatComp(emp.annualComp / 12)}
+                              <TableCell className="text-right font-mono">
+                                {formatCurrency(emp.monthlyWage)}
                               </TableCell>
-                              <TableCell className="text-muted-foreground">
-                                {emp.hireDate
-                                  ? new Date(emp.hireDate).toLocaleDateString()
-                                  : "—"}
+                              <TableCell className="text-right font-mono">
+                                {formatCurrency(emp.monthlyTax)}
+                              </TableCell>
+                              <TableCell className="text-right font-mono font-semibold">
+                                {formatCurrency(emp.monthlyTotal)}
                               </TableCell>
                             </TableRow>
                           ))}
@@ -684,9 +755,14 @@ export default function PayrollPage() {
                               {formatComp(entityTotalComp)}
                             </TableCell>
                             <TableCell className="text-right font-mono">
-                              {formatComp(entityTotalComp / 12)}
+                              {formatCurrency(entityTotalMonthlyWage)}
                             </TableCell>
-                            <TableCell />
+                            <TableCell className="text-right font-mono">
+                              {formatCurrency(entityTotalMonthlyTax)}
+                            </TableCell>
+                            <TableCell className="text-right font-mono">
+                              {formatCurrency(entityTotalMonthlyAll)}
+                            </TableCell>
                           </TableRow>
                         </TableBody>
                       </Table>
