@@ -62,22 +62,13 @@ export async function GET() {
       })
     );
 
-    // Debug: include raw counts in response
-    const debug = results.map(r => ({
-      companyId: r.companyId,
-      rawCount: r.employees.length,
-      sampleStatusTypes: r.employees.slice(0, 3).map(e => ({
-        id: e.id, displayName: e.displayName, status: e.status, statusType: e.statusType,
-      })),
-    }));
-
     // Merge and map employees from all companies
+    // Note: activeOnly=true in the API call already filters to active employees,
+    // so no need for a statusType check (batch endpoint doesn't return it at top level)
     const employees: MappedEmployee[] = [];
 
     for (const { companyId, employees: rawEmployees } of results) {
       for (const emp of rawEmployees) {
-        if (emp.statusType !== "A") continue;
-
         const cc = getOperatingEntityForCostCenter(emp.position?.costCenter1, companyId);
         employees.push({
           id: emp.id,
@@ -85,8 +76,8 @@ export async function GET() {
           displayName: emp.displayName,
           firstName: emp.info?.firstName ?? "",
           lastName: emp.info?.lastName ?? emp.lastName,
-          status: emp.status,
-          statusType: emp.statusType,
+          status: emp.currentStatus?.statusType ?? emp.status ?? "Active",
+          statusType: emp.currentStatus?.statusType ?? "A",
           jobTitle: emp.info?.jobTitle ?? "",
           payType: emp.currentPayRate?.payType ?? "Unknown",
           annualComp: getAnnualComp(emp),
@@ -107,7 +98,7 @@ export async function GET() {
     cachedData = { employees, fetchedAt: Date.now() };
 
     return NextResponse.json(
-      { employees, cached: false, debug },
+      { employees, cached: false },
       {
         headers: {
           "Cache-Control": "public, max-age=300, stale-while-revalidate=60",
