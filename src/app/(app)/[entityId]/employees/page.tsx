@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import {
@@ -44,7 +44,27 @@ import {
   Settings,
   Info,
   Landmark,
+  Pencil,
+  Check,
+  X,
 } from "lucide-react";
+
+// --- Constants ---
+
+/** Employing entity IDs → Paylocity company IDs */
+const EMPLOYING_ENTITIES: Record<string, string> = {
+  "b664a9c1-3817-4df4-9261-f51b3403a5de": "132427", // Silverco
+  "7529580d-3b44-4a9b-91f4-bc2db25f5211": "316791", // HDR
+};
+
+/** All operating entities for Company dropdown */
+const OPERATING_ENTITIES = [
+  { id: "b664a9c1-3817-4df4-9261-f51b3403a5de", code: "AVON", name: "Silverco Enterprises" },
+  { id: "b56dec66-edea-4d8d-8cb4-4043af3e41de", code: "ARH", name: "Avon Rental Holdings" },
+  { id: "2fdafa28-8ba2-4caa-aa9f-5d8f39f57081", code: "VS", name: "Versatile Studios" },
+  { id: "7529580d-3b44-4a9b-91f4-bc2db25f5211", code: "HDR", name: "Hollywood Depot Rentals" },
+  { id: "f641caa2-c87e-4a71-a98b-d51cc559f3ff", code: "HSS", name: "Hollywood Site Services" },
+];
 
 // --- Types ---
 
@@ -70,6 +90,28 @@ interface MappedEmployee {
   operatingEntityName: string;
 }
 
+interface AllocationOverride {
+  employee_id: string;
+  paylocity_company_id: string;
+  department: string | null;
+  class: string | null;
+  allocated_entity_id: string | null;
+  allocated_entity_name: string | null;
+}
+
+/** Employee with merged allocation overrides */
+interface DisplayEmployee extends MappedEmployee {
+  /** Effective department (override or default) */
+  effectiveDepartment: string;
+  /** Class (from override only) */
+  classValue: string;
+  /** Effective company/entity (override or default) */
+  effectiveEntityId: string;
+  effectiveEntityName: string;
+  /** Whether this employee has any overrides */
+  hasOverrides: boolean;
+}
+
 // --- Helpers ---
 
 function formatCurrency(value: number): string {
@@ -87,6 +129,123 @@ function formatCompact(value: number): string {
   return `$${value.toFixed(0)}`;
 }
 
+// --- Editable Cell Component ---
+
+function EditableTextCell({
+  value,
+  onSave,
+  placeholder = "---",
+}: {
+  value: string;
+  onSave: (newValue: string) => Promise<void>;
+  placeholder?: string;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  const [saving, setSaving] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (editing && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [editing]);
+
+  const handleSave = async () => {
+    if (draft === value) {
+      setEditing(false);
+      return;
+    }
+    setSaving(true);
+    try {
+      await onSave(draft);
+      setEditing(false);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleCancel = () => {
+    setDraft(value);
+    setEditing(false);
+  };
+
+  if (editing) {
+    return (
+      <div className="flex items-center gap-1">
+        <Input
+          ref={inputRef}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") handleSave();
+            if (e.key === "Escape") handleCancel();
+          }}
+          className="h-7 text-xs w-[140px]"
+          disabled={saving}
+        />
+        <Button size="icon" variant="ghost" className="h-6 w-6" onClick={handleSave} disabled={saving}>
+          <Check className="h-3 w-3" />
+        </Button>
+        <Button size="icon" variant="ghost" className="h-6 w-6" onClick={handleCancel} disabled={saving}>
+          <X className="h-3 w-3" />
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="group flex items-center gap-1 cursor-pointer hover:bg-muted/50 rounded px-1 -mx-1 py-0.5"
+      onClick={() => {
+        setDraft(value);
+        setEditing(true);
+      }}
+    >
+      <span className={value ? "" : "text-muted-foreground"}>{value || placeholder}</span>
+      <Pencil className="h-3 w-3 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
+    </div>
+  );
+}
+
+function EditableSelectCell({
+  value,
+  options,
+  onSave,
+}: {
+  value: string;
+  options: { value: string; label: string }[];
+  onSave: (newValue: string) => Promise<void>;
+}) {
+  const [saving, setSaving] = useState(false);
+
+  const handleChange = async (newValue: string) => {
+    if (newValue === value) return;
+    setSaving(true);
+    try {
+      await onSave(newValue);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Select value={value} onValueChange={handleChange} disabled={saving}>
+      <SelectTrigger className="h-7 text-xs w-[160px] border-transparent hover:border-input">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {options.map((opt) => (
+          <SelectItem key={opt.value} value={opt.value} className="text-xs">
+            {opt.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
 // --- Page ---
 
 export default function EmployeeRosterPage() {
@@ -94,19 +253,34 @@ export default function EmployeeRosterPage() {
   const entityId = params.entityId as string;
 
   const [employees, setEmployees] = useState<MappedEmployee[]>([]);
+  const [allocations, setAllocations] = useState<AllocationOverride[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [deptFilter, setDeptFilter] = useState<string>("all");
   const [payTypeFilter, setPayTypeFilter] = useState<string>("all");
+  const [companyFilter, setCompanyFilter] = useState<string>("all");
 
+  // Determine if this entity is an employing entity (Silverco or HDR)
+  const paylocityCompanyId = EMPLOYING_ENTITIES[entityId] ?? null;
+  const isEmployingEntity = paylocityCompanyId !== null;
+
+  // Fetch employees + allocations
   useEffect(() => {
     async function load() {
       try {
-        const res = await fetch("/api/paylocity/employees");
-        if (!res.ok) throw new Error(`Failed to fetch: ${res.status}`);
-        const data = await res.json();
-        setEmployees(data.employees ?? []);
+        const [empRes, allocRes] = await Promise.all([
+          fetch("/api/paylocity/employees"),
+          fetch("/api/paylocity/allocations"),
+        ]);
+        if (!empRes.ok) throw new Error(`Failed to fetch employees: ${empRes.status}`);
+        const empData = await empRes.json();
+        setEmployees(empData.employees ?? []);
+
+        if (allocRes.ok) {
+          const allocData = await allocRes.json();
+          setAllocations(allocData.allocations ?? []);
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to load");
       } finally {
@@ -116,49 +290,161 @@ export default function EmployeeRosterPage() {
     load();
   }, []);
 
-  // Filter to this entity
-  const entityEmployees = useMemo(
-    () => employees.filter((e) => e.operatingEntityId === entityId),
-    [employees, entityId]
+  // Build allocation lookup: "employeeId:companyId" → override
+  const allocationMap = useMemo(() => {
+    const map: Record<string, AllocationOverride> = {};
+    for (const a of allocations) {
+      map[`${a.employee_id}:${a.paylocity_company_id}`] = a;
+    }
+    return map;
+  }, [allocations]);
+
+  // Select employees to display:
+  // - Employing entity (Silverco/HDR): show ALL employees from that Paylocity company
+  // - Operating entity (VS/ARH/HSS): show employees allocated to that entity
+  const baseEmployees = useMemo(() => {
+    if (isEmployingEntity) {
+      return employees.filter((e) => e.companyId === paylocityCompanyId);
+    }
+    return employees.filter((e) => {
+      // Check override first
+      const override = allocationMap[`${e.id}:${e.companyId}`];
+      const effectiveEntityId = override?.allocated_entity_id || e.operatingEntityId;
+      return effectiveEntityId === entityId;
+    });
+  }, [employees, entityId, isEmployingEntity, paylocityCompanyId, allocationMap]);
+
+  // Merge employees with allocation overrides
+  const displayEmployees: DisplayEmployee[] = useMemo(() => {
+    return baseEmployees.map((emp) => {
+      const override = allocationMap[`${emp.id}:${emp.companyId}`];
+      return {
+        ...emp,
+        effectiveDepartment: override?.department || emp.department,
+        classValue: override?.class || "",
+        effectiveEntityId: override?.allocated_entity_id || emp.operatingEntityId,
+        effectiveEntityName: override?.allocated_entity_name || emp.operatingEntityName,
+        hasOverrides: !!override,
+      };
+    });
+  }, [baseEmployees, allocationMap]);
+
+  // Department and company lists for filters
+  const uniqueDepts = useMemo(
+    () => [...new Set(displayEmployees.map((e) => e.effectiveDepartment))].filter(Boolean).sort(),
+    [displayEmployees]
   );
 
-  // Department list
-  const uniqueDepts = useMemo(
-    () => [...new Set(entityEmployees.map((e) => e.department))].sort(),
-    [entityEmployees]
+  const uniqueCompanies = useMemo(
+    () =>
+      [...new Set(displayEmployees.map((e) => e.effectiveEntityName))].filter(Boolean).sort(),
+    [displayEmployees]
   );
 
   // Filtered employees
   const filteredEmployees = useMemo(() => {
-    return entityEmployees.filter((emp) => {
-      if (deptFilter !== "all" && emp.department !== deptFilter) return false;
+    return displayEmployees.filter((emp) => {
+      if (deptFilter !== "all" && emp.effectiveDepartment !== deptFilter) return false;
       if (payTypeFilter !== "all" && emp.payType !== payTypeFilter) return false;
+      if (companyFilter !== "all" && emp.effectiveEntityName !== companyFilter) return false;
       if (search) {
         const q = search.toLowerCase();
         return (
           emp.displayName.toLowerCase().includes(q) ||
           (emp.jobTitle ?? "").toLowerCase().includes(q) ||
-          emp.department.toLowerCase().includes(q)
+          emp.effectiveDepartment.toLowerCase().includes(q) ||
+          emp.effectiveEntityName.toLowerCase().includes(q) ||
+          emp.classValue.toLowerCase().includes(q)
         );
       }
       return true;
     });
-  }, [entityEmployees, deptFilter, payTypeFilter, search]);
+  }, [displayEmployees, deptFilter, payTypeFilter, companyFilter, search]);
 
-  // KPIs — entity-level
-  const totalAnnualComp = entityEmployees.reduce((s, e) => s + e.annualComp, 0);
-  const totalERTaxes = entityEmployees.reduce((s, e) => s + e.erTaxes, 0);
-  const totalFullComp = entityEmployees.reduce((s, e) => s + e.totalComp, 0);
-  const avgComp = entityEmployees.length > 0 ? totalFullComp / entityEmployees.length : 0;
+  // KPIs
+  const totalAnnualComp = displayEmployees.reduce((s, e) => s + e.annualComp, 0);
+  const totalERTaxes = displayEmployees.reduce((s, e) => s + e.erTaxes, 0);
+  const totalFullComp = displayEmployees.reduce((s, e) => s + e.totalComp, 0);
+  const avgComp = displayEmployees.length > 0 ? totalFullComp / displayEmployees.length : 0;
   const deptCount = uniqueDepts.length;
 
-  // KPI — Silverco total payroll (company 132427, all entities)
+  // Silverco total payroll (company 132427, all entities)
   const silvercoEmployees = useMemo(
     () => employees.filter((e) => e.companyId === "132427"),
     [employees]
   );
   const silvercoTotalComp = silvercoEmployees.reduce((s, e) => s + e.totalComp, 0);
   const silvercoHeadcount = silvercoEmployees.length;
+
+  // Save allocation override
+  const saveAllocation = useCallback(
+    async (
+      emp: DisplayEmployee,
+      field: "department" | "class" | "company",
+      value: string
+    ) => {
+      // Determine the full allocation to save
+      const existing = allocationMap[`${emp.id}:${emp.companyId}`];
+
+      let department = existing?.department || emp.department;
+      let classValue = existing?.class || "";
+      let allocatedEntityId = existing?.allocated_entity_id || emp.operatingEntityId;
+      let allocatedEntityName = existing?.allocated_entity_name || emp.operatingEntityName;
+
+      if (field === "department") department = value;
+      if (field === "class") classValue = value;
+      if (field === "company") {
+        allocatedEntityId = value;
+        const entity = OPERATING_ENTITIES.find((e) => e.id === value);
+        allocatedEntityName = entity?.name ?? value;
+      }
+
+      const res = await fetch("/api/paylocity/allocations", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          employeeId: emp.id,
+          paylocityCompanyId: emp.companyId,
+          department,
+          class: classValue,
+          allocatedEntityId,
+          allocatedEntityName,
+        }),
+      });
+
+      if (!res.ok) throw new Error("Failed to save");
+      const data = await res.json();
+
+      // Update local allocation state
+      setAllocations((prev) => {
+        const key = `${emp.id}:${emp.companyId}`;
+        const idx = prev.findIndex(
+          (a) => `${a.employee_id}:${a.paylocity_company_id}` === key
+        );
+        const updated: AllocationOverride = {
+          employee_id: emp.id,
+          paylocity_company_id: emp.companyId,
+          department: data.allocation?.department ?? department,
+          class: data.allocation?.class ?? classValue,
+          allocated_entity_id: data.allocation?.allocated_entity_id ?? allocatedEntityId,
+          allocated_entity_name: data.allocation?.allocated_entity_name ?? allocatedEntityName,
+        };
+        if (idx >= 0) {
+          const next = [...prev];
+          next[idx] = updated;
+          return next;
+        }
+        return [...prev, updated];
+      });
+    },
+    [allocationMap]
+  );
+
+  // Entity options for Company dropdown
+  const entityOptions = OPERATING_ENTITIES.map((e) => ({
+    value: e.id,
+    label: e.name,
+  }));
 
   if (loading) {
     return (
@@ -189,7 +475,9 @@ export default function EmployeeRosterPage() {
           <div>
             <h1 className="text-2xl font-semibold tracking-tight">Employees</h1>
             <p className="text-muted-foreground">
-              Employee roster, compensation, and department breakdown
+              {isEmployingEntity
+                ? "Full payroll roster — click any Department, Class, or Company cell to edit"
+                : "Employee roster, compensation, and department breakdown"}
             </p>
           </div>
           <Link href={`/${entityId}/employees/settings`}>
@@ -208,7 +496,7 @@ export default function EmployeeRosterPage() {
               <Users className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">{entityEmployees.length}</div>
+              <div className="text-2xl font-bold">{displayEmployees.length}</div>
               <p className="text-xs text-muted-foreground">Active employees</p>
             </CardContent>
           </Card>
@@ -267,7 +555,8 @@ export default function EmployeeRosterPage() {
           <CardHeader>
             <CardTitle className="text-base">Employee Roster</CardTitle>
             <CardDescription>
-              {entityEmployees.length} active employee{entityEmployees.length !== 1 ? "s" : ""}
+              {displayEmployees.length} active employee{displayEmployees.length !== 1 ? "s" : ""}
+              {isEmployingEntity && " (full payroll company view)"}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -276,12 +565,27 @@ export default function EmployeeRosterPage() {
               <div className="relative flex-1 min-w-[200px]">
                 <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
-                  placeholder="Search by name, title, or department..."
+                  placeholder="Search by name, title, department, company, class..."
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   className="pl-9"
                 />
               </div>
+              {isEmployingEntity && (
+                <Select value={companyFilter} onValueChange={setCompanyFilter}>
+                  <SelectTrigger className="w-[200px]">
+                    <SelectValue placeholder="All Companies" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Companies</SelectItem>
+                    {uniqueCompanies.map((co) => (
+                      <SelectItem key={co} value={co}>
+                        {co}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
               <Select value={deptFilter} onValueChange={setDeptFilter}>
                 <SelectTrigger className="w-[200px]">
                   <SelectValue placeholder="All Departments" />
@@ -306,7 +610,7 @@ export default function EmployeeRosterPage() {
                 </SelectContent>
               </Select>
               <span className="text-sm text-muted-foreground">
-                {filteredEmployees.length} of {entityEmployees.length}
+                {filteredEmployees.length} of {displayEmployees.length}
               </span>
             </div>
 
@@ -317,7 +621,21 @@ export default function EmployeeRosterPage() {
                   <TableRow>
                     <TableHead>Name</TableHead>
                     <TableHead>Job Title</TableHead>
+                    <TableHead>
+                      <span className="inline-flex items-center gap-1">
+                        Company
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Info className="h-3 w-3 text-muted-foreground" />
+                          </TooltipTrigger>
+                          <TooltipContent side="top" className="text-xs">
+                            Operating entity this employee is allocated to
+                          </TooltipContent>
+                        </Tooltip>
+                      </span>
+                    </TableHead>
                     <TableHead>Department</TableHead>
+                    <TableHead>Class</TableHead>
                     <TableHead>Pay Type</TableHead>
                     <TableHead className="text-right">Annual Comp</TableHead>
                     <TableHead className="text-right">ER Taxes</TableHead>
@@ -335,18 +653,41 @@ export default function EmployeeRosterPage() {
                       </span>
                     </TableHead>
                     <TableHead className="text-right">Base Rate</TableHead>
-                    <TableHead>Hire Date</TableHead>
-                    <TableHead>Status</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {filteredEmployees.map((emp) => (
-                    <TableRow key={emp.id}>
-                      <TableCell className="font-medium">{emp.displayName}</TableCell>
-                      <TableCell className="max-w-[200px] truncate">
+                    <TableRow key={`${emp.companyId}-${emp.id}`}>
+                      <TableCell className="font-medium whitespace-nowrap">
+                        {emp.displayName}
+                      </TableCell>
+                      <TableCell className="max-w-[180px] truncate">
                         {emp.jobTitle || "---"}
                       </TableCell>
-                      <TableCell>{emp.department}</TableCell>
+                      {/* Company — editable select */}
+                      <TableCell>
+                        <EditableSelectCell
+                          value={emp.effectiveEntityId}
+                          options={entityOptions}
+                          onSave={(val) => saveAllocation(emp, "company", val)}
+                        />
+                      </TableCell>
+                      {/* Department — editable text */}
+                      <TableCell>
+                        <EditableTextCell
+                          value={emp.effectiveDepartment}
+                          onSave={(val) => saveAllocation(emp, "department", val)}
+                          placeholder="Set department"
+                        />
+                      </TableCell>
+                      {/* Class — editable text */}
+                      <TableCell>
+                        <EditableTextCell
+                          value={emp.classValue}
+                          onSave={(val) => saveAllocation(emp, "class", val)}
+                          placeholder="Set class"
+                        />
+                      </TableCell>
                       <TableCell>
                         <Badge variant={emp.payType === "Salary" ? "default" : "secondary"}>
                           {emp.payType}
@@ -361,24 +702,10 @@ export default function EmployeeRosterPage() {
                       <TableCell className="text-right font-mono font-semibold">
                         {formatCurrency(emp.totalComp)}
                       </TableCell>
-                      <TableCell className="text-right font-mono text-muted-foreground">
+                      <TableCell className="text-right font-mono text-muted-foreground whitespace-nowrap">
                         {emp.baseRate > 0
                           ? `$${emp.baseRate.toFixed(2)}${emp.payType === "Hourly" ? "/hr" : ""}`
                           : "---"}
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {emp.hireDate
-                          ? new Date(emp.hireDate).toLocaleDateString("en-US", {
-                              month: "short",
-                              day: "numeric",
-                              year: "numeric",
-                            })
-                          : "---"}
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant="outline" className="text-xs">
-                          {emp.statusType || emp.status || "Active"}
-                        </Badge>
                       </TableCell>
                     </TableRow>
                   ))}

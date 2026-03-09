@@ -3378,6 +3378,45 @@ export type Database = {
           }
         ]
       }
+      employee_allocations: {
+        Row: {
+          id: string
+          employee_id: string
+          paylocity_company_id: string
+          department: string | null
+          class: string | null
+          allocated_entity_id: string | null
+          allocated_entity_name: string | null
+          created_at: string
+          updated_at: string
+          updated_by: string | null
+        }
+        Insert: {
+          id?: string
+          employee_id: string
+          paylocity_company_id: string
+          department?: string | null
+          class?: string | null
+          allocated_entity_id?: string | null
+          allocated_entity_name?: string | null
+          created_at?: string
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Update: {
+          id?: string
+          employee_id?: string
+          paylocity_company_id?: string
+          department?: string | null
+          class?: string | null
+          allocated_entity_id?: string | null
+          allocated_entity_name?: string | null
+          created_at?: string
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never

@@ -34,6 +34,12 @@ export const COMPANY_EMPLOYING_ENTITY: Record<string, string> = {
   [COMPANY_IDS.HDR]: ENTITY_IDS.HDR,
 };
 
+/** Reverse map: employing entity ID → Paylocity company ID */
+export const EMPLOYING_ENTITY_TO_COMPANY: Record<string, string> = {
+  [ENTITY_IDS.SILVERCO]: COMPANY_IDS.SILVERCO,
+  [ENTITY_IDS.HDR]: COMPANY_IDS.HDR,
+};
+
 // ─── Cost Center Map ─────────────────────────────────────────────────
 
 export interface CostCenterEntry {
