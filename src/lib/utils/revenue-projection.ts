@@ -225,10 +225,14 @@ export function processRevenueData(
     vsOrders.map((o) => o.OrderNumber).filter(Boolean),
   );
 
-  // Invoices: try Warehouse field first, fall back to OrderNumber match
+  // Invoices: try Warehouse field first, then OrderNumber match,
+  // then invoice number prefix "V" (Versatile invoices always start with V,
+  // and multi-order invoices may have OrderNumber="MULTI" with no Warehouse)
   const vsInvoices = rawInvoices.filter((inv) => {
     if (isVersatileWarehouse(inv.Warehouse)) return true;
     if (inv.OrderNumber && vsOrderNumbers.has(inv.OrderNumber)) return true;
+    if (inv.InvoiceNumber && inv.InvoiceNumber.toUpperCase().startsWith("V"))
+      return true;
     return false;
   });
 
