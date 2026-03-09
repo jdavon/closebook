@@ -3,7 +3,7 @@
  *
  * Two Paylocity companies:
  *   - 132427 (Silverco): Employees for Silverco, ARH, Versatile Studios
- *   - 316791 (HDR): Employees for Hollywood Depot Rentals and Hollywood Site Services
+ *   - 316791 (HDR): Employees for Hollywood Depot Rentals
  *
  * Cost center codes overlap between companies (both have 100, 200, etc.)
  * so lookups are company-scoped.
@@ -112,9 +112,9 @@ export const COMPANY_COST_CENTER_MAPS: Record<string, Record<string, CostCenterE
     "06": {
       code: "06",
       department: "Bathroom Trailers",
-      operatingEntityId: ENTITY_IDS.ARH,
-      operatingEntityCode: "ARH",
-      operatingEntityName: "Avon Rental Holdings",
+      operatingEntityId: ENTITY_IDS.HDR,
+      operatingEntityCode: "HDR",
+      operatingEntityName: "Hollywood Depot Rentals",
     },
 
     // Versatile Studios
@@ -199,10 +199,10 @@ export const COMPANY_COST_CENTER_MAPS: Record<string, Record<string, CostCenterE
     },
     "1000": {
       code: "1000",
-      department: "HDR Restroom Trailers",
-      operatingEntityId: ENTITY_IDS.HSS,
-      operatingEntityCode: "HSS",
-      operatingEntityName: "Hollywood Site Services",
+      department: "Restroom Trailers",
+      operatingEntityId: ENTITY_IDS.HDR,
+      operatingEntityCode: "HDR",
+      operatingEntityName: "Hollywood Depot Rentals",
     },
   },
 
@@ -260,9 +260,9 @@ export const COMPANY_COST_CENTER_MAPS: Record<string, Record<string, CostCenterE
     "800": {
       code: "800",
       department: "Restroom Trailers",
-      operatingEntityId: ENTITY_IDS.HSS,
-      operatingEntityCode: "HSS",
-      operatingEntityName: "Hollywood Site Services",
+      operatingEntityId: ENTITY_IDS.HDR,
+      operatingEntityCode: "HDR",
+      operatingEntityName: "Hollywood Depot Rentals",
     },
   },
 };
