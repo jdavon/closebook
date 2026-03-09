@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAllCompanyClients } from "@/lib/paylocity";
 import { getOperatingEntityForCostCenter } from "@/lib/paylocity/cost-center-config";
+import type { PayStatementDetail } from "@/lib/paylocity/types";
 
 /**
  * GET /api/paylocity/ot-analysis?year=2026
@@ -8,16 +9,25 @@ import { getOperatingEntityForCostCenter } from "@/lib/paylocity/cost-center-con
  * Returns overtime analysis for all active employees across all configured
  * Paylocity companies, broken down by month with department/entity mapping.
  *
- * Data source: PayStatementSummary (WebLink API) — overtimeHours, overtimeDollars
- * per pay check, aggregated by month.
+ * Data source: PayStatementDetail (WebLink API) — individual line items
+ * with detCode = OT (overtime 1.5x), DT (double time 2x), MEAL (meal premiums).
+ *
+ * Also fetches REG (regular hours) for calculating OT % of total hours.
  */
 
-interface MonthlyOT {
+// detCodes to track (earning line items from pay statement details)
+const PREMIUM_CODES = new Set(["OT", "DT", "MEAL"]);
+const REG_CODE = "REG";
+
+interface MonthlyHours {
   otHours: number;
   otDollars: number;
+  dtHours: number;
+  dtDollars: number;
+  mealHours: number;
+  mealDollars: number;
   regHours: number;
   regDollars: number;
-  totalHours: number;
 }
 
 interface OTEmployee {
@@ -30,14 +40,24 @@ interface OTEmployee {
   operatingEntityName: string;
   payType: string;
   costCenterCode: string;
-  monthlyOT: Record<string, MonthlyOT>;
-  totalOTHours: number;
-  totalOTDollars: number;
-  totalRegHours: number;
+  monthlyHours: Record<string, MonthlyHours>;
+  totals: {
+    otHours: number;
+    otDollars: number;
+    dtHours: number;
+    dtDollars: number;
+    mealHours: number;
+    mealDollars: number;
+    regHours: number;
+    regDollars: number;
+    premiumHours: number; // OT + DT + MEAL combined
+    premiumDollars: number;
+  };
 }
 
 // In-memory cache (5 min TTL)
-let cachedData: { data: unknown; year: number; fetchedAt: number } | null = null;
+let cachedData: { data: unknown; year: number; fetchedAt: number } | null =
+  null;
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
 export async function GET(request: NextRequest) {
@@ -73,27 +93,31 @@ export async function GET(request: NextRequest) {
 
     const otEmployees: OTEmployee[] = [];
 
-    for (const { companyId, client, employees: rawEmployees } of companyResults) {
-      // Fetch pay statement summaries in batches of 5
+    for (const {
+      companyId,
+      client,
+      employees: rawEmployees,
+    } of companyResults) {
+      // Fetch pay statement details in batches of 5
       const batchSize = 5;
 
       for (let i = 0; i < rawEmployees.length; i += batchSize) {
         const batch = rawEmployees.slice(i, i + batchSize);
-        const summaryResults = await Promise.all(
+        const detailResults = await Promise.all(
           batch.map(async (emp) => {
             try {
-              const summaries = await client.getPayStatementSummary(
+              const details = await client.getPayStatementDetails(
                 emp.id,
                 year
               );
-              return { emp, summaries };
+              return { emp, details };
             } catch {
-              return { emp, summaries: [] };
+              return { emp, details: [] as PayStatementDetail[] };
             }
           })
         );
 
-        for (const { emp, summaries } of summaryResults) {
+        for (const { emp, details } of detailResults) {
           // Skip employees with no name
           const firstName = emp.info?.firstName ?? "";
           const lastName = emp.info?.lastName ?? emp.lastName ?? "";
@@ -107,41 +131,89 @@ export async function GET(request: NextRequest) {
             companyId
           );
 
-          // Aggregate OT by month (YYYY-MM)
-          const monthlyOT: Record<string, MonthlyOT> = {};
-          let totalOTHours = 0;
-          let totalOTDollars = 0;
-          let totalRegHours = 0;
+          // Aggregate by month from detail line items
+          const monthlyHours: Record<string, MonthlyHours> = {};
+          const totals = {
+            otHours: 0,
+            otDollars: 0,
+            dtHours: 0,
+            dtDollars: 0,
+            mealHours: 0,
+            mealDollars: 0,
+            regHours: 0,
+            regDollars: 0,
+            premiumHours: 0,
+            premiumDollars: 0,
+          };
 
-          for (const ps of summaries) {
-            const month = ps.checkDate.slice(0, 7); // "YYYY-MM"
-            if (!monthlyOT[month]) {
-              monthlyOT[month] = {
+          for (const d of details) {
+            const code = d.detCode?.toUpperCase();
+            if (!code) continue;
+
+            // Only process REG and premium codes
+            if (!PREMIUM_CODES.has(code) && code !== REG_CODE) continue;
+
+            const month = d.checkDate?.slice(0, 7); // "YYYY-MM"
+            if (!month) continue;
+
+            if (!monthlyHours[month]) {
+              monthlyHours[month] = {
                 otHours: 0,
                 otDollars: 0,
+                dtHours: 0,
+                dtDollars: 0,
+                mealHours: 0,
+                mealDollars: 0,
                 regHours: 0,
                 regDollars: 0,
-                totalHours: 0,
               };
             }
-            const ot = ps.overtimeHours || 0;
-            const otD = ps.overtimeDollars || 0;
-            const reg = ps.regularHours || 0;
-            const regD = ps.regularDollars || 0;
 
-            monthlyOT[month].otHours += ot;
-            monthlyOT[month].otDollars += otD;
-            monthlyOT[month].regHours += reg;
-            monthlyOT[month].regDollars += regD;
-            monthlyOT[month].totalHours += (ps.hours || 0);
+            const hrs = d.hours || 0;
+            const amt = d.amount || 0;
+            const m = monthlyHours[month];
 
-            totalOTHours += ot;
-            totalOTDollars += otD;
-            totalRegHours += reg;
+            switch (code) {
+              case "OT":
+                m.otHours += hrs;
+                m.otDollars += amt;
+                totals.otHours += hrs;
+                totals.otDollars += amt;
+                totals.premiumHours += hrs;
+                totals.premiumDollars += amt;
+                break;
+              case "DT":
+                m.dtHours += hrs;
+                m.dtDollars += amt;
+                totals.dtHours += hrs;
+                totals.dtDollars += amt;
+                totals.premiumHours += hrs;
+                totals.premiumDollars += amt;
+                break;
+              case "MEAL":
+                m.mealHours += hrs;
+                m.mealDollars += amt;
+                totals.mealHours += hrs;
+                totals.mealDollars += amt;
+                totals.premiumHours += hrs;
+                totals.premiumDollars += amt;
+                break;
+              case "REG":
+                m.regHours += hrs;
+                m.regDollars += amt;
+                totals.regHours += hrs;
+                totals.regDollars += amt;
+                break;
+            }
           }
 
-          // Only include employees who have any hours at all
-          if (summaries.length > 0) {
+          // Round totals
+          for (const key of Object.keys(totals) as (keyof typeof totals)[]) {
+            totals[key] = round2(totals[key]);
+          }
+
+          // Only include employees who have any detail data at all
+          if (details.length > 0) {
             otEmployees.push({
               id: emp.id,
               companyId,
@@ -152,53 +224,43 @@ export async function GET(request: NextRequest) {
               operatingEntityName: cc.operatingEntityName,
               payType: emp.currentPayRate?.payType ?? "Unknown",
               costCenterCode: emp.position?.costCenter1 ?? "UNKNOWN",
-              monthlyOT,
-              totalOTHours: round2(totalOTHours),
-              totalOTDollars: round2(totalOTDollars),
-              totalRegHours: round2(totalRegHours),
+              monthlyHours,
+              totals,
             });
           }
         }
       }
     }
 
-    // Collect all months that appear across any employee
+    // Collect all months
     const monthSet = new Set<string>();
     for (const emp of otEmployees) {
-      for (const m of Object.keys(emp.monthlyOT)) {
+      for (const m of Object.keys(emp.monthlyHours)) {
         monthSet.add(m);
       }
     }
     const months = [...monthSet].sort();
 
     // Compute org-level KPIs
-    const totalOTHours = round2(
-      otEmployees.reduce((s, e) => s + e.totalOTHours, 0)
-    );
-    const totalOTDollars = round2(
-      otEmployees.reduce((s, e) => s + e.totalOTDollars, 0)
-    );
-    const totalRegHours = round2(
-      otEmployees.reduce((s, e) => s + e.totalRegHours, 0)
-    );
-    const employeesWithOT = otEmployees.filter(
-      (e) => e.totalOTHours > 0
-    ).length;
-    const avgOTPerEmployee =
-      employeesWithOT > 0 ? round2(totalOTHours / employeesWithOT) : 0;
+    const kpis = {
+      totalOTHours: round2(otEmployees.reduce((s, e) => s + e.totals.otHours, 0)),
+      totalOTDollars: round2(otEmployees.reduce((s, e) => s + e.totals.otDollars, 0)),
+      totalDTHours: round2(otEmployees.reduce((s, e) => s + e.totals.dtHours, 0)),
+      totalDTDollars: round2(otEmployees.reduce((s, e) => s + e.totals.dtDollars, 0)),
+      totalMealHours: round2(otEmployees.reduce((s, e) => s + e.totals.mealHours, 0)),
+      totalMealDollars: round2(otEmployees.reduce((s, e) => s + e.totals.mealDollars, 0)),
+      totalPremiumHours: round2(otEmployees.reduce((s, e) => s + e.totals.premiumHours, 0)),
+      totalPremiumDollars: round2(otEmployees.reduce((s, e) => s + e.totals.premiumDollars, 0)),
+      totalRegHours: round2(otEmployees.reduce((s, e) => s + e.totals.regHours, 0)),
+      employeesWithPremium: otEmployees.filter((e) => e.totals.premiumHours > 0).length,
+      totalEmployees: otEmployees.length,
+    };
 
     const responseData = {
       year,
       employees: otEmployees,
       months,
-      kpis: {
-        totalOTHours,
-        totalOTDollars,
-        totalRegHours,
-        employeesWithOT,
-        avgOTPerEmployee,
-        totalEmployees: otEmployees.length,
-      },
+      kpis,
     };
 
     // Update cache

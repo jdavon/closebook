@@ -40,12 +40,15 @@ import { formatCurrency, getCurrentPeriod } from "@/lib/utils/dates";
 
 // --- Types ---
 
-interface MonthlyOT {
+interface MonthlyHours {
   otHours: number;
   otDollars: number;
+  dtHours: number;
+  dtDollars: number;
+  mealHours: number;
+  mealDollars: number;
   regHours: number;
   regDollars: number;
-  totalHours: number;
 }
 
 interface OTEmployee {
@@ -56,21 +59,30 @@ interface OTEmployee {
   operatingEntityCode: string;
   operatingEntityName: string;
   payType: string;
-  monthlyOT: Record<string, MonthlyOT>;
-  totalOTHours: number;
-  totalOTDollars: number;
-  totalRegHours: number;
+  monthlyHours: Record<string, MonthlyHours>;
+  totals: {
+    otHours: number;
+    otDollars: number;
+    dtHours: number;
+    dtDollars: number;
+    mealHours: number;
+    mealDollars: number;
+    regHours: number;
+    regDollars: number;
+    premiumHours: number;
+    premiumDollars: number;
+  };
 }
 
 // --- Helpers ---
 
-function formatHours(h: number): string {
+function fmtHrs(h: number): string {
   return h.toFixed(1);
 }
 
-function otPercent(otHours: number, totalHours: number): string {
-  if (totalHours <= 0) return "0%";
-  return `${((otHours / totalHours) * 100).toFixed(1)}%`;
+function pct(num: number, den: number): string {
+  if (den <= 0) return "0%";
+  return `${((num / den) * 100).toFixed(1)}%`;
 }
 
 function monthLabel(yyyymm: string): string {
@@ -79,30 +91,49 @@ function monthLabel(yyyymm: string): string {
   return date.toLocaleString("en-US", { month: "long", year: "numeric" });
 }
 
+// Summing helpers for aggregating MonthlyHours across employees
+function emptyHours(): MonthlyHours {
+  return { otHours: 0, otDollars: 0, dtHours: 0, dtDollars: 0, mealHours: 0, mealDollars: 0, regHours: 0, regDollars: 0 };
+}
+function addHours(a: MonthlyHours, b: MonthlyHours): MonthlyHours {
+  return {
+    otHours: a.otHours + b.otHours,
+    otDollars: a.otDollars + b.otDollars,
+    dtHours: a.dtHours + b.dtHours,
+    dtDollars: a.dtDollars + b.dtDollars,
+    mealHours: a.mealHours + b.mealHours,
+    mealDollars: a.mealDollars + b.mealDollars,
+    regHours: a.regHours + b.regHours,
+    regDollars: a.regDollars + b.regDollars,
+  };
+}
+function premiumHours(h: MonthlyHours): number {
+  return h.otHours + h.dtHours + h.mealHours;
+}
+function premiumDollars(h: MonthlyHours): number {
+  return h.otDollars + h.dtDollars + h.mealDollars;
+}
+function totalHours(h: MonthlyHours): number {
+  return h.regHours + h.otHours + h.dtHours + h.mealHours;
+}
+
 // Aggregated types for the hierarchy
+interface EmpRow {
+  id: string;
+  displayName: string;
+  payType: string;
+  hours: MonthlyHours;
+}
+
 interface DeptAgg {
   department: string;
-  otHours: number;
-  otDollars: number;
-  regHours: number;
-  totalHours: number;
-  employees: {
-    id: string;
-    displayName: string;
-    payType: string;
-    otHours: number;
-    otDollars: number;
-    regHours: number;
-    totalHours: number;
-  }[];
+  hours: MonthlyHours;
+  employees: EmpRow[];
 }
 
 interface MonthAgg {
   month: string;
-  otHours: number;
-  otDollars: number;
-  regHours: number;
-  totalHours: number;
+  hours: MonthlyHours;
   departments: DeptAgg[];
 }
 
@@ -149,30 +180,41 @@ export default function OvertimeAnalysisPage() {
     [allEmployees, entityId]
   );
 
-  // Entity-level KPIs
-  const totalOTHours = entityEmployees.reduce(
-    (s, e) => s + e.totalOTHours,
-    0
-  );
-  const totalOTDollars = entityEmployees.reduce(
-    (s, e) => s + e.totalOTDollars,
-    0
-  );
-  const totalRegHours = entityEmployees.reduce(
-    (s, e) => s + e.totalRegHours,
-    0
-  );
-  const totalHours = totalOTHours + totalRegHours;
-  const employeesWithOT = entityEmployees.filter(
-    (e) => e.totalOTHours > 0
+  // Entity-level totals
+  const entityTotals = useMemo(() => {
+    const t = {
+      otHours: 0, otDollars: 0,
+      dtHours: 0, dtDollars: 0,
+      mealHours: 0, mealDollars: 0,
+      regHours: 0, regDollars: 0,
+      premiumHours: 0, premiumDollars: 0,
+    };
+    for (const e of entityEmployees) {
+      t.otHours += e.totals.otHours;
+      t.otDollars += e.totals.otDollars;
+      t.dtHours += e.totals.dtHours;
+      t.dtDollars += e.totals.dtDollars;
+      t.mealHours += e.totals.mealHours;
+      t.mealDollars += e.totals.mealDollars;
+      t.regHours += e.totals.regHours;
+      t.regDollars += e.totals.regDollars;
+      t.premiumHours += e.totals.premiumHours;
+      t.premiumDollars += e.totals.premiumDollars;
+    }
+    return t;
+  }, [entityEmployees]);
+
+  const employeesWithPremium = entityEmployees.filter(
+    (e) => e.totals.premiumHours > 0
   ).length;
+  const entityTotalHrs = entityTotals.regHours + entityTotals.premiumHours;
 
   // Build month → department → employee hierarchy
   const monthlyData: MonthAgg[] = useMemo(() => {
     // Collect all months
     const monthSet = new Set<string>();
     for (const emp of entityEmployees) {
-      for (const m of Object.keys(emp.monthlyOT)) {
+      for (const m of Object.keys(emp.monthlyHours)) {
         monthSet.add(m);
       }
     }
@@ -180,60 +222,45 @@ export default function OvertimeAnalysisPage() {
     const months = [...monthSet].sort().reverse(); // newest first
 
     return months.map((month) => {
-      // Aggregate by department for this month
       const deptMap: Record<string, DeptAgg> = {};
 
       for (const emp of entityEmployees) {
-        const mData = emp.monthlyOT[month];
+        const mData = emp.monthlyHours[month];
         if (!mData) continue;
 
         const dept = emp.department || "Unassigned";
         if (!deptMap[dept]) {
           deptMap[dept] = {
             department: dept,
-            otHours: 0,
-            otDollars: 0,
-            regHours: 0,
-            totalHours: 0,
+            hours: emptyHours(),
             employees: [],
           };
         }
-        deptMap[dept].otHours += mData.otHours;
-        deptMap[dept].otDollars += mData.otDollars;
-        deptMap[dept].regHours += mData.regHours;
-        deptMap[dept].totalHours += mData.totalHours;
+        deptMap[dept].hours = addHours(deptMap[dept].hours, mData);
         deptMap[dept].employees.push({
           id: emp.id,
           displayName: emp.displayName,
           payType: emp.payType,
-          otHours: mData.otHours,
-          otDollars: mData.otDollars,
-          regHours: mData.regHours,
-          totalHours: mData.totalHours,
+          hours: mData,
         });
       }
 
-      // Sort departments by OT hours desc, employees within each dept by OT hours desc
+      // Sort departments by premium hours desc, employees within each by premium hours desc
       const departments = Object.values(deptMap)
-        .sort((a, b) => b.otHours - a.otHours)
+        .sort((a, b) => premiumHours(b.hours) - premiumHours(a.hours))
         .map((d) => ({
           ...d,
-          employees: d.employees.sort((a, b) => b.otHours - a.otHours),
+          employees: d.employees.sort(
+            (a, b) => premiumHours(b.hours) - premiumHours(a.hours)
+          ),
         }));
 
-      const monthOT = departments.reduce((s, d) => s + d.otHours, 0);
-      const monthOTD = departments.reduce((s, d) => s + d.otDollars, 0);
-      const monthReg = departments.reduce((s, d) => s + d.regHours, 0);
-      const monthTotal = departments.reduce((s, d) => s + d.totalHours, 0);
+      const monthHours = departments.reduce(
+        (s, d) => addHours(s, d.hours),
+        emptyHours()
+      );
 
-      return {
-        month,
-        otHours: monthOT,
-        otDollars: monthOTD,
-        regHours: monthReg,
-        totalHours: monthTotal,
-        departments,
-      };
+      return { month, hours: monthHours, departments };
     });
   }, [entityEmployees]);
 
@@ -258,6 +285,36 @@ export default function OvertimeAnalysisPage() {
 
   const years = Array.from({ length: 5 }, (_, i) => current.year - 2 + i);
 
+  // Render a row of hours columns (OT / DT / Meal / Premium Total / Reg / Total / %)
+  function HoursCells({
+    h,
+    bold = false,
+    muted = false,
+  }: {
+    h: MonthlyHours;
+    bold?: boolean;
+    muted?: boolean;
+  }) {
+    const cls = `text-right tabular-nums ${bold ? "font-semibold" : ""} ${muted ? "text-muted-foreground" : ""}`;
+    const ph = premiumHours(h);
+    const pd = premiumDollars(h);
+    const th = totalHours(h);
+    return (
+      <>
+        <TableCell className={cls}>{fmtHrs(h.otHours)}</TableCell>
+        <TableCell className={cls}>{fmtHrs(h.dtHours)}</TableCell>
+        <TableCell className={cls}>{fmtHrs(h.mealHours)}</TableCell>
+        <TableCell className={`${cls} font-semibold`}>
+          {formatCurrency(pd)}
+        </TableCell>
+        <TableCell className={`${cls} text-muted-foreground`}>
+          {fmtHrs(h.regHours)}
+        </TableCell>
+        <TableCell className={cls}>{pct(ph, th)}</TableCell>
+      </>
+    );
+  }
+
   // --- Render ---
 
   return (
@@ -277,7 +334,8 @@ export default function OvertimeAnalysisPage() {
             Overtime Analysis
           </h1>
           <p className="text-muted-foreground">
-            OT hours broken down by month, department, and employee
+            OT, double time, and meal premiums — by month, department, and
+            employee
           </p>
         </div>
       </div>
@@ -300,7 +358,7 @@ export default function OvertimeAnalysisPage() {
           </SelectContent>
         </Select>
         <span className="text-sm text-muted-foreground">
-          Showing overtime data for {year}
+          Showing premium pay data for {year}
         </span>
       </div>
 
@@ -312,7 +370,7 @@ export default function OvertimeAnalysisPage() {
               Loading overtime data from Paylocity...
             </p>
             <p className="text-xs text-muted-foreground mt-1">
-              Fetching pay statements for all employees
+              Fetching pay statement details for all employees
             </p>
           </div>
         </div>
@@ -326,20 +384,35 @@ export default function OvertimeAnalysisPage() {
       ) : (
         <>
           {/* KPI Cards */}
-          <div className="grid grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <Card>
+              <CardContent className="pt-6">
+                <div className="flex items-center gap-2">
+                  <Clock className="h-4 w-4 text-muted-foreground" />
+                  <p className="text-sm text-muted-foreground">OT Hours</p>
+                </div>
+                <p className="text-2xl font-semibold tabular-nums mt-1">
+                  {fmtHrs(entityTotals.otHours)}
+                </p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  1.5x &mdash; {formatCurrency(entityTotals.otDollars)}
+                </p>
+              </CardContent>
+            </Card>
             <Card>
               <CardContent className="pt-6">
                 <div className="flex items-center gap-2">
                   <Clock className="h-4 w-4 text-muted-foreground" />
                   <p className="text-sm text-muted-foreground">
-                    Total OT Hours
+                    DT + Meal Hours
                   </p>
                 </div>
                 <p className="text-2xl font-semibold tabular-nums mt-1">
-                  {formatHours(totalOTHours)}
+                  {fmtHrs(entityTotals.dtHours + entityTotals.mealHours)}
                 </p>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  YTD {year}
+                  DT: {fmtHrs(entityTotals.dtHours)} hrs ({formatCurrency(entityTotals.dtDollars)})
+                  &nbsp;|&nbsp; Meal: {fmtHrs(entityTotals.mealHours)} hrs ({formatCurrency(entityTotals.mealDollars)})
                 </p>
               </CardContent>
             </Card>
@@ -347,30 +420,15 @@ export default function OvertimeAnalysisPage() {
               <CardContent className="pt-6">
                 <div className="flex items-center gap-2">
                   <DollarSign className="h-4 w-4 text-muted-foreground" />
-                  <p className="text-sm text-muted-foreground">Total OT Cost</p>
-                </div>
-                <p className="text-2xl font-semibold tabular-nums mt-1">
-                  {formatCurrency(totalOTDollars)}
-                </p>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  YTD {year}
-                </p>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardContent className="pt-6">
-                <div className="flex items-center gap-2">
-                  <Users className="h-4 w-4 text-muted-foreground" />
                   <p className="text-sm text-muted-foreground">
-                    Employees w/ OT
+                    Total Premium Cost
                   </p>
                 </div>
                 <p className="text-2xl font-semibold tabular-nums mt-1">
-                  {employeesWithOT}
-                  <span className="text-sm font-normal text-muted-foreground">
-                    {" "}
-                    / {entityEmployees.length}
-                  </span>
+                  {formatCurrency(entityTotals.premiumDollars)}
+                </p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {fmtHrs(entityTotals.premiumHours)} premium hours YTD
                 </p>
               </CardContent>
             </Card>
@@ -378,14 +436,15 @@ export default function OvertimeAnalysisPage() {
               <CardContent className="pt-6">
                 <div className="flex items-center gap-2">
                   <TrendingUp className="h-4 w-4 text-muted-foreground" />
-                  <p className="text-sm text-muted-foreground">OT % of Hours</p>
+                  <p className="text-sm text-muted-foreground">
+                    Premium % of Hours
+                  </p>
                 </div>
                 <p className="text-2xl font-semibold tabular-nums mt-1">
-                  {otPercent(totalOTHours, totalHours)}
+                  {pct(entityTotals.premiumHours, entityTotalHrs)}
                 </p>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  {formatHours(totalOTHours)} of{" "}
-                  {formatHours(totalHours)} total hours
+                  {employeesWithPremium} of {entityEmployees.length} employees
                 </p>
               </CardContent>
             </Card>
@@ -394,10 +453,11 @@ export default function OvertimeAnalysisPage() {
           {/* Monthly Breakdown Table */}
           <Card>
             <CardHeader>
-              <CardTitle>Monthly OT Breakdown</CardTitle>
+              <CardTitle>Monthly Breakdown</CardTitle>
               <CardDescription>
                 Click a month to expand by department, then click a department to
-                see individual employees. Sorted by OT hours (largest first).
+                see individual employees. Sorted by premium hours (largest
+                first).
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -414,16 +474,27 @@ export default function OvertimeAnalysisPage() {
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead className="w-[300px]">
+                        <TableHead className="w-[280px]">
                           Month / Department / Employee
                         </TableHead>
-                        <TableHead className="text-right">OT Hours</TableHead>
-                        <TableHead className="text-right">OT Cost</TableHead>
-                        <TableHead className="text-right">Reg Hours</TableHead>
-                        <TableHead className="text-right">
-                          Total Hours
+                        <TableHead className="text-right" title="Overtime hours (1.5x rate)">
+                          OT Hrs
                         </TableHead>
-                        <TableHead className="text-right">OT %</TableHead>
+                        <TableHead className="text-right" title="Double time hours (2x rate)">
+                          DT Hrs
+                        </TableHead>
+                        <TableHead className="text-right" title="Meal premium hours">
+                          Meal Hrs
+                        </TableHead>
+                        <TableHead className="text-right" title="Total premium pay cost (OT + DT + Meal)">
+                          Premium $
+                        </TableHead>
+                        <TableHead className="text-right" title="Regular hours for comparison">
+                          Reg Hrs
+                        </TableHead>
+                        <TableHead className="text-right" title="Premium hours as % of total hours">
+                          Prem %
+                        </TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -447,24 +518,10 @@ export default function OvertimeAnalysisPage() {
                                   <span>{monthLabel(m.month)}</span>
                                 </div>
                               </TableCell>
-                              <TableCell className="text-right tabular-nums">
-                                {formatHours(m.otHours)}
-                              </TableCell>
-                              <TableCell className="text-right tabular-nums">
-                                {formatCurrency(m.otDollars)}
-                              </TableCell>
-                              <TableCell className="text-right tabular-nums text-muted-foreground">
-                                {formatHours(m.regHours)}
-                              </TableCell>
-                              <TableCell className="text-right tabular-nums text-muted-foreground">
-                                {formatHours(m.totalHours)}
-                              </TableCell>
-                              <TableCell className="text-right tabular-nums">
-                                {otPercent(m.otHours, m.totalHours)}
-                              </TableCell>
+                              <HoursCells h={m.hours} bold />
                             </TableRow>
 
-                            {/* Department Rows (expanded) */}
+                            {/* Department Rows */}
                             {monthExpanded &&
                               m.departments.map((dept) => {
                                 const deptKey = `${m.month}::${dept.department}`;
@@ -492,27 +549,10 @@ export default function OvertimeAnalysisPage() {
                                           </span>
                                         </div>
                                       </TableCell>
-                                      <TableCell className="text-right tabular-nums font-medium">
-                                        {formatHours(dept.otHours)}
-                                      </TableCell>
-                                      <TableCell className="text-right tabular-nums font-medium">
-                                        {formatCurrency(dept.otDollars)}
-                                      </TableCell>
-                                      <TableCell className="text-right tabular-nums text-muted-foreground">
-                                        {formatHours(dept.regHours)}
-                                      </TableCell>
-                                      <TableCell className="text-right tabular-nums text-muted-foreground">
-                                        {formatHours(dept.totalHours)}
-                                      </TableCell>
-                                      <TableCell className="text-right tabular-nums">
-                                        {otPercent(
-                                          dept.otHours,
-                                          dept.totalHours
-                                        )}
-                                      </TableCell>
+                                      <HoursCells h={dept.hours} />
                                     </TableRow>
 
-                                    {/* Employee Rows (expanded) */}
+                                    {/* Employee Rows */}
                                     {deptExpanded &&
                                       dept.employees.map((emp) => (
                                         <TableRow
@@ -529,24 +569,7 @@ export default function OvertimeAnalysisPage() {
                                               </span>
                                             </div>
                                           </TableCell>
-                                          <TableCell className="text-right tabular-nums">
-                                            {formatHours(emp.otHours)}
-                                          </TableCell>
-                                          <TableCell className="text-right tabular-nums">
-                                            {formatCurrency(emp.otDollars)}
-                                          </TableCell>
-                                          <TableCell className="text-right tabular-nums text-muted-foreground">
-                                            {formatHours(emp.regHours)}
-                                          </TableCell>
-                                          <TableCell className="text-right tabular-nums text-muted-foreground">
-                                            {formatHours(emp.totalHours)}
-                                          </TableCell>
-                                          <TableCell className="text-right tabular-nums">
-                                            {otPercent(
-                                              emp.otHours,
-                                              emp.totalHours
-                                            )}
-                                          </TableCell>
+                                          <HoursCells h={emp.hours} muted />
                                         </TableRow>
                                       ))}
                                   </>
@@ -559,21 +582,19 @@ export default function OvertimeAnalysisPage() {
                       {/* Grand Total Row */}
                       <TableRow className="font-semibold border-t-2">
                         <TableCell>YTD Total</TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {formatHours(totalOTHours)}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {formatCurrency(totalOTDollars)}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums text-muted-foreground">
-                          {formatHours(totalRegHours)}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums text-muted-foreground">
-                          {formatHours(totalHours)}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {otPercent(totalOTHours, totalHours)}
-                        </TableCell>
+                        <HoursCells
+                          h={{
+                            otHours: entityTotals.otHours,
+                            otDollars: entityTotals.otDollars,
+                            dtHours: entityTotals.dtHours,
+                            dtDollars: entityTotals.dtDollars,
+                            mealHours: entityTotals.mealHours,
+                            mealDollars: entityTotals.mealDollars,
+                            regHours: entityTotals.regHours,
+                            regDollars: entityTotals.regDollars,
+                          }}
+                          bold
+                        />
                       </TableRow>
                     </TableBody>
                   </Table>
