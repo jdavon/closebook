@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAllCompanyClients } from "@/lib/paylocity";
 import { getOperatingEntityForCostCenter } from "@/lib/paylocity/cost-center-config";
+import { createAdminClient } from "@/lib/supabase/admin";
 import type {
   PayStatementSummary,
   PayStatementDetail,
@@ -10,17 +11,19 @@ import type {
  * GET /api/paylocity/ot-analysis?year=2026
  *
  * Returns overtime analysis for all active employees across all configured
- * Paylocity companies, broken down by month with department/entity mapping.
+ * Paylocity companies, broken down by month.
  *
  * HYBRID DATA SOURCES:
  *   - PayStatementSummary (WebLink API) — trusted aggregate `overtimeHours`
  *     and `overtimeDollars` per pay check (used for OT + REG totals).
  *   - PayStatementDetail (WebLink API) — individual line items filtered for
  *     detCode = DT (double time 2x) and MEAL (meal premiums) only.
+ *   - employee_allocations (Supabase) — user-maintained overrides for
+ *     department, class, and company (entity) assignment.
  *
- * The summary's `overtimeHours` is Paylocity's authoritative OT aggregate
- * per check. Using it avoids undercounting that occurs when relying solely
- * on detail-level detCode=OT line items.
+ * Entity/department/class resolution priority:
+ *   1. employee_allocations override (if exists)
+ *   2. Paylocity cost center config fallback
  */
 
 interface MonthlyHours {
@@ -39,6 +42,7 @@ interface OTEmployee {
   companyId: string;
   displayName: string;
   department: string;
+  classValue: string;
   operatingEntityId: string;
   operatingEntityCode: string;
   operatingEntityName: string;
@@ -54,9 +58,18 @@ interface OTEmployee {
     mealDollars: number;
     regHours: number;
     regDollars: number;
-    premiumHours: number; // OT + DT + MEAL combined
+    premiumHours: number;
     premiumDollars: number;
   };
+}
+
+interface AllocationRow {
+  employee_id: string;
+  paylocity_company_id: string;
+  department: string | null;
+  class: string | null;
+  allocated_entity_id: string | null;
+  allocated_entity_name: string | null;
 }
 
 // detCodes to extract from detail line items (supplemental to summary)
@@ -84,6 +97,25 @@ export async function GET(request: NextRequest) {
           "Cache-Control": "public, max-age=300, stale-while-revalidate=60",
         },
       });
+    }
+
+    // Fetch allocation overrides from Supabase
+    const allocationMap = new Map<string, AllocationRow>();
+    try {
+      const supabase = createAdminClient();
+      const { data } = await supabase
+        .from("employee_allocations")
+        .select("*");
+      if (data) {
+        for (const row of data as AllocationRow[]) {
+          allocationMap.set(
+            `${row.employee_id}:${row.paylocity_company_id}`,
+            row
+          );
+        }
+      }
+    } catch {
+      // Allocations unavailable — fall back to cost center config only
     }
 
     // Fetch all active employees from all companies
@@ -142,10 +174,30 @@ export async function GET(request: NextRequest) {
             (`${firstName} ${lastName}`.trim() || `Employee ${emp.id}`);
           if (!displayName) continue;
 
+          // Cost center config fallback
           const cc = getOperatingEntityForCostCenter(
             emp.position?.costCenter1,
             companyId
           );
+
+          // Apply allocation overrides (priority over cost center config)
+          const alloc = allocationMap.get(`${emp.id}:${companyId}`);
+          const effectiveDepartment = alloc?.department || cc.department;
+          const classValue = alloc?.class || "";
+          const effectiveEntityId =
+            alloc?.allocated_entity_id || cc.operatingEntityId;
+          const effectiveEntityName =
+            alloc?.allocated_entity_name || cc.operatingEntityName;
+          // Derive entity code from name for backward compat
+          const effectiveEntityCode = effectiveEntityName.includes("Silverco")
+            ? "AVON"
+            : effectiveEntityName.includes("Avon Rental")
+              ? "ARH"
+              : effectiveEntityName.includes("Versatile")
+                ? "VS"
+                : effectiveEntityName.includes("Hollywood Depot")
+                  ? "HDR"
+                  : cc.operatingEntityCode;
 
           // ── Aggregate from SUMMARY (OT + REG) ──
           const monthlyHours: Record<string, MonthlyHours> = {};
@@ -238,8 +290,10 @@ export async function GET(request: NextRequest) {
           }
 
           // Premium = OT + DT + MEAL combined
-          totals.premiumHours = totals.otHours + totals.dtHours + totals.mealHours;
-          totals.premiumDollars = totals.otDollars + totals.dtDollars + totals.mealDollars;
+          totals.premiumHours =
+            totals.otHours + totals.dtHours + totals.mealHours;
+          totals.premiumDollars =
+            totals.otDollars + totals.dtDollars + totals.mealDollars;
 
           // Round totals
           for (const key of Object.keys(totals) as (keyof typeof totals)[]) {
@@ -251,10 +305,11 @@ export async function GET(request: NextRequest) {
             id: emp.id,
             companyId,
             displayName,
-            department: cc.department,
-            operatingEntityId: cc.operatingEntityId,
-            operatingEntityCode: cc.operatingEntityCode,
-            operatingEntityName: cc.operatingEntityName,
+            department: effectiveDepartment,
+            classValue,
+            operatingEntityId: effectiveEntityId,
+            operatingEntityCode: effectiveEntityCode,
+            operatingEntityName: effectiveEntityName,
             payType: emp.currentPayRate?.payType ?? "Unknown",
             costCenterCode: emp.position?.costCenter1 ?? "UNKNOWN",
             monthlyHours,
@@ -275,16 +330,36 @@ export async function GET(request: NextRequest) {
 
     // Compute org-level KPIs
     const kpis = {
-      totalOTHours: round2(otEmployees.reduce((s, e) => s + e.totals.otHours, 0)),
-      totalOTDollars: round2(otEmployees.reduce((s, e) => s + e.totals.otDollars, 0)),
-      totalDTHours: round2(otEmployees.reduce((s, e) => s + e.totals.dtHours, 0)),
-      totalDTDollars: round2(otEmployees.reduce((s, e) => s + e.totals.dtDollars, 0)),
-      totalMealHours: round2(otEmployees.reduce((s, e) => s + e.totals.mealHours, 0)),
-      totalMealDollars: round2(otEmployees.reduce((s, e) => s + e.totals.mealDollars, 0)),
-      totalPremiumHours: round2(otEmployees.reduce((s, e) => s + e.totals.premiumHours, 0)),
-      totalPremiumDollars: round2(otEmployees.reduce((s, e) => s + e.totals.premiumDollars, 0)),
-      totalRegHours: round2(otEmployees.reduce((s, e) => s + e.totals.regHours, 0)),
-      employeesWithPremium: otEmployees.filter((e) => e.totals.premiumHours > 0).length,
+      totalOTHours: round2(
+        otEmployees.reduce((s, e) => s + e.totals.otHours, 0)
+      ),
+      totalOTDollars: round2(
+        otEmployees.reduce((s, e) => s + e.totals.otDollars, 0)
+      ),
+      totalDTHours: round2(
+        otEmployees.reduce((s, e) => s + e.totals.dtHours, 0)
+      ),
+      totalDTDollars: round2(
+        otEmployees.reduce((s, e) => s + e.totals.dtDollars, 0)
+      ),
+      totalMealHours: round2(
+        otEmployees.reduce((s, e) => s + e.totals.mealHours, 0)
+      ),
+      totalMealDollars: round2(
+        otEmployees.reduce((s, e) => s + e.totals.mealDollars, 0)
+      ),
+      totalPremiumHours: round2(
+        otEmployees.reduce((s, e) => s + e.totals.premiumHours, 0)
+      ),
+      totalPremiumDollars: round2(
+        otEmployees.reduce((s, e) => s + e.totals.premiumDollars, 0)
+      ),
+      totalRegHours: round2(
+        otEmployees.reduce((s, e) => s + e.totals.regHours, 0)
+      ),
+      employeesWithPremium: otEmployees.filter(
+        (e) => e.totals.premiumHours > 0
+      ).length,
       totalEmployees: otEmployees.length,
     };
 
