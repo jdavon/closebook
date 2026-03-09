@@ -53,6 +53,7 @@ interface MonthlyHours {
 
 interface OTEmployee {
   id: string;
+  companyId: string;
   displayName: string;
   department: string;
   classValue: string;
@@ -73,6 +74,15 @@ interface OTEmployee {
     premiumHours: number;
     premiumDollars: number;
   };
+}
+
+interface AllocationOverride {
+  employee_id: string;
+  paylocity_company_id: string;
+  department: string | null;
+  class: string | null;
+  allocated_entity_id: string | null;
+  allocated_entity_name: string | null;
 }
 
 // --- Helpers ---
@@ -146,7 +156,8 @@ export default function OvertimeAnalysisPage() {
   const current = getCurrentPeriod();
 
   const [year, setYear] = useState(current.year);
-  const [allEmployees, setAllEmployees] = useState<OTEmployee[]>([]);
+  const [rawEmployees, setRawEmployees] = useState<OTEmployee[]>([]);
+  const [allocations, setAllocations] = useState<AllocationOverride[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -154,16 +165,24 @@ export default function OvertimeAnalysisPage() {
   const [expandedMonths, setExpandedMonths] = useState<Set<string>>(new Set());
   const [expandedDepts, setExpandedDepts] = useState<Set<string>>(new Set());
 
-  // --- Fetch Data ---
+  // --- Fetch Data (OT analysis + allocations in parallel) ---
   useEffect(() => {
     async function load() {
       setLoading(true);
       setError(null);
       try {
-        const res = await fetch(`/api/paylocity/ot-analysis?year=${year}`);
-        if (!res.ok) throw new Error(`Failed to fetch: ${res.status}`);
-        const data = await res.json();
-        setAllEmployees(data.employees ?? []);
+        const [otRes, allocRes] = await Promise.all([
+          fetch(`/api/paylocity/ot-analysis?year=${year}`),
+          fetch("/api/paylocity/allocations"),
+        ]);
+        if (!otRes.ok) throw new Error(`Failed to fetch: ${otRes.status}`);
+        const otData = await otRes.json();
+        setRawEmployees(otData.employees ?? []);
+
+        if (allocRes.ok) {
+          const allocData = await allocRes.json();
+          setAllocations(allocData.allocations ?? []);
+        }
       } catch (err) {
         setError(
           err instanceof Error ? err.message : "Failed to load OT data"
@@ -175,7 +194,47 @@ export default function OvertimeAnalysisPage() {
     load();
   }, [year]);
 
-  // Filter to this entity
+  // Build allocation lookup (same pattern as employees page)
+  const allocationMap = useMemo(() => {
+    const map: Record<string, AllocationOverride> = {};
+    for (const a of allocations) {
+      map[`${a.employee_id}:${a.paylocity_company_id}`] = a;
+    }
+    return map;
+  }, [allocations]);
+
+  // Apply client-side allocation overrides (matches employees page logic exactly)
+  // This ensures OT analysis uses the same entity/class/dept resolution as the roster
+  const allEmployees = useMemo(() => {
+    return rawEmployees.map((emp) => {
+      const override = allocationMap[`${emp.id}:${emp.companyId}`];
+      if (!override) return emp;
+
+      const effectiveEntityId = override.allocated_entity_id || emp.operatingEntityId;
+      const effectiveEntityName = override.allocated_entity_name || emp.operatingEntityName;
+      // Derive entity code from name for backward compat
+      const effectiveEntityCode = effectiveEntityName.includes("Silverco")
+        ? "AVON"
+        : effectiveEntityName.includes("Avon Rental")
+          ? "ARH"
+          : effectiveEntityName.includes("Versatile")
+            ? "VS"
+            : effectiveEntityName.includes("Hollywood Depot")
+              ? "HDR"
+              : emp.operatingEntityCode;
+
+      return {
+        ...emp,
+        department: override.department || emp.department,
+        classValue: override.class || "",
+        operatingEntityId: effectiveEntityId,
+        operatingEntityCode: effectiveEntityCode,
+        operatingEntityName: effectiveEntityName,
+      };
+    });
+  }, [rawEmployees, allocationMap]);
+
+  // Filter to this entity (using client-side resolved entity IDs)
   const entityEmployees = useMemo(
     () => allEmployees.filter((e) => e.operatingEntityId === entityId),
     [allEmployees, entityId]
