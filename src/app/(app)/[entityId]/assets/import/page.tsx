@@ -526,6 +526,23 @@ export default function AssetImportWizardPage() {
           const v = raw[hm.bonus_depreciation_amount];
           row.bonus_depreciation_amount = typeof v === "number" ? String(v) : String(v ?? "").replace(/[$,\s]/g, "") || "0";
         }
+        if (hm.book_accumulated_depreciation) {
+          const v = raw[hm.book_accumulated_depreciation];
+          row.book_accumulated_depreciation = typeof v === "number" ? String(v) : String(v ?? "").replace(/[$,\s]/g, "");
+          // If the header matched a "net book value" pattern, convert NBV → accumulated
+          const hdrNorm = hm.book_accumulated_depreciation.toLowerCase().replace(/[^a-z0-9]/g, "");
+          if ((hdrNorm.includes("nbv") || hdrNorm.includes("netbookvalue") || hdrNorm.includes("bookvalue")) && row.book_accumulated_depreciation && row.acquisition_cost) {
+            const nbv = parseFloat(row.book_accumulated_depreciation);
+            const cost = parseFloat(row.acquisition_cost);
+            if (!isNaN(nbv) && !isNaN(cost)) {
+              row.book_accumulated_depreciation = String(cost - nbv);
+            }
+          }
+        }
+        if (hm.tax_accumulated_depreciation) {
+          const v = raw[hm.tax_accumulated_depreciation];
+          row.tax_accumulated_depreciation = typeof v === "number" ? String(v) : String(v ?? "").replace(/[$,\s]/g, "");
+        }
         if (hm.status) row.status = resolveStatus(raw[hm.status]);
 
         // Auto-set in_service_date from acquisition_date if missing
@@ -801,6 +818,8 @@ export default function AssetImportWizardPage() {
       tax_useful_life_months: row.tax_useful_life_months ? Number(row.tax_useful_life_months) : undefined,
       section_179_amount: Number(row.section_179_amount) || 0,
       bonus_depreciation_amount: Number(row.bonus_depreciation_amount) || 0,
+      book_accumulated_depreciation: row.book_accumulated_depreciation ? Number(row.book_accumulated_depreciation) : undefined,
+      tax_accumulated_depreciation: row.tax_accumulated_depreciation ? Number(row.tax_accumulated_depreciation) : undefined,
       status: String(row.status || "active"),
     }));
 

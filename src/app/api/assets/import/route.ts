@@ -32,6 +32,8 @@ interface AssetImportRow {
   tax_useful_life_months?: number | null;
   section_179_amount?: number;
   bonus_depreciation_amount?: number;
+  book_accumulated_depreciation?: number;
+  tax_accumulated_depreciation?: number;
   status?: string;
 }
 
@@ -82,7 +84,7 @@ export async function POST(request: NextRequest) {
     }
 
     const acquisitionCost = Number(row.acquisition_cost);
-    if (isNaN(acquisitionCost) || acquisitionCost <= 0) {
+    if (isNaN(acquisitionCost)) {
       results.errors.push(`Row ${rowNum}: invalid acquisition cost — skipped`);
       results.skipped++;
       continue;
@@ -148,48 +150,83 @@ export async function POST(request: NextRequest) {
     }
 
     // Generate depreciation schedule through current period
-    const deprInput: AssetForDepreciation = {
-      acquisition_cost: acquisitionCost,
-      in_service_date: row.in_service_date,
-      book_useful_life_months: bookUsefulLifeMonths,
-      book_salvage_value: bookSalvageValue,
-      book_depreciation_method: bookMethod,
-      tax_cost_basis: taxCostBasis,
-      tax_depreciation_method: taxMethod,
-      tax_useful_life_months: taxUsefulLifeMonths,
-      section_179_amount: section179,
-      bonus_depreciation_amount: bonusDepr,
-    };
+    // If user provided accumulated depreciation, use those values directly
+    const userBookAccumDepr = row.book_accumulated_depreciation != null ? Number(row.book_accumulated_depreciation) : null;
+    const userTaxAccumDepr = row.tax_accumulated_depreciation != null ? Number(row.tax_accumulated_depreciation) : null;
+    const hasUserOverride = (userBookAccumDepr !== null && !isNaN(userBookAccumDepr)) ||
+                            (userTaxAccumDepr !== null && !isNaN(userTaxAccumDepr));
 
-    const schedule = generateDepreciationSchedule(
-      deprInput,
-      currentPeriod.year,
-      currentPeriod.month
-    );
+    if (hasUserOverride) {
+      // User provided accumulated depreciation — use it directly
+      const finalBookAccum = (userBookAccumDepr !== null && !isNaN(userBookAccumDepr)) ? userBookAccumDepr : 0;
+      const finalTaxAccum = (userTaxAccumDepr !== null && !isNaN(userTaxAccumDepr)) ? userTaxAccumDepr : 0;
+      const effectiveTaxBasis = taxCostBasis ?? acquisitionCost;
 
-    if (schedule.length > 0) {
-      const deprEntries = schedule.map((entry) => ({
-        fixed_asset_id: asset.id,
-        period_year: entry.period_year,
-        period_month: entry.period_month,
-        book_depreciation: entry.book_depreciation,
-        book_accumulated: entry.book_accumulated,
-        book_net_value: entry.book_net_value,
-        tax_depreciation: entry.tax_depreciation,
-        tax_accumulated: entry.tax_accumulated,
-        tax_net_value: entry.tax_net_value,
-      }));
-
-      await supabase.from("fixed_asset_depreciation").insert(deprEntries);
-
-      const lastEntry = schedule[schedule.length - 1];
       await supabase
         .from("fixed_assets")
         .update({
-          book_accumulated_depreciation: lastEntry.book_accumulated,
-          tax_accumulated_depreciation: lastEntry.tax_accumulated,
+          book_accumulated_depreciation: finalBookAccum,
+          tax_accumulated_depreciation: finalTaxAccum,
         })
         .eq("id", asset.id);
+
+      // Insert a single summary entry for the current period to anchor the schedule
+      await supabase.from("fixed_asset_depreciation").insert({
+        fixed_asset_id: asset.id,
+        period_year: currentPeriod.year,
+        period_month: currentPeriod.month,
+        book_depreciation: 0,
+        book_accumulated: finalBookAccum,
+        book_net_value: Math.round((acquisitionCost - finalBookAccum) * 100) / 100,
+        tax_depreciation: 0,
+        tax_accumulated: finalTaxAccum,
+        tax_net_value: Math.round((effectiveTaxBasis - finalTaxAccum) * 100) / 100,
+      });
+    } else {
+      // No user override — auto-calculate the full schedule
+      const deprInput: AssetForDepreciation = {
+        acquisition_cost: acquisitionCost,
+        in_service_date: row.in_service_date,
+        book_useful_life_months: bookUsefulLifeMonths,
+        book_salvage_value: bookSalvageValue,
+        book_depreciation_method: bookMethod,
+        tax_cost_basis: taxCostBasis,
+        tax_depreciation_method: taxMethod,
+        tax_useful_life_months: taxUsefulLifeMonths,
+        section_179_amount: section179,
+        bonus_depreciation_amount: bonusDepr,
+      };
+
+      const schedule = generateDepreciationSchedule(
+        deprInput,
+        currentPeriod.year,
+        currentPeriod.month
+      );
+
+      if (schedule.length > 0) {
+        const deprEntries = schedule.map((entry) => ({
+          fixed_asset_id: asset.id,
+          period_year: entry.period_year,
+          period_month: entry.period_month,
+          book_depreciation: entry.book_depreciation,
+          book_accumulated: entry.book_accumulated,
+          book_net_value: entry.book_net_value,
+          tax_depreciation: entry.tax_depreciation,
+          tax_accumulated: entry.tax_accumulated,
+          tax_net_value: entry.tax_net_value,
+        }));
+
+        await supabase.from("fixed_asset_depreciation").insert(deprEntries);
+
+        const lastEntry = schedule[schedule.length - 1];
+        await supabase
+          .from("fixed_assets")
+          .update({
+            book_accumulated_depreciation: lastEntry.book_accumulated,
+            tax_accumulated_depreciation: lastEntry.tax_accumulated,
+          })
+          .eq("id", asset.id);
+      }
     }
 
     results.imported++;
