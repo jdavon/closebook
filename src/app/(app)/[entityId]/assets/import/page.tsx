@@ -376,7 +376,7 @@ function resolveStatus(value: unknown): string {
 function validateRow(row: AssetRow): Partial<Record<FieldKey, string>> {
   const errors: Partial<Record<FieldKey, string>> = {};
   if (!row.acquisition_date) errors.acquisition_date = "Required";
-  if (!row.acquisition_cost || Number(row.acquisition_cost) <= 0) errors.acquisition_cost = "Required (> 0)";
+  if (!row.acquisition_cost) errors.acquisition_cost = "Required";
   if (!row.in_service_date) errors.in_service_date = "Required";
   // Validate dates
   if (row.acquisition_date && isNaN(new Date(String(row.acquisition_date)).getTime())) {
