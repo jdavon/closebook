@@ -3,6 +3,7 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
+import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -547,32 +548,83 @@ export default function AssetImportWizardPage() {
 
   async function handleDownloadTemplate() {
     const XLSX = await import("xlsx");
+    const supabase = createClient();
     const headers = COLUMNS.map((c) => c.label);
-    const exampleRow = COLUMNS.map((c) => {
-      switch (c.key) {
-        case "asset_tag": return "VEH-001";
-        case "vehicle_class": return "13";
-        case "vehicle_year": return 2024;
-        case "vehicle_make": return "Ford";
-        case "vehicle_model": return "F-150";
-        case "vehicle_trim": return "XLT";
-        case "vin": return "1FTFW1E80NFA12345";
-        case "license_plate": return "ABC1234";
-        case "license_state": return "CA";
-        case "mileage_at_acquisition": return 0;
-        case "acquisition_date": return "2024-01-15";
-        case "acquisition_cost": return 45000;
-        case "in_service_date": return "2024-01-20";
-        case "book_depreciation_method": return "Straight-Line";
-        case "book_useful_life_months": return 60;
-        case "book_salvage_value": return 5000;
-        case "tax_depreciation_method": return "MACRS 5-Year";
-        case "status": return "Active";
-        default: return "";
-      }
-    });
 
-    const ws = XLSX.utils.aoa_to_sheet([headers, exampleRow]);
+    // Fetch all existing assets for this entity
+    const { data: assets } = await supabase
+      .from("fixed_assets")
+      .select(
+        "asset_tag, asset_name, vehicle_class, vehicle_year, vehicle_make, vehicle_model, vehicle_trim, vin, license_plate, license_state, mileage_at_acquisition, title_number, registration_expiry, vehicle_notes, acquisition_date, acquisition_cost, in_service_date, book_depreciation_method, book_useful_life_months, book_salvage_value, tax_cost_basis, tax_depreciation_method, tax_useful_life_months, section_179_amount, bonus_depreciation_amount, status"
+      )
+      .eq("entity_id", entityId)
+      .order("acquisition_date");
+
+    const BOOK_METHOD_LABELS: Record<string, string> = {
+      straight_line: "Straight-Line",
+      declining_balance: "Double Declining",
+      none: "None",
+    };
+    const TAX_METHOD_LABELS: Record<string, string> = {
+      macrs_5: "MACRS 5-Year",
+      macrs_7: "MACRS 7-Year",
+      macrs_10: "MACRS 10-Year",
+      section_179: "Section 179",
+      bonus_100: "100% Bonus",
+      bonus_80: "80% Bonus",
+      bonus_60: "60% Bonus",
+      straight_line_tax: "Straight-Line (Tax)",
+      none: "None",
+    };
+    const STATUS_LABELS: Record<string, string> = {
+      active: "Active",
+      disposed: "Disposed",
+      fully_depreciated: "Fully Depreciated",
+      inactive: "Inactive",
+    };
+
+    let dataRows: unknown[][];
+    if (assets && assets.length > 0) {
+      dataRows = assets.map((a) =>
+        COLUMNS.map((col) => {
+          const v = (a as Record<string, unknown>)[col.key];
+          if (col.key === "book_depreciation_method") return BOOK_METHOD_LABELS[v as string] ?? v ?? "";
+          if (col.key === "tax_depreciation_method") return TAX_METHOD_LABELS[v as string] ?? v ?? "";
+          if (col.key === "status") return STATUS_LABELS[v as string] ?? v ?? "";
+          if (v === null || v === undefined) return "";
+          return v;
+        })
+      );
+    } else {
+      // Fallback: single example row
+      dataRows = [
+        COLUMNS.map((c) => {
+          switch (c.key) {
+            case "asset_tag": return "VEH-001";
+            case "vehicle_class": return "13";
+            case "vehicle_year": return 2024;
+            case "vehicle_make": return "Ford";
+            case "vehicle_model": return "F-150";
+            case "vehicle_trim": return "XLT";
+            case "vin": return "1FTFW1E80NFA12345";
+            case "license_plate": return "ABC1234";
+            case "license_state": return "CA";
+            case "mileage_at_acquisition": return 0;
+            case "acquisition_date": return "2024-01-15";
+            case "acquisition_cost": return 45000;
+            case "in_service_date": return "2024-01-20";
+            case "book_depreciation_method": return "Straight-Line";
+            case "book_useful_life_months": return 60;
+            case "book_salvage_value": return 5000;
+            case "tax_depreciation_method": return "MACRS 5-Year";
+            case "status": return "Active";
+            default: return "";
+          }
+        }),
+      ];
+    }
+
+    const ws = XLSX.utils.aoa_to_sheet([headers, ...dataRows]);
     ws["!cols"] = COLUMNS.map((c) => ({ wch: Math.max(c.label.length + 2, Math.round(c.width / 8)) }));
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Fixed Assets");
