@@ -79,11 +79,16 @@ interface PreviewRow {
   rowNumber: number;
   employeeId: string;
   employeeName: string;
-  companyInput: string;
-  departmentInput: string;
-  classInput: string;
+  // Raw values from file (before resolution)
+  rawCompany: string;
+  rawDepartment: string;
+  rawClass: string;
+  // Resolved values (after entity matching)
   resolvedEntityId: string | null;
   resolvedEntityName: string | null;
+  resolvedDepartment: string;
+  resolvedClass: string;
+  // Current values for comparison display
   currentCompany: string;
   currentDepartment: string;
   currentClass: string;
@@ -133,24 +138,50 @@ const STEP_LABELS = ["Upload File", "Preview", "Results"];
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
+/** Normalize a string for comparison (trim, collapse whitespace, lowercase) */
+function norm(s: string): string {
+  return s.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
 /** Resolve company input (name or code) to operating entity */
 function resolveEntity(
   input: string,
   entities: OperatingEntity[]
 ): OperatingEntity | null {
-  if (!input) return null;
-  const q = input.trim().toLowerCase();
+  if (!input || !input.trim()) return null;
+  const q = norm(input);
   return (
     entities.find(
       (e) =>
-        e.name.toLowerCase() === q ||
-        e.code.toLowerCase() === q ||
-        // Partial match on name
-        e.name.toLowerCase().startsWith(q) ||
-        // Match on common abbreviations
-        q.includes(e.code.toLowerCase())
+        norm(e.name) === q ||
+        norm(e.code) === q ||
+        norm(e.name).startsWith(q) ||
+        q.includes(norm(e.code))
     ) ?? null
   );
+}
+
+/**
+ * Find the best column value from a parsed row using multiple possible header names.
+ * Handles cases where xlsx might add whitespace or change casing in headers.
+ */
+function getCol(row: Record<string, string>, ...keys: string[]): string {
+  // First try exact match
+  for (const key of keys) {
+    if (row[key] !== undefined && row[key] !== null) {
+      return String(row[key]).trim();
+    }
+  }
+  // Then try case-insensitive match against all row keys
+  const rowKeys = Object.keys(row);
+  for (const key of keys) {
+    const lk = key.toLowerCase();
+    const found = rowKeys.find((rk) => rk.toLowerCase().trim() === lk);
+    if (found && row[found] !== undefined && row[found] !== null) {
+      return String(row[found]).trim();
+    }
+  }
+  return "";
 }
 
 // ── Component ──────────────────────────────────────────────────────────
@@ -171,6 +202,8 @@ export function ImportAllocationsDialog({
   const [statusFilter, setStatusFilter] = useState<RowStatus | "all">("all");
   const [savedCount, setSavedCount] = useState(0);
   const [failedCount, setFailedCount] = useState(0);
+  const [apiErrors, setApiErrors] = useState<string[]>([]);
+  const [parseInfo, setParseInfo] = useState<string>("");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Reset state when dialog opens
@@ -184,14 +217,16 @@ export function ImportAllocationsDialog({
       setStatusFilter("all");
       setSavedCount(0);
       setFailedCount(0);
+      setApiErrors([]);
+      setParseInfo("");
     }
   }, [open]);
 
-  // Build employee lookup by ID
+  // Build employee lookup by ID (string key)
   const employeeMap = useMemo(() => {
     const map: Record<string, DisplayEmployee> = {};
     for (const emp of employees) {
-      map[emp.id] = emp;
+      map[String(emp.id).trim()] = emp;
     }
     return map;
   }, [employees]);
@@ -215,7 +250,7 @@ export function ImportAllocationsDialog({
   function handleDownloadTemplate() {
     // Build template data from current employees
     const rows = employees.map((emp) => ({
-      "Employee ID": emp.id,
+      "Employee ID": String(emp.id),
       "Employee Name": emp.displayName,
       Company: emp.effectiveEntityName,
       Department: emp.effectiveDepartment,
@@ -251,6 +286,7 @@ export function ImportAllocationsDialog({
     XLSX.utils.book_append_sheet(wb, refWs, "Valid Companies");
 
     XLSX.writeFile(wb, "employee-allocations-template.xlsx");
+    toast.success("Template downloaded");
   }
 
   function handleParseFile() {
@@ -263,11 +299,20 @@ export function ImportAllocationsDialog({
       try {
         const data = e.target?.result;
         const workbook = XLSX.read(data, { type: "array" });
-        const sheetName = workbook.SheetNames[0];
+
+        // Prefer "Allocations" sheet, fall back to first sheet
+        let sheetName = workbook.SheetNames.find(
+          (n) => n.toLowerCase() === "allocations"
+        );
+        if (!sheetName) {
+          sheetName = workbook.SheetNames[0];
+        }
         const sheet = workbook.Sheets[sheetName];
+
+        // Parse with defval to ensure empty cells are included as ""
         const jsonRows = XLSX.utils.sheet_to_json<Record<string, string>>(
           sheet,
-          { raw: false }
+          { raw: false, defval: "" }
         );
 
         if (jsonRows.length === 0) {
@@ -276,55 +321,63 @@ export function ImportAllocationsDialog({
           return;
         }
 
+        // Log column names found for debugging
+        const colNames = Object.keys(jsonRows[0]);
+        const info = `Sheet: "${sheetName}" | ${jsonRows.length} rows | Columns: ${colNames.join(", ")}`;
+        setParseInfo(info);
+        console.log("[Import] Parse info:", info);
+        console.log("[Import] First row raw:", JSON.stringify(jsonRows[0]));
+
         // Parse each row
         const rows: PreviewRow[] = jsonRows.map((row, idx) => {
-          const employeeId = (
-            row["Employee ID"] ??
-            row["employee_id"] ??
-            row["EmployeeID"] ??
-            row["ID"] ??
-            ""
-          ).toString().trim();
+          const employeeId = getCol(
+            row,
+            "Employee ID",
+            "employee_id",
+            "EmployeeID",
+            "Emp ID",
+            "ID"
+          );
 
-          const employeeName = (
-            row["Employee Name"] ??
-            row["employee_name"] ??
-            row["Name"] ??
-            ""
-          ).toString().trim();
+          const employeeName = getCol(
+            row,
+            "Employee Name",
+            "employee_name",
+            "Name"
+          );
 
-          const companyInput = (
-            row["Company"] ??
-            row["company"] ??
-            row["Entity"] ??
-            ""
-          ).toString().trim();
+          const rawCompany = getCol(
+            row,
+            "Company",
+            "company",
+            "Entity",
+            "entity"
+          );
 
-          const departmentInput = (
-            row["Department"] ??
-            row["department"] ??
-            row["Dept"] ??
-            ""
-          ).toString().trim();
+          const rawDepartment = getCol(
+            row,
+            "Department",
+            "department",
+            "Dept",
+            "dept"
+          );
 
-          const classInput = (
-            row["Class"] ??
-            row["class"] ??
-            ""
-          ).toString().trim();
+          const rawClass = getCol(row, "Class", "class");
 
           // Validate: employee must exist
           const emp = employeeMap[employeeId];
           if (!emp) {
             return {
-              rowNumber: idx + 2, // 1-indexed + header row
+              rowNumber: idx + 2,
               employeeId,
               employeeName: employeeName || `Unknown (${employeeId})`,
-              companyInput,
-              departmentInput,
-              classInput,
+              rawCompany,
+              rawDepartment,
+              rawClass,
               resolvedEntityId: null,
               resolvedEntityName: null,
+              resolvedDepartment: rawDepartment,
+              resolvedClass: rawClass,
               currentCompany: "",
               currentDepartment: "",
               currentClass: "",
@@ -337,23 +390,25 @@ export function ImportAllocationsDialog({
 
           // Resolve company
           let resolvedEntity: OperatingEntity | null = null;
-          if (companyInput) {
-            resolvedEntity = resolveEntity(companyInput, operatingEntities);
+          if (rawCompany) {
+            resolvedEntity = resolveEntity(rawCompany, operatingEntities);
             if (!resolvedEntity) {
               return {
                 rowNumber: idx + 2,
                 employeeId,
                 employeeName: emp.displayName,
-                companyInput,
-                departmentInput,
-                classInput,
+                rawCompany,
+                rawDepartment,
+                rawClass,
                 resolvedEntityId: null,
                 resolvedEntityName: null,
+                resolvedDepartment: rawDepartment,
+                resolvedClass: rawClass,
                 currentCompany: emp.effectiveEntityName,
                 currentDepartment: emp.effectiveDepartment,
                 currentClass: emp.classValue,
                 status: "error" as const,
-                message: `Company "${companyInput}" not recognized`,
+                message: `Company "${rawCompany}" not recognized`,
               };
             }
           }
@@ -362,28 +417,37 @@ export function ImportAllocationsDialog({
             resolvedEntity?.id ?? emp.effectiveEntityId;
           const resolvedEntityName =
             resolvedEntity?.name ?? emp.effectiveEntityName;
-          const resolvedDept = departmentInput || emp.effectiveDepartment;
-          const resolvedClass = classInput;
+          // Use file value for dept; only fall back if completely empty
+          const resolvedDept = rawDepartment || emp.effectiveDepartment;
+          const resolvedClass = rawClass;
 
-          // Check if anything actually changed
-          const hasChanges =
-            resolvedEntityId !== emp.effectiveEntityId ||
-            resolvedDept !== emp.effectiveDepartment ||
-            resolvedClass !== emp.classValue;
+          // Check if anything actually changed (normalized comparison)
+          const companyChanged =
+            norm(resolvedEntityId) !== norm(emp.effectiveEntityId);
+          const deptChanged =
+            norm(resolvedDept) !== norm(emp.effectiveDepartment);
+          const classChanged =
+            resolvedClass.trim() !== (emp.classValue ?? "").trim();
+
+          const hasChanges = companyChanged || deptChanged || classChanged;
 
           return {
             rowNumber: idx + 2,
             employeeId,
             employeeName: emp.displayName,
-            companyInput: resolvedEntityName,
-            departmentInput: resolvedDept,
-            classInput: resolvedClass,
+            rawCompany,
+            rawDepartment,
+            rawClass,
             resolvedEntityId,
             resolvedEntityName,
+            resolvedDepartment: resolvedDept,
+            resolvedClass,
             currentCompany: emp.effectiveEntityName,
             currentDepartment: emp.effectiveDepartment,
             currentClass: emp.classValue,
-            status: hasChanges ? ("matched" as const) : ("no_changes" as const),
+            status: hasChanges
+              ? ("matched" as const)
+              : ("no_changes" as const),
             message: hasChanges ? "Will be updated" : "No changes detected",
           };
         });
@@ -391,6 +455,20 @@ export function ImportAllocationsDialog({
         setPreview(rows);
         setStatusFilter("all");
         setStep(2);
+
+        // Show a toast with summary
+        const matched = rows.filter((r) => r.status === "matched").length;
+        const noChanges = rows.filter((r) => r.status === "no_changes").length;
+        const errs = rows.filter((r) => r.status === "error").length;
+        if (matched === 0 && noChanges > 0) {
+          toast.warning(
+            `No changes detected in ${noChanges} rows. Make sure you edited the Company, Department, or Class columns on the "${sheetName}" sheet.`
+          );
+        } else {
+          toast.info(
+            `Parsed ${rows.length} rows: ${matched} to update, ${noChanges} unchanged, ${errs} errors`
+          );
+        }
       } catch (err) {
         toast.error(
           `Failed to parse file: ${err instanceof Error ? err.message : "Unknown error"}`
@@ -406,15 +484,15 @@ export function ImportAllocationsDialog({
     if (toSave.length === 0) return;
 
     setCommitting(true);
+    setApiErrors([]);
     try {
-      // Determine the companyId for each employee
       const allocations = toSave.map((row) => {
         const emp = employeeMap[row.employeeId];
         return {
           employeeId: row.employeeId,
           paylocityCompanyId: emp?.companyId ?? paylocityCompanyId ?? "",
-          department: row.departmentInput || null,
-          class: row.classInput || null,
+          department: row.resolvedDepartment || null,
+          class: row.resolvedClass || null,
           allocatedEntityId: row.resolvedEntityId,
           allocatedEntityName: row.resolvedEntityName,
         };
@@ -435,6 +513,7 @@ export function ImportAllocationsDialog({
 
       setSavedCount(data.saved ?? 0);
       setFailedCount(data.failed ?? 0);
+      setApiErrors(data.errors ?? []);
       setStep(3);
     } catch {
       toast.error("An error occurred during import");
@@ -443,7 +522,9 @@ export function ImportAllocationsDialog({
   }
 
   function handleDone() {
-    onComplete();
+    if (savedCount > 0) {
+      onComplete();
+    }
     onOpenChange(false);
   }
 
@@ -453,7 +534,7 @@ export function ImportAllocationsDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         className={step === 2 ? "max-h-[85vh] flex flex-col" : ""}
-        style={step === 2 ? { maxWidth: "72rem" } : undefined}
+        style={step === 2 ? { maxWidth: "80rem" } : undefined}
       >
         {/* Step indicator */}
         <div className="flex items-center gap-1 mb-2">
@@ -494,7 +575,8 @@ export function ImportAllocationsDialog({
               <DialogTitle>Import Allocations — Upload File</DialogTitle>
               <DialogDescription>
                 Download the template pre-filled with current employees, update
-                the Company, Department, and Class columns, then upload it back.
+                the Company, Department, and Class columns on the
+                &quot;Allocations&quot; sheet, then upload it back.
               </DialogDescription>
             </DialogHeader>
 
@@ -506,9 +588,9 @@ export function ImportAllocationsDialog({
                   Step 1: Download the allocation template
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  The template includes Employee ID, Name, and current Company /
-                  Department / Class values. A &quot;Valid Companies&quot;
-                  reference sheet lists accepted company names and codes.
+                  The template has two sheets: &quot;Allocations&quot; (edit this
+                  one) with employees pre-filled, and &quot;Valid
+                  Companies&quot; as a reference for accepted company names.
                 </p>
                 <Button
                   variant="outline"
@@ -528,6 +610,11 @@ export function ImportAllocationsDialog({
                   <Upload className="h-4 w-4 text-muted-foreground" />
                   Step 2: Upload the completed file
                 </div>
+                <p className="text-xs text-muted-foreground">
+                  Make sure your changes are on the &quot;Allocations&quot;
+                  sheet. The &quot;Valid Companies&quot; sheet is for reference
+                  only.
+                </p>
 
                 <input
                   ref={fileInputRef}
@@ -590,6 +677,25 @@ export function ImportAllocationsDialog({
               </DialogDescription>
             </DialogHeader>
 
+            {/* Parse diagnostic info */}
+            {parseInfo && (
+              <p className="text-xs text-muted-foreground font-mono bg-muted/50 px-2 py-1 rounded">
+                {parseInfo}
+              </p>
+            )}
+
+            {/* Warning if no changes detected */}
+            {summary.matched === 0 && summary.noChanges > 0 && (
+              <div className="rounded-md border border-yellow-300 bg-yellow-50 p-3 text-sm text-yellow-800">
+                <strong>No changes detected.</strong> The uploaded values match
+                the current data. Make sure you edited the{" "}
+                <strong>Company</strong>, <strong>Department</strong>, or{" "}
+                <strong>Class</strong> columns on the{" "}
+                <strong>&quot;Allocations&quot;</strong> sheet (not the
+                &quot;Valid Companies&quot; reference sheet).
+              </div>
+            )}
+
             {/* Summary badges (clickable filters) */}
             <div className="flex flex-wrap gap-2">
               <Badge
@@ -646,10 +752,10 @@ export function ImportAllocationsDialog({
                   <TableRow>
                     <TableHead className="w-12">#</TableHead>
                     <TableHead className="w-24">Emp ID</TableHead>
-                    <TableHead>Employee Name</TableHead>
-                    <TableHead>Company</TableHead>
-                    <TableHead>Department</TableHead>
-                    <TableHead>Class</TableHead>
+                    <TableHead>Employee</TableHead>
+                    <TableHead>Company (current → file)</TableHead>
+                    <TableHead>Department (current → file)</TableHead>
+                    <TableHead>Class (current → file)</TableHead>
                     <TableHead className="w-28">Status</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -666,15 +772,20 @@ export function ImportAllocationsDialog({
                   ) : (
                     filteredPreview.map((row, idx) => {
                       const cfg = STATUS_CONFIG[row.status];
+
+                      // For all rows, show current vs file values
                       const companyChanged =
                         row.status === "matched" &&
-                        row.companyInput !== row.currentCompany;
+                        norm(row.resolvedEntityName ?? "") !==
+                          norm(row.currentCompany);
                       const deptChanged =
                         row.status === "matched" &&
-                        row.departmentInput !== row.currentDepartment;
+                        norm(row.resolvedDepartment) !==
+                          norm(row.currentDepartment);
                       const classChanged =
                         row.status === "matched" &&
-                        row.classInput !== row.currentClass;
+                        row.resolvedClass.trim() !==
+                          (row.currentClass ?? "").trim();
 
                       return (
                         <TableRow key={idx}>
@@ -687,6 +798,7 @@ export function ImportAllocationsDialog({
                           <TableCell className="text-sm">
                             {row.employeeName}
                           </TableCell>
+                          {/* Company */}
                           <TableCell className="text-sm">
                             {companyChanged ? (
                               <span>
@@ -694,15 +806,16 @@ export function ImportAllocationsDialog({
                                   {row.currentCompany}
                                 </span>{" "}
                                 <span className="text-green-700 font-medium">
-                                  → {row.companyInput}
+                                  → {row.resolvedEntityName}
                                 </span>
                               </span>
                             ) : (
                               <span className="text-muted-foreground">
-                                {row.companyInput || "—"}
+                                {row.rawCompany || row.currentCompany || "—"}
                               </span>
                             )}
                           </TableCell>
+                          {/* Department */}
                           <TableCell className="text-sm">
                             {deptChanged ? (
                               <span>
@@ -710,15 +823,18 @@ export function ImportAllocationsDialog({
                                   {row.currentDepartment}
                                 </span>{" "}
                                 <span className="text-green-700 font-medium">
-                                  → {row.departmentInput}
+                                  → {row.resolvedDepartment}
                                 </span>
                               </span>
                             ) : (
                               <span className="text-muted-foreground">
-                                {row.departmentInput || "—"}
+                                {row.rawDepartment ||
+                                  row.currentDepartment ||
+                                  "—"}
                               </span>
                             )}
                           </TableCell>
+                          {/* Class */}
                           <TableCell className="text-sm">
                             {classChanged ? (
                               <span>
@@ -726,12 +842,12 @@ export function ImportAllocationsDialog({
                                   {row.currentClass || "(none)"}
                                 </span>{" "}
                                 <span className="text-green-700 font-medium">
-                                  → {row.classInput}
+                                  → {row.resolvedClass}
                                 </span>
                               </span>
                             ) : (
                               <span className="text-muted-foreground">
-                                {row.classInput || "—"}
+                                {row.rawClass || row.currentClass || "—"}
                               </span>
                             )}
                           </TableCell>
@@ -794,13 +910,22 @@ export function ImportAllocationsDialog({
 
             <div className="space-y-4 py-4">
               <div className="rounded-lg border p-4 space-y-3">
-                <div className="flex items-center gap-2 text-green-700">
-                  <CheckCircle2 className="h-5 w-5" />
-                  <span className="font-medium">
-                    {savedCount} allocation{savedCount !== 1 ? "s" : ""} saved
-                    successfully
-                  </span>
-                </div>
+                {savedCount > 0 ? (
+                  <div className="flex items-center gap-2 text-green-700">
+                    <CheckCircle2 className="h-5 w-5" />
+                    <span className="font-medium">
+                      {savedCount} allocation{savedCount !== 1 ? "s" : ""} saved
+                      successfully
+                    </span>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 text-yellow-700">
+                    <AlertCircle className="h-5 w-5" />
+                    <span className="font-medium">
+                      No allocations were saved
+                    </span>
+                  </div>
+                )}
 
                 {failedCount > 0 && (
                   <div className="flex items-center gap-2 text-red-700">
@@ -809,6 +934,20 @@ export function ImportAllocationsDialog({
                       {failedCount} allocation{failedCount !== 1 ? "s" : ""}{" "}
                       failed to save
                     </span>
+                  </div>
+                )}
+
+                {/* Show API errors (e.g. table doesn't exist) */}
+                {apiErrors.length > 0 && (
+                  <div className="space-y-1 rounded-md bg-red-50 border border-red-200 p-3">
+                    <p className="text-sm font-medium text-red-800">
+                      Server errors:
+                    </p>
+                    <ul className="text-xs text-red-700 ml-4 list-disc space-y-0.5">
+                      {apiErrors.map((err, i) => (
+                        <li key={i}>{err}</li>
+                      ))}
+                    </ul>
                   </div>
                 )}
 
