@@ -71,15 +71,21 @@ export async function GET() {
 
     for (const { companyId, employees: rawEmployees } of results) {
       for (const emp of rawEmployees) {
+        // Skip ghost/placeholder records with no name data
+        const firstName = emp.info?.firstName ?? "";
+        const lastName = emp.info?.lastName ?? emp.lastName ?? "";
+        const hasName = !!(emp.displayName || firstName || lastName);
+        if (!hasName) continue;
+
         const cc = getOperatingEntityForCostCenter(emp.position?.costCenter1, companyId);
         const annualComp = getAnnualComp(emp);
         const { total: erTaxes } = estimateAnnualERTaxes(annualComp);
         employees.push({
           id: emp.id,
           companyId,
-          displayName: emp.displayName ?? (`${emp.info?.firstName ?? ""} ${emp.info?.lastName ?? emp.lastName ?? ""}`.trim() || `Employee ${emp.id}`),
-          firstName: emp.info?.firstName ?? "",
-          lastName: emp.info?.lastName ?? emp.lastName ?? "",
+          displayName: emp.displayName ?? (`${firstName} ${lastName}`.trim() || `Employee ${emp.id}`),
+          firstName,
+          lastName,
           status: emp.currentStatus?.statusType ?? emp.status ?? "Active",
           statusType: emp.currentStatus?.statusType ?? "A",
           jobTitle: emp.info?.jobTitle ?? "",
