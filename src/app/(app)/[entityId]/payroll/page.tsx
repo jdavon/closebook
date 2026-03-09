@@ -85,6 +85,25 @@ interface MappedEmployee {
   operatingEntityName: string;
 }
 
+interface AccrualEmployee {
+  id: string;
+  displayName: string;
+  department: string;
+  costCenterCode: string;
+  operatingEntityId: string;
+  operatingEntityCode: string;
+  operatingEntityName: string;
+  jobTitle: string;
+  payType: string;
+  annualComp: number;
+  dailyRate: number;
+  accrualDays: number;
+  wageAccrual: number;
+  taxAccrual: number;
+  totalAccrual: number;
+  taxBreakdown: Record<string, number>;
+}
+
 // --- Constants ---
 
 const TYPE_LABELS: Record<string, string> = {
@@ -122,31 +141,6 @@ function formatComp(value: number): string {
   }).format(value);
 }
 
-// --- Employer Tax Rates (CA) ---
-const EMPLOYER_TAX_RATES = {
-  ficaSS: { rate: 0.062, wageBase: 176_100 },
-  medicare: { rate: 0.0145, wageBase: Infinity },
-  futa: { rate: 0.006, wageBase: 7_000 },
-  caSUI: { rate: 0.034, wageBase: 7_000 },
-  caETT: { rate: 0.001, wageBase: 7_000 },
-  caSDI: { rate: 0.011, wageBase: 145_600 },
-};
-
-function estimateMonthlyEmployerTax(annualComp: number, monthIndex: number): number {
-  // monthIndex: 0=Jan ... 11=Dec
-  // Estimate YTD wages at start of month
-  const monthlyWage = annualComp / 12;
-  const ytdBefore = monthlyWage * monthIndex;
-  let totalTax = 0;
-
-  for (const { rate, wageBase } of Object.values(EMPLOYER_TAX_RATES)) {
-    if (ytdBefore >= wageBase) continue; // already capped
-    const taxableThisMonth = Math.min(monthlyWage, Math.max(0, wageBase - ytdBefore));
-    totalTax += taxableThisMonth * rate;
-  }
-  return totalTax;
-}
-
 // --- Page ---
 
 export default function PayrollPage() {
@@ -161,10 +155,12 @@ export default function PayrollPage() {
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
 
-  // Employees tab
-  const [employees, setEmployees] = useState<MappedEmployee[]>([]);
+  // Employees tab — actual accrual detail from calculation engine
+  const [accrualEmployees, setAccrualEmployees] = useState<AccrualEmployee[]>([]);
   const [empLoading, setEmpLoading] = useState(false);
   const [empSearch, setEmpSearch] = useState("");
+  const [empWarnings, setEmpWarnings] = useState<string[]>([]);
+  const [empLoadedPeriod, setEmpLoadedPeriod] = useState<string>("");
 
   // Manual add dialog
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -193,55 +189,46 @@ export default function PayrollPage() {
   }, [supabase, entityId, periodYear, periodMonth]);
 
   const loadEmployees = useCallback(async () => {
-    if (employees.length > 0) return; // already loaded
+    const periodKey = `${periodYear}-${periodMonth}`;
+    if (empLoadedPeriod === periodKey && accrualEmployees.length > 0) return;
     setEmpLoading(true);
     try {
-      const res = await fetch("/api/paylocity/employees");
+      const res = await fetch(
+        `/api/paylocity/accrual-detail?year=${periodYear}&month=${periodMonth}`
+      );
       if (res.ok) {
         const data = await res.json();
-        setEmployees(data.employees ?? []);
+        setAccrualEmployees(data.employees ?? []);
+        setEmpWarnings(data.warnings ?? []);
+        setEmpLoadedPeriod(periodKey);
       }
     } catch {
-      // silent fail — employees tab will show empty
+      // silent fail
     }
     setEmpLoading(false);
-  }, [employees.length]);
+  }, [periodYear, periodMonth, empLoadedPeriod, accrualEmployees.length]);
 
   useEffect(() => {
     loadAccruals();
   }, [loadAccruals]);
 
-  // Filter employees for this entity and compute per-employee accruals
+  // Filter accrual employees for this entity
   const entityEmployees = useMemo(() => {
-    const filtered = employees.filter((e) => e.operatingEntityId === entityId);
-    const searched = empSearch
-      ? filtered.filter((e) => {
-          const q = empSearch.toLowerCase();
-          return (
-            e.displayName.toLowerCase().includes(q) ||
-            e.jobTitle.toLowerCase().includes(q) ||
-            e.department.toLowerCase().includes(q)
-          );
-        })
-      : filtered;
-
-    const monthIdx = periodMonth - 1; // 0-indexed for tax calc
-    return searched.map((e) => {
-      const monthlyWage = e.annualComp / 12;
-      const monthlyTax = estimateMonthlyEmployerTax(e.annualComp, monthIdx);
-      return {
-        ...e,
-        monthlyWage,
-        monthlyTax,
-        monthlyTotal: monthlyWage + monthlyTax,
-      };
-    });
-  }, [employees, entityId, empSearch, periodMonth]);
+    const filtered = accrualEmployees.filter((e) => e.operatingEntityId === entityId);
+    if (!empSearch) return filtered;
+    const q = empSearch.toLowerCase();
+    return filtered.filter(
+      (e) =>
+        (e.displayName ?? "").toLowerCase().includes(q) ||
+        (e.jobTitle ?? "").toLowerCase().includes(q) ||
+        (e.department ?? "").toLowerCase().includes(q)
+    );
+  }, [accrualEmployees, entityId, empSearch]);
 
   const entityTotalComp = entityEmployees.reduce((s, e) => s + e.annualComp, 0);
-  const entityTotalMonthlyWage = entityEmployees.reduce((s, e) => s + e.monthlyWage, 0);
-  const entityTotalMonthlyTax = entityEmployees.reduce((s, e) => s + e.monthlyTax, 0);
-  const entityTotalMonthlyAll = entityTotalMonthlyWage + entityTotalMonthlyTax;
+  const entityTotalWageAccrual = entityEmployees.reduce((s, e) => s + e.wageAccrual, 0);
+  const entityTotalTaxAccrual = entityEmployees.reduce((s, e) => s + e.taxAccrual, 0);
+  const entityTotalAccrual = entityTotalWageAccrual + entityTotalTaxAccrual;
 
   // --- Handlers ---
 
@@ -605,15 +592,18 @@ export default function PayrollPage() {
         <TabsContent value="employees" className="space-y-4">
           {empLoading ? (
             <div className="flex items-center justify-center py-12">
-              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+              <div className="text-center">
+                <Loader2 className="h-8 w-8 animate-spin text-muted-foreground mx-auto mb-3" />
+                <p className="text-sm text-muted-foreground">
+                  Calculating accruals from Paylocity data...
+                </p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  This may take a moment (fetching pay statements for YTD caps)
+                </p>
+              </div>
             </div>
           ) : (
             <>
-              {/* Period label */}
-              <p className="text-sm text-muted-foreground">
-                Estimated accruals for {getPeriodLabel(periodYear, periodMonth)}
-              </p>
-
               {/* Employee Summary */}
               <div className="grid grid-cols-5 gap-4">
                 <Card>
@@ -645,7 +635,7 @@ export default function PayrollPage() {
                       <p className="text-sm text-muted-foreground">Accrued Wages</p>
                     </div>
                     <p className="text-2xl font-semibold tabular-nums mt-1">
-                      {formatCurrency(entityTotalMonthlyWage)}
+                      {formatCurrency(entityTotalWageAccrual)}
                     </p>
                   </CardContent>
                 </Card>
@@ -656,7 +646,7 @@ export default function PayrollPage() {
                       <p className="text-sm text-muted-foreground">Employer Taxes</p>
                     </div>
                     <p className="text-2xl font-semibold tabular-nums mt-1">
-                      {formatCurrency(entityTotalMonthlyTax)}
+                      {formatCurrency(entityTotalTaxAccrual)}
                     </p>
                   </CardContent>
                 </Card>
@@ -667,29 +657,61 @@ export default function PayrollPage() {
                       <p className="text-sm text-muted-foreground">Total Cost</p>
                     </div>
                     <p className="text-2xl font-semibold tabular-nums mt-1">
-                      {formatCurrency(entityTotalMonthlyAll)}
+                      {formatCurrency(entityTotalAccrual)}
                     </p>
                   </CardContent>
                 </Card>
               </div>
 
-              {/* Search */}
-              <div className="relative max-w-md">
-                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  placeholder="Search employees..."
-                  value={empSearch}
-                  onChange={(e) => setEmpSearch(e.target.value)}
-                  className="pl-9"
-                />
+              {/* Warnings */}
+              {empWarnings.length > 0 && (
+                <Card className="border-yellow-200 bg-yellow-50 dark:border-yellow-900 dark:bg-yellow-950">
+                  <CardContent className="pt-4 pb-3">
+                    <p className="text-sm font-medium text-yellow-800 dark:text-yellow-200 mb-1">
+                      {empWarnings.length} warning{empWarnings.length !== 1 ? "s" : ""}
+                    </p>
+                    <ul className="text-xs text-yellow-700 dark:text-yellow-300 space-y-0.5">
+                      {empWarnings.slice(0, 5).map((w, i) => (
+                        <li key={i}>• {w}</li>
+                      ))}
+                      {empWarnings.length > 5 && (
+                        <li>...and {empWarnings.length - 5} more</li>
+                      )}
+                    </ul>
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* Search + Refresh */}
+              <div className="flex items-center gap-3">
+                <div className="relative max-w-md flex-1">
+                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    placeholder="Search employees..."
+                    value={empSearch}
+                    onChange={(e) => setEmpSearch(e.target.value)}
+                    className="pl-9"
+                  />
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setEmpLoadedPeriod("");
+                    loadEmployees();
+                  }}
+                >
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                  Recalculate
+                </Button>
               </div>
 
               {/* Employee Accruals Table */}
               <Card>
                 <CardHeader>
-                  <CardTitle>Employee Accruals</CardTitle>
+                  <CardTitle>Employee Accrual Detail</CardTitle>
                   <CardDescription>
-                    {entityEmployees.length} employee{entityEmployees.length !== 1 ? "s" : ""} &mdash; estimated cost for {getPeriodLabel(periodYear, periodMonth)}
+                    {entityEmployees.length} employee{entityEmployees.length !== 1 ? "s" : ""} — calculated for {getPeriodLabel(periodYear, periodMonth)} using working-day pro-rata and YTD tax caps
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
@@ -708,24 +730,26 @@ export default function PayrollPage() {
                           <TableRow>
                             <TableHead>Name</TableHead>
                             <TableHead>Department</TableHead>
-                            <TableHead>Job Title</TableHead>
                             <TableHead>Pay Type</TableHead>
                             <TableHead className="text-right">Annual Comp</TableHead>
+                            <TableHead className="text-right">Daily Rate</TableHead>
+                            <TableHead className="text-right">Accrual Days</TableHead>
                             <TableHead className="text-right">Accrued Wages</TableHead>
                             <TableHead className="text-right">Employer Tax</TableHead>
-                            <TableHead className="text-right">Total Cost</TableHead>
+                            <TableHead className="text-right">Total</TableHead>
                           </TableRow>
                         </TableHeader>
                         <TableBody>
                           {entityEmployees.map((emp) => (
-                            <TableRow key={emp.id}>
+                            <TableRow key={emp.id} title={
+                              Object.entries(emp.taxBreakdown ?? {})
+                                .map(([k, v]) => `${k}: $${v.toFixed(2)}`)
+                                .join(", ")
+                            }>
                               <TableCell className="font-medium">
                                 {emp.displayName}
                               </TableCell>
                               <TableCell>{emp.department}</TableCell>
-                              <TableCell className="max-w-[200px] truncate">
-                                {emp.jobTitle || "—"}
-                              </TableCell>
                               <TableCell>
                                 <Badge
                                   variant={
@@ -738,30 +762,37 @@ export default function PayrollPage() {
                               <TableCell className="text-right font-mono text-muted-foreground">
                                 {formatComp(emp.annualComp)}
                               </TableCell>
-                              <TableCell className="text-right font-mono">
-                                {formatCurrency(emp.monthlyWage)}
+                              <TableCell className="text-right font-mono text-muted-foreground text-xs">
+                                {formatCurrency(emp.dailyRate)}
+                              </TableCell>
+                              <TableCell className="text-right font-mono text-muted-foreground">
+                                {emp.accrualDays}
                               </TableCell>
                               <TableCell className="text-right font-mono">
-                                {formatCurrency(emp.monthlyTax)}
+                                {formatCurrency(emp.wageAccrual)}
+                              </TableCell>
+                              <TableCell className="text-right font-mono">
+                                {formatCurrency(emp.taxAccrual)}
                               </TableCell>
                               <TableCell className="text-right font-mono font-semibold">
-                                {formatCurrency(emp.monthlyTotal)}
+                                {formatCurrency(emp.totalAccrual)}
                               </TableCell>
                             </TableRow>
                           ))}
                           <TableRow className="font-semibold border-t-2">
-                            <TableCell colSpan={4}>Total</TableCell>
+                            <TableCell colSpan={3}>Total</TableCell>
                             <TableCell className="text-right font-mono">
                               {formatComp(entityTotalComp)}
                             </TableCell>
+                            <TableCell colSpan={2} />
                             <TableCell className="text-right font-mono">
-                              {formatCurrency(entityTotalMonthlyWage)}
+                              {formatCurrency(entityTotalWageAccrual)}
                             </TableCell>
                             <TableCell className="text-right font-mono">
-                              {formatCurrency(entityTotalMonthlyTax)}
+                              {formatCurrency(entityTotalTaxAccrual)}
                             </TableCell>
                             <TableCell className="text-right font-mono">
-                              {formatCurrency(entityTotalMonthlyAll)}
+                              {formatCurrency(entityTotalAccrual)}
                             </TableCell>
                           </TableRow>
                         </TableBody>

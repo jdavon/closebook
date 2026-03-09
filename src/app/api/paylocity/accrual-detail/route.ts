@@ -1,0 +1,170 @@
+import { NextRequest, NextResponse } from "next/server";
+import { getAllCompanyClients } from "@/lib/paylocity";
+import {
+  calculateAccruals,
+  getAnnualComp,
+  type EmployeeAccrualInput,
+} from "@/lib/utils/payroll-calculations";
+import type { Employee } from "@/lib/paylocity/types";
+import { getOperatingEntityForCostCenter } from "@/lib/paylocity/cost-center-config";
+
+/**
+ * GET /api/paylocity/accrual-detail?year=2026&month=3
+ *
+ * Returns per-employee accrual calculations for a given period.
+ * This runs the same calculation engine as sync but doesn't save anything.
+ * Shows exactly how each employee's accrued wages and taxes are computed.
+ */
+
+// In-memory cache keyed by "year-month"
+let cachedResult: {
+  key: string;
+  data: ReturnType<typeof buildResponse>;
+  fetchedAt: number;
+} | null = null;
+const CACHE_TTL_MS = 5 * 60 * 1000;
+
+function buildResponse(
+  accrualResult: ReturnType<typeof calculateAccruals>,
+  allEmployees: { emp: Employee; companyId: string; cc: ReturnType<typeof getOperatingEntityForCostCenter> }[]
+) {
+  // Build per-employee detail with all the info the UI needs
+  const employees = accrualResult.employeeDetails.map((detail) => {
+    const empInfo = allEmployees.find((e) => e.emp.id === detail.employeeId);
+    return {
+      id: detail.employeeId,
+      displayName: detail.employeeName ?? `Employee ${detail.employeeId}`,
+      department: detail.department,
+      costCenterCode: detail.costCenterCode,
+      operatingEntityId: detail.costCenterEntry.operatingEntityId,
+      operatingEntityCode: detail.costCenterEntry.operatingEntityCode,
+      operatingEntityName: detail.costCenterEntry.operatingEntityName,
+      jobTitle: empInfo?.emp.info?.jobTitle ?? "",
+      payType: empInfo?.emp.currentPayRate?.payType ?? "Unknown",
+      annualComp: detail.annualComp,
+      dailyRate: detail.dailyRate,
+      accrualDays: detail.accrualDays,
+      wageAccrual: detail.wageAccrual,
+      taxAccrual: detail.taxAccrual,
+      totalAccrual: Math.round((detail.wageAccrual + detail.taxAccrual) * 100) / 100,
+      taxBreakdown: detail.taxBreakdown,
+    };
+  });
+
+  // Sort by entity then by name
+  employees.sort((a, b) => {
+    if (a.operatingEntityCode !== b.operatingEntityCode) {
+      return a.operatingEntityCode.localeCompare(b.operatingEntityCode);
+    }
+    return (a.displayName ?? "").localeCompare(b.displayName ?? "");
+  });
+
+  return {
+    periodYear: accrualResult.periodYear,
+    periodMonth: accrualResult.periodMonth,
+    periodEndDate: accrualResult.periodEndDate,
+    totalWageAccrual: accrualResult.totalWageAccrual,
+    totalTaxAccrual: accrualResult.totalTaxAccrual,
+    totalAccrual: accrualResult.totalAccrual,
+    employeeCount: accrualResult.employeeCount,
+    employees,
+    warnings: accrualResult.warnings,
+  };
+}
+
+export async function GET(request: NextRequest) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const periodYear = Number(searchParams.get("year") || new Date().getFullYear());
+    const periodMonth = Number(searchParams.get("month") || new Date().getMonth() + 1);
+
+    if (!periodYear || !periodMonth || periodMonth < 1 || periodMonth > 12) {
+      return NextResponse.json(
+        { error: "Invalid year or month parameter" },
+        { status: 400 }
+      );
+    }
+
+    const cacheKey = `${periodYear}-${periodMonth}`;
+
+    // Check cache
+    if (cachedResult && cachedResult.key === cacheKey && Date.now() - cachedResult.fetchedAt < CACHE_TTL_MS) {
+      return NextResponse.json({ ...cachedResult.data, cached: true });
+    }
+
+    // 1. Fetch employees from all companies
+    const clients = getAllCompanyClients();
+    const companyResults = await Promise.all(
+      clients.map(async (client) => {
+        const employees = await client.getEmployees({
+          activeOnly: true,
+          include: ["info", "position", "payrate", "status"],
+        });
+        return { companyId: client.companyId, client, employees };
+      })
+    );
+
+    // 2. Batch-fetch pay statements to get YTD wages + last check date
+    const inputs: EmployeeAccrualInput[] = [];
+    const allEmployees: { emp: Employee; companyId: string; cc: ReturnType<typeof getOperatingEntityForCostCenter> }[] = [];
+    const batchSize = 5;
+
+    for (const { companyId, client, employees } of companyResults) {
+      for (let i = 0; i < employees.length; i += batchSize) {
+        const batch = employees.slice(i, i + batchSize);
+        const results = await Promise.all(
+          batch.map(async (emp) => {
+            // Tag for cost center resolution
+            (emp as Employee & { _companyId?: string })._companyId = companyId;
+
+            const cc = getOperatingEntityForCostCenter(emp.position?.costCenter1, companyId);
+            allEmployees.push({ emp, companyId, cc });
+
+            try {
+              const payStatements = await client.getPayStatementSummary(emp.id, periodYear);
+
+              const sorted = [...payStatements].sort(
+                (a, b) => new Date(b.checkDate).getTime() - new Date(a.checkDate).getTime()
+              );
+
+              const periodEndDate = new Date(periodYear, periodMonth, 0);
+              const relevantStatements = sorted.filter(
+                (ps) => new Date(ps.checkDate) <= periodEndDate
+              );
+
+              return {
+                employee: emp,
+                ytdGrossWages: relevantStatements.reduce((sum, ps) => sum + (ps.grossPay || 0), 0),
+                lastCheckDate: relevantStatements[0]?.checkDate ?? null,
+                lastPayStatement: relevantStatements[0],
+              } satisfies EmployeeAccrualInput;
+            } catch {
+              return {
+                employee: emp,
+                ytdGrossWages: 0,
+                lastCheckDate: null,
+              } satisfies EmployeeAccrualInput;
+            }
+          })
+        );
+        inputs.push(...results);
+      }
+    }
+
+    // 3. Run calculation engine
+    const accrualResult = calculateAccruals(inputs, periodYear, periodMonth);
+
+    // 4. Build response
+    const data = buildResponse(accrualResult, allEmployees);
+
+    // Cache it
+    cachedResult = { key: cacheKey, data, fetchedAt: Date.now() };
+
+    return NextResponse.json({ ...data, cached: false });
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Failed to calculate accrual detail" },
+      { status: 500 }
+    );
+  }
+}
