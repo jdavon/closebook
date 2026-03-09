@@ -38,6 +38,8 @@ interface MonthlyHours {
   regDollars: number;
 }
 
+type DataStatus = "ok" | "summary_failed" | "details_failed" | "both_failed";
+
 interface OTEmployee {
   id: string;
   companyId: string;
@@ -51,6 +53,7 @@ interface OTEmployee {
   costCenterCode: string;
   monthlyHours: Record<string, MonthlyHours>;
   weeklyHours: Record<string, MonthlyHours>;
+  dataStatus: DataStatus;
   totals: {
     otHours: number;
     otDollars: number;
@@ -172,24 +175,43 @@ export async function GET(request: NextRequest) {
             // we still keep the summary (which is the primary data source)
             let summaries: PayStatementSummary[] = [];
             let details: PayStatementDetail[] = [];
+            let summaryFailed = false;
+            let detailsFailed = false;
 
             try {
               summaries = await client.getPayStatementSummary(emp.id, year);
-            } catch {
-              // No summary data for this employee — skip
+            } catch (err) {
+              summaryFailed = true;
+              console.warn(
+                `[OT-Analysis] Summary fetch failed for employee ${emp.id} (company ${companyId}):`,
+                err instanceof Error ? err.message : err
+              );
             }
 
             try {
               details = await client.getPayStatementDetails(emp.id, year);
-            } catch {
-              // Details unavailable — OK, we still have summary for OT/REG
+            } catch (err) {
+              detailsFailed = true;
+              console.warn(
+                `[OT-Analysis] Details fetch failed for employee ${emp.id} (company ${companyId}):`,
+                err instanceof Error ? err.message : err
+              );
             }
 
-            return { emp, summaries, details };
+            const dataStatus: DataStatus =
+              summaryFailed && detailsFailed
+                ? "both_failed"
+                : summaryFailed
+                  ? "summary_failed"
+                  : detailsFailed
+                    ? "details_failed"
+                    : "ok";
+
+            return { emp, summaries, details, dataStatus };
           })
         );
 
-        for (const { emp, summaries, details } of batchResults) {
+        for (const { emp, summaries, details, dataStatus } of batchResults) {
           // Skip employees with no name
           const firstName = emp.info?.firstName ?? "";
           const lastName = emp.info?.lastName ?? emp.lastName ?? "";
@@ -335,6 +357,7 @@ export async function GET(request: NextRequest) {
             costCenterCode: emp.position?.costCenter1 ?? "UNKNOWN",
             monthlyHours,
             weeklyHours,
+            dataStatus,
             totals,
           });
         }
@@ -386,12 +409,33 @@ export async function GET(request: NextRequest) {
       totalEmployees: otEmployees.length,
     };
 
+    // Diagnostics — how many employees had API failures
+    const failedSummary = otEmployees.filter(
+      (e) => e.dataStatus === "summary_failed" || e.dataStatus === "both_failed"
+    ).length;
+    const failedDetails = otEmployees.filter(
+      (e) => e.dataStatus === "details_failed" || e.dataStatus === "both_failed"
+    ).length;
+
+    if (failedSummary > 0 || failedDetails > 0) {
+      console.warn(
+        `[OT-Analysis] Data fetch issues: ${failedSummary} summary failures, ${failedDetails} detail failures out of ${otEmployees.length} employees`
+      );
+    }
+
     const responseData = {
       year,
       employees: otEmployees,
       months,
       weeks,
       kpis,
+      diagnostics: {
+        totalEmployees: otEmployees.length,
+        dataOk: otEmployees.filter((e) => e.dataStatus === "ok").length,
+        summaryFailed: failedSummary,
+        detailsFailed: failedDetails,
+        bothFailed: otEmployees.filter((e) => e.dataStatus === "both_failed").length,
+      },
     };
 
     // Update cache

@@ -35,6 +35,7 @@ import {
   ArrowLeft,
   Loader2,
   TrendingUp,
+  AlertTriangle,
 } from "lucide-react";
 import { formatCurrency, getCurrentPeriod } from "@/lib/utils/dates";
 
@@ -59,6 +60,8 @@ interface MonthlyHours {
   regDollars: number;
 }
 
+type DataStatus = "ok" | "summary_failed" | "details_failed" | "both_failed";
+
 interface OTEmployee {
   id: string;
   companyId: string;
@@ -69,6 +72,7 @@ interface OTEmployee {
   operatingEntityCode: string;
   operatingEntityName: string;
   payType: string;
+  dataStatus?: DataStatus;
   monthlyHours: Record<string, MonthlyHours>;
   weeklyHours: Record<string, MonthlyHours>;
   totals: {
@@ -83,6 +87,14 @@ interface OTEmployee {
     premiumHours: number;
     premiumDollars: number;
   };
+}
+
+interface Diagnostics {
+  totalEmployees: number;
+  dataOk: number;
+  summaryFailed: number;
+  detailsFailed: number;
+  bothFailed: number;
 }
 
 interface AllocationOverride {
@@ -178,6 +190,7 @@ interface EmployeeNode {
   displayName: string;
   payType: string;
   hours: MonthlyHours;
+  dataStatus?: DataStatus;
 }
 
 interface ClassNode {
@@ -204,6 +217,7 @@ export default function OvertimeAnalysisPage() {
   const [allocations, setAllocations] = useState<AllocationOverride[]>([]);
   const [availableMonths, setAvailableMonths] = useState<string[]>([]);
   const [availableWeeks, setAvailableWeeks] = useState<string[]>([]);
+  const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -230,6 +244,7 @@ export default function OvertimeAnalysisPage() {
         setRawEmployees(otData.employees ?? []);
         setAvailableMonths(otData.months ?? []);
         setAvailableWeeks(otData.weeks ?? []);
+        setDiagnostics(otData.diagnostics ?? null);
 
         if (allocRes.ok) {
           const allocData = await allocRes.json();
@@ -339,6 +354,7 @@ export default function OvertimeAnalysisPage() {
             displayName: emp.displayName,
             payType: emp.payType,
             hours: getEmployeePeriodHours(emp, selectedPeriod, granularity),
+            dataStatus: emp.dataStatus,
           }))
           .sort((a, b) => a.displayName.localeCompare(b.displayName));
 
@@ -627,6 +643,25 @@ export default function OvertimeAnalysisPage() {
             </Card>
           </div>
 
+          {/* Diagnostics Warning — show if any API calls failed */}
+          {diagnostics && (diagnostics.summaryFailed > 0 || diagnostics.detailsFailed > 0) && (
+            <div className="flex items-start gap-3 p-3 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-200 text-sm">
+              <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+              <div>
+                <p className="font-medium">Some pay data could not be loaded</p>
+                <p className="text-amber-700 dark:text-amber-300 mt-0.5">
+                  {diagnostics.summaryFailed > 0 && (
+                    <span>{diagnostics.summaryFailed} employee(s) had summary data failures. </span>
+                  )}
+                  {diagnostics.detailsFailed > 0 && (
+                    <span>{diagnostics.detailsFailed} employee(s) had detail data failures. </span>
+                  )}
+                  Affected employees are marked with a ⚠ icon. Their OT data may be incomplete.
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* Department > Class > Employee Table */}
           <Card>
             <CardHeader>
@@ -831,21 +866,37 @@ function ClassSection({
 
       {/* Employee Rows */}
       {expanded &&
-        cls.employees.map((emp) => (
-          <TableRow key={`${clsKey}::${emp.id}`} className="text-sm">
-            <TableCell>
-              <div className="flex items-center gap-2 pl-14">
-                <span className="text-muted-foreground">
-                  {emp.displayName}
-                </span>
-                <span className="text-xs text-muted-foreground/60">
-                  {emp.payType}
-                </span>
-              </div>
-            </TableCell>
-            <HoursCells h={emp.hours} muted />
-          </TableRow>
-        ))}
+        cls.employees.map((emp) => {
+          const hasFetchError = emp.dataStatus && emp.dataStatus !== "ok";
+          return (
+            <TableRow key={`${clsKey}::${emp.id}`} className="text-sm">
+              <TableCell>
+                <div className="flex items-center gap-2 pl-14">
+                  {hasFetchError && (
+                    <span
+                      title={
+                        emp.dataStatus === "both_failed"
+                          ? "Both summary & detail data failed to load"
+                          : emp.dataStatus === "summary_failed"
+                            ? "Summary data (OT/REG hours) failed to load"
+                            : "Detail data (DT/Meal) failed to load"
+                      }
+                    >
+                      <AlertTriangle className="h-3.5 w-3.5 text-amber-500 shrink-0" />
+                    </span>
+                  )}
+                  <span className="text-muted-foreground">
+                    {emp.displayName}
+                  </span>
+                  <span className="text-xs text-muted-foreground/60">
+                    {emp.payType}
+                  </span>
+                </div>
+              </TableCell>
+              <HoursCells h={emp.hours} muted />
+            </TableRow>
+          );
+        })}
     </>
   );
 }
