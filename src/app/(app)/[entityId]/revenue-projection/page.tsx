@@ -87,6 +87,7 @@ export default function RevenueProjectionPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [dateMode, setDateMode] = useState<DateMode>("invoice_date");
+  const [invoiceMonthFilter, setInvoiceMonthFilter] = useState<string>("all");
 
   const fetchData = async (mode?: DateMode) => {
     const activeMode = mode ?? dateMode;
@@ -120,6 +121,30 @@ export default function RevenueProjectionPage() {
     fetchData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entityId]);
+
+  // Derive unique months from invoices for filter dropdown
+  const invoiceMonths = useMemo(() => {
+    if (!data) return [];
+    const monthSet = new Map<string, string>();
+    for (const inv of data.closedInvoices) {
+      if (inv.month && !monthSet.has(inv.month)) {
+        const label = inv.month.replace(/^(\d{4})-(\d{2})$/, (_, y, m) => {
+          const names = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+          return `${names[Number(m) - 1]} ${y}`;
+        });
+        monthSet.set(inv.month, label);
+      }
+    }
+    return Array.from(monthSet.entries())
+      .sort((a, b) => b[0].localeCompare(a[0])) // newest first
+      .map(([key, label]) => ({ key, label }));
+  }, [data]);
+
+  const filteredInvoices = useMemo(() => {
+    if (!data) return [];
+    if (invoiceMonthFilter === "all") return data.closedInvoices;
+    return data.closedInvoices.filter((inv) => inv.month === invoiceMonthFilter);
+  }, [data, invoiceMonthFilter]);
 
 
   if (loading && !data) {
@@ -418,16 +443,47 @@ export default function RevenueProjectionPage() {
         <TabsContent value="invoices">
           <Card>
             <CardHeader>
-              <CardTitle>Closed Invoices</CardTitle>
-              <CardDescription>
-                Revenue grouped by{" "}
-                {dateMode === "invoice_date"
-                  ? "invoice date"
-                  : "rental billing date"}
-              </CardDescription>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle>Closed Invoices</CardTitle>
+                  <CardDescription>
+                    Revenue grouped by{" "}
+                    {dateMode === "invoice_date"
+                      ? "invoice date"
+                      : "rental billing date"}
+                  </CardDescription>
+                </div>
+                {invoiceMonths.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <button
+                      onClick={() => setInvoiceMonthFilter("all")}
+                      className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                        invoiceMonthFilter === "all"
+                          ? "bg-primary text-primary-foreground"
+                          : "bg-muted text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      All
+                    </button>
+                    {invoiceMonths.map(({ key, label }) => (
+                      <button
+                        key={key}
+                        onClick={() => setInvoiceMonthFilter(key)}
+                        className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                          invoiceMonthFilter === key
+                            ? "bg-primary text-primary-foreground"
+                            : "bg-muted text-muted-foreground hover:text-foreground"
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
             </CardHeader>
             <CardContent>
-              {data.closedInvoices.length === 0 ? (
+              {filteredInvoices.length === 0 ? (
                 <p className="text-muted-foreground py-8 text-center text-sm">
                   No closed invoices found.
                 </p>
@@ -455,7 +511,7 @@ export default function RevenueProjectionPage() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {data.closedInvoices.map((inv) => (
+                      {filteredInvoices.map((inv) => (
                         <TableRow key={inv.invoiceId}>
                           <TableCell className="font-medium">
                             {inv.invoiceNumber}
@@ -517,11 +573,11 @@ export default function RevenueProjectionPage() {
                       ))}
                       <TableRow className="border-t-2 font-semibold">
                         <TableCell colSpan={6}>
-                          Total ({data.closedInvoices.length} invoices)
+                          Total ({filteredInvoices.length} invoices)
                         </TableCell>
                         <TableCell className="text-right tabular-nums">
                           {formatCurrency(
-                            data.closedInvoices.reduce(
+                            filteredInvoices.reduce(
                               (s, i) => s + i.subTotal,
                               0,
                             ),
@@ -529,7 +585,7 @@ export default function RevenueProjectionPage() {
                         </TableCell>
                         <TableCell className="text-right tabular-nums">
                           {formatCurrency(
-                            data.closedInvoices.reduce(
+                            filteredInvoices.reduce(
                               (s, i) => s + i.tax,
                               0,
                             ),
@@ -537,7 +593,7 @@ export default function RevenueProjectionPage() {
                         </TableCell>
                         <TableCell className="text-right tabular-nums">
                           {formatCurrency(
-                            data.closedInvoices.reduce(
+                            filteredInvoices.reduce(
                               (s, i) => s + i.grossTotal,
                               0,
                             ),
