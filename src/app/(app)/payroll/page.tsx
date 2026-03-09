@@ -409,7 +409,7 @@ export default function OrgPayrollPage() {
       {/* Entity Summary Cards */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
         {entitySummaries.map((entity) => (
-          <Link key={entity.entityCode} href={`/${entity.entityId}/payroll`}>
+          <Link key={entity.entityCode} href={`/${entity.entityId}/employees`}>
             <Card className="transition-colors hover:border-primary/50">
               <CardHeader className="pb-2">
                 <div className="flex items-center justify-between">

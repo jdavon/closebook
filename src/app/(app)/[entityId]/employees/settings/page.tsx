@@ -51,7 +51,7 @@ interface PayrollAccrualGLMapping {
   pto_offset_account_id: string | null;
 }
 
-export default function PayrollSettingsPage() {
+export default function EmployeeSettingsPage() {
   const params = useParams();
   const entityId = params.entityId as string;
   const router = useRouter();
@@ -204,7 +204,6 @@ export default function PayrollSettingsPage() {
   async function handleSaveGL() {
     setSavingGL(true);
 
-    // Update all existing accruals with the GL mappings by type
     const updates = [
       {
         type: "wages",
@@ -248,14 +247,14 @@ export default function PayrollSettingsPage() {
         <Button
           variant="ghost"
           size="sm"
-          onClick={() => router.push(`/${entityId}/payroll`)}
+          onClick={() => router.push(`/${entityId}/employees`)}
         >
           <ArrowLeft className="mr-2 h-4 w-4" />
           Back
         </Button>
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">
-            Payroll Settings
+            Employee Settings
           </h1>
           <p className="text-muted-foreground">
             Manage Paylocity connection and GL account mappings

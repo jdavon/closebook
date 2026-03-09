@@ -54,7 +54,7 @@ export async function POST(request: NextRequest) {
       clients.map(async (client) => {
         const employees = await client.getEmployees({
           activeOnly: true,
-          include: ["info", "position", "payrate", "status"],
+          include: ["info", "position", "payrate"],
         });
         return { companyId: client.companyId, client, employees };
       })

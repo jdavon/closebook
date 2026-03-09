@@ -68,23 +68,6 @@ interface PayrollAccrual {
   notes: string | null;
 }
 
-interface MappedEmployee {
-  id: string;
-  displayName: string;
-  firstName: string;
-  lastName: string;
-  jobTitle: string;
-  payType: string;
-  annualComp: number;
-  baseRate: number;
-  hireDate: string | null;
-  costCenterCode: string;
-  department: string;
-  operatingEntityId: string;
-  operatingEntityCode: string;
-  operatingEntityName: string;
-}
-
 interface AccrualEmployee {
   id: string;
   displayName: string;
@@ -143,7 +126,7 @@ function formatComp(value: number): string {
 
 // --- Page ---
 
-export default function PayrollPage() {
+export default function PayrollAccrualsPage() {
   const params = useParams();
   const entityId = params.entityId as string;
   const supabase = createClient();
@@ -321,13 +304,13 @@ export default function PayrollPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Payroll</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Payroll Accruals</h1>
           <p className="text-muted-foreground">
-            Accruals, employees, and payroll cost allocation
+            Accrued costs, employee calculations, and payroll cost allocation
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Link href={`/${entityId}/payroll/settings`}>
+          <Link href={`/${entityId}/employees/settings`}>
             <Button variant="outline" size="sm">
               <Settings className="mr-2 h-4 w-4" />
               Settings
@@ -341,11 +324,11 @@ export default function PayrollPage() {
         <TabsList>
           <TabsTrigger value="accruals">Accruals</TabsTrigger>
           <TabsTrigger value="employees" onClick={loadEmployees}>
-            Employees
+            Employee Detail
           </TabsTrigger>
         </TabsList>
 
-        {/* ═══ Accruals Tab ═══ */}
+        {/* Accruals Tab */}
         <TabsContent value="accruals" className="space-y-4">
           {/* Period Selector + Actions */}
           <div className="flex items-center gap-4">
@@ -588,7 +571,7 @@ export default function PayrollPage() {
           </Card>
         </TabsContent>
 
-        {/* ═══ Employees Tab ═══ */}
+        {/* Employee Detail Tab */}
         <TabsContent value="employees" className="space-y-4">
           {empLoading ? (
             <div className="flex items-center justify-center py-12">
