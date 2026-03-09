@@ -351,6 +351,7 @@ export default function EmployeeRosterPage() {
         const q = search.toLowerCase();
         return (
           emp.displayName.toLowerCase().includes(q) ||
+          emp.id.toLowerCase().includes(q) ||
           (emp.jobTitle ?? "").toLowerCase().includes(q) ||
           emp.effectiveDepartment.toLowerCase().includes(q) ||
           emp.effectiveEntityName.toLowerCase().includes(q) ||
@@ -620,6 +621,7 @@ export default function EmployeeRosterPage() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Name</TableHead>
+                    <TableHead>Employee ID</TableHead>
                     <TableHead>Job Title</TableHead>
                     <TableHead>
                       <span className="inline-flex items-center gap-1">
@@ -660,6 +662,9 @@ export default function EmployeeRosterPage() {
                     <TableRow key={`${emp.companyId}-${emp.id}`}>
                       <TableCell className="font-medium whitespace-nowrap">
                         {emp.displayName}
+                      </TableCell>
+                      <TableCell className="font-mono text-xs text-muted-foreground">
+                        {emp.id}
                       </TableCell>
                       <TableCell className="max-w-[180px] truncate">
                         {emp.jobTitle || "---"}
@@ -711,7 +716,7 @@ export default function EmployeeRosterPage() {
                   ))}
                   {filteredEmployees.length === 0 && (
                     <TableRow>
-                      <TableCell colSpan={10} className="text-center text-muted-foreground py-8">
+                      <TableCell colSpan={11} className="text-center text-muted-foreground py-8">
                         No employees match the current filters.
                       </TableCell>
                     </TableRow>
