@@ -43,12 +43,14 @@ import {
   Loader2,
   Settings,
   Info,
+  Landmark,
 } from "lucide-react";
 
 // --- Types ---
 
 interface MappedEmployee {
   id: string;
+  companyId: string;
   displayName: string;
   firstName: string;
   lastName: string;
@@ -143,12 +145,20 @@ export default function EmployeeRosterPage() {
     });
   }, [entityEmployees, deptFilter, payTypeFilter, search]);
 
-  // KPIs
+  // KPIs — entity-level
   const totalAnnualComp = entityEmployees.reduce((s, e) => s + e.annualComp, 0);
   const totalERTaxes = entityEmployees.reduce((s, e) => s + e.erTaxes, 0);
   const totalFullComp = entityEmployees.reduce((s, e) => s + e.totalComp, 0);
   const avgComp = entityEmployees.length > 0 ? totalFullComp / entityEmployees.length : 0;
   const deptCount = uniqueDepts.length;
+
+  // KPI — Silverco total payroll (company 132427, all entities)
+  const silvercoEmployees = useMemo(
+    () => employees.filter((e) => e.companyId === "132427"),
+    [employees]
+  );
+  const silvercoTotalComp = silvercoEmployees.reduce((s, e) => s + e.totalComp, 0);
+  const silvercoHeadcount = silvercoEmployees.length;
 
   if (loading) {
     return (
@@ -191,7 +201,7 @@ export default function EmployeeRosterPage() {
         </div>
 
         {/* KPI Cards */}
-        <div className="grid gap-4 md:grid-cols-4">
+        <div className="grid gap-4 md:grid-cols-5">
           <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
               <CardTitle className="text-sm font-medium">Headcount</CardTitle>
@@ -235,6 +245,19 @@ export default function EmployeeRosterPage() {
             <CardContent>
               <div className="text-2xl font-bold">{deptCount}</div>
               <p className="text-xs text-muted-foreground">Active departments</p>
+            </CardContent>
+          </Card>
+
+          <Card className="border-primary/20 bg-primary/5">
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Silverco Payroll</CardTitle>
+              <Landmark className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{formatCompact(silvercoTotalComp)}</div>
+              <p className="text-xs text-muted-foreground">
+                {silvercoHeadcount} employees across all entities
+              </p>
             </CardContent>
           </Card>
         </div>
