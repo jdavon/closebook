@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAllCompanyClients } from "@/lib/paylocity";
 import { getOperatingEntityForCostCenter } from "@/lib/paylocity/cost-center-config";
-import type { PayStatementDetail } from "@/lib/paylocity/types";
+import type {
+  PayStatementSummary,
+  PayStatementDetail,
+} from "@/lib/paylocity/types";
 
 /**
  * GET /api/paylocity/ot-analysis?year=2026
@@ -9,15 +12,16 @@ import type { PayStatementDetail } from "@/lib/paylocity/types";
  * Returns overtime analysis for all active employees across all configured
  * Paylocity companies, broken down by month with department/entity mapping.
  *
- * Data source: PayStatementDetail (WebLink API) — individual line items
- * with detCode = OT (overtime 1.5x), DT (double time 2x), MEAL (meal premiums).
+ * HYBRID DATA SOURCES:
+ *   - PayStatementSummary (WebLink API) — trusted aggregate `overtimeHours`
+ *     and `overtimeDollars` per pay check (used for OT + REG totals).
+ *   - PayStatementDetail (WebLink API) — individual line items filtered for
+ *     detCode = DT (double time 2x) and MEAL (meal premiums) only.
  *
- * Also fetches REG (regular hours) for calculating OT % of total hours.
+ * The summary's `overtimeHours` is Paylocity's authoritative OT aggregate
+ * per check. Using it avoids undercounting that occurs when relying solely
+ * on detail-level detCode=OT line items.
  */
-
-// detCodes to track (earning line items from pay statement details)
-const PREMIUM_CODES = new Set(["OT", "DT", "MEAL"]);
-const REG_CODE = "REG";
 
 interface MonthlyHours {
   otHours: number;
@@ -54,6 +58,9 @@ interface OTEmployee {
     premiumDollars: number;
   };
 }
+
+// detCodes to extract from detail line items (supplemental to summary)
+const DETAIL_CODES = new Set(["DT", "MEAL"]);
 
 // In-memory cache (5 min TTL)
 let cachedData: { data: unknown; year: number; fetchedAt: number } | null =
@@ -98,26 +105,31 @@ export async function GET(request: NextRequest) {
       client,
       employees: rawEmployees,
     } of companyResults) {
-      // Fetch pay statement details in batches of 5
+      // Fetch pay statement summary + details in batches of 5
       const batchSize = 5;
 
       for (let i = 0; i < rawEmployees.length; i += batchSize) {
         const batch = rawEmployees.slice(i, i + batchSize);
-        const detailResults = await Promise.all(
+        const batchResults = await Promise.all(
           batch.map(async (emp) => {
             try {
-              const details = await client.getPayStatementDetails(
-                emp.id,
-                year
-              );
-              return { emp, details };
+              // Fetch BOTH summary and details concurrently per employee
+              const [summaries, details] = await Promise.all([
+                client.getPayStatementSummary(emp.id, year),
+                client.getPayStatementDetails(emp.id, year),
+              ]);
+              return { emp, summaries, details };
             } catch {
-              return { emp, details: [] as PayStatementDetail[] };
+              return {
+                emp,
+                summaries: [] as PayStatementSummary[],
+                details: [] as PayStatementDetail[],
+              };
             }
           })
         );
 
-        for (const { emp, details } of detailResults) {
+        for (const { emp, summaries, details } of batchResults) {
           // Skip employees with no name
           const firstName = emp.info?.firstName ?? "";
           const lastName = emp.info?.lastName ?? emp.lastName ?? "";
@@ -131,7 +143,7 @@ export async function GET(request: NextRequest) {
             companyId
           );
 
-          // Aggregate by month from detail line items
+          // ── Aggregate from SUMMARY (OT + REG) ──
           const monthlyHours: Record<string, MonthlyHours> = {};
           const totals = {
             otHours: 0,
@@ -146,16 +158,51 @@ export async function GET(request: NextRequest) {
             premiumDollars: 0,
           };
 
-          for (const d of details) {
-            const code = d.detCode?.toUpperCase();
-            if (!code) continue;
-
-            // Only process REG and premium codes
-            if (!PREMIUM_CODES.has(code) && code !== REG_CODE) continue;
-
-            const month = d.checkDate?.slice(0, 7); // "YYYY-MM"
+          for (const ps of summaries) {
+            const month = ps.checkDate?.slice(0, 7); // "YYYY-MM"
             if (!month) continue;
 
+            if (!monthlyHours[month]) {
+              monthlyHours[month] = {
+                otHours: 0,
+                otDollars: 0,
+                dtHours: 0,
+                dtDollars: 0,
+                mealHours: 0,
+                mealDollars: 0,
+                regHours: 0,
+                regDollars: 0,
+              };
+            }
+
+            const m = monthlyHours[month];
+
+            // OT from summary (trusted aggregate)
+            const otH = ps.overtimeHours || 0;
+            const otD = ps.overtimeDollars || 0;
+            m.otHours += otH;
+            m.otDollars += otD;
+            totals.otHours += otH;
+            totals.otDollars += otD;
+
+            // REG from summary
+            const regH = ps.regularHours || 0;
+            const regD = ps.regularDollars || 0;
+            m.regHours += regH;
+            m.regDollars += regD;
+            totals.regHours += regH;
+            totals.regDollars += regD;
+          }
+
+          // ── Aggregate from DETAILS (DT + MEAL only) ──
+          for (const d of details) {
+            const code = d.detCode?.toUpperCase();
+            if (!code || !DETAIL_CODES.has(code)) continue;
+
+            const month = d.checkDate?.slice(0, 7);
+            if (!month) continue;
+
+            // Ensure month bucket exists (may have been created by summary above)
             if (!monthlyHours[month]) {
               monthlyHours[month] = {
                 otHours: 0,
@@ -173,47 +220,30 @@ export async function GET(request: NextRequest) {
             const amt = d.amount || 0;
             const m = monthlyHours[month];
 
-            switch (code) {
-              case "OT":
-                m.otHours += hrs;
-                m.otDollars += amt;
-                totals.otHours += hrs;
-                totals.otDollars += amt;
-                totals.premiumHours += hrs;
-                totals.premiumDollars += amt;
-                break;
-              case "DT":
-                m.dtHours += hrs;
-                m.dtDollars += amt;
-                totals.dtHours += hrs;
-                totals.dtDollars += amt;
-                totals.premiumHours += hrs;
-                totals.premiumDollars += amt;
-                break;
-              case "MEAL":
-                m.mealHours += hrs;
-                m.mealDollars += amt;
-                totals.mealHours += hrs;
-                totals.mealDollars += amt;
-                totals.premiumHours += hrs;
-                totals.premiumDollars += amt;
-                break;
-              case "REG":
-                m.regHours += hrs;
-                m.regDollars += amt;
-                totals.regHours += hrs;
-                totals.regDollars += amt;
-                break;
+            if (code === "DT") {
+              m.dtHours += hrs;
+              m.dtDollars += amt;
+              totals.dtHours += hrs;
+              totals.dtDollars += amt;
+            } else if (code === "MEAL") {
+              m.mealHours += hrs;
+              m.mealDollars += amt;
+              totals.mealHours += hrs;
+              totals.mealDollars += amt;
             }
           }
+
+          // Premium = OT + DT + MEAL combined
+          totals.premiumHours = totals.otHours + totals.dtHours + totals.mealHours;
+          totals.premiumDollars = totals.otDollars + totals.dtDollars + totals.mealDollars;
 
           // Round totals
           for (const key of Object.keys(totals) as (keyof typeof totals)[]) {
             totals[key] = round2(totals[key]);
           }
 
-          // Only include employees who have any detail data at all
-          if (details.length > 0) {
+          // Only include employees who have any pay data
+          if (summaries.length > 0) {
             otEmployees.push({
               id: emp.id,
               companyId,
