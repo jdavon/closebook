@@ -266,7 +266,7 @@ export function processRevenueData(
   for (const inv of closedInvoices) {
     const mk = getMonthKey(getInvoiceGroupDate(inv));
     if (mk && monthMap.has(mk)) {
-      monthMap.get(mk)!.closed += toNum(inv.InvoiceListTotal);
+      monthMap.get(mk)!.closed += toNum(inv.InvoiceSubTotal);
     }
   }
 
@@ -274,7 +274,7 @@ export function processRevenueData(
   for (const inv of pendingInvoices) {
     const mk = getMonthKey(getInvoiceGroupDate(inv));
     if (mk && monthMap.has(mk)) {
-      monthMap.get(mk)!.pending += toNum(inv.InvoiceListTotal);
+      monthMap.get(mk)!.pending += toNum(inv.InvoiceSubTotal);
     }
   }
 
@@ -321,7 +321,7 @@ export function processRevenueData(
       const d = new Date(getInvoiceGroupDate(inv));
       return !isNaN(d.getTime()) && d.getFullYear() === currentYear;
     })
-    .reduce((sum, inv) => sum + toNum(inv.InvoiceListTotal), 0);
+    .reduce((sum, inv) => sum + toNum(inv.InvoiceSubTotal), 0);
 
   const currentMonthBucket = monthMap.get(currentMonthKey);
   const currentMonthActual = currentMonthBucket?.closed ?? 0;
@@ -353,7 +353,7 @@ export function processRevenueData(
     const type = classifyEquipmentType(
       inv.OrderDescription || inv.InvoiceDescription || "",
     );
-    equipTotals[type] = (equipTotals[type] || 0) + toNum(inv.InvoiceListTotal);
+    equipTotals[type] = (equipTotals[type] || 0) + toNum(inv.InvoiceSubTotal);
   }
 
   const equipTotal = Object.values(equipTotals).reduce((a, b) => a + b, 0);
@@ -396,7 +396,7 @@ export function processRevenueData(
         deal: inv.Deal || "",
         orderNumber: inv.OrderNumber || "",
         orderDescription: inv.OrderDescription || inv.InvoiceDescription || "",
-        listTotal: toNum(inv.InvoiceListTotal),
+        listTotal: toNum(inv.InvoiceSubTotal),
         grossTotal: toNum(inv.InvoiceGrossTotal),
         subTotal: toNum(inv.InvoiceSubTotal),
         tax: toNum(inv.InvoiceTax),

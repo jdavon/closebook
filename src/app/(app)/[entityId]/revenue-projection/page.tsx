@@ -438,16 +438,18 @@ export default function RevenueProjectionPage() {
                       <TableRow>
                         <TableHead>Invoice #</TableHead>
                         <TableHead>Customer</TableHead>
-                        <TableHead>Deal</TableHead>
                         <TableHead>Order</TableHead>
-                        <TableHead>Billing Start</TableHead>
-                        <TableHead>Billing End</TableHead>
-                        <TableHead>Revenue Month</TableHead>
+                        <TableHead>Invoice Date</TableHead>
+                        <TableHead>Billing Period</TableHead>
+                        <TableHead>Month</TableHead>
                         <TableHead className="text-right">
-                          List Total
+                          Revenue
                         </TableHead>
                         <TableHead className="text-right">
-                          Gross Total
+                          Tax
+                        </TableHead>
+                        <TableHead className="text-right">
+                          Total
                         </TableHead>
                         <TableHead>Type</TableHead>
                       </TableRow>
@@ -459,17 +461,16 @@ export default function RevenueProjectionPage() {
                             {inv.invoiceNumber}
                           </TableCell>
                           <TableCell>{inv.customer}</TableCell>
-                          <TableCell className="max-w-[150px] truncate">
-                            {inv.deal}
-                          </TableCell>
                           <TableCell className="max-w-[180px] truncate">
                             {inv.orderDescription || inv.orderNumber}
                           </TableCell>
                           <TableCell className="text-muted-foreground whitespace-nowrap">
-                            {formatDate(inv.billingStartDate)}
+                            {formatDate(inv.invoiceDate)}
                           </TableCell>
-                          <TableCell className="text-muted-foreground whitespace-nowrap">
-                            {formatDate(inv.billingEndDate)}
+                          <TableCell className="text-muted-foreground whitespace-nowrap text-xs">
+                            {inv.billingStartDate || inv.billingEndDate
+                              ? `${formatDate(inv.billingStartDate)} – ${formatDate(inv.billingEndDate)}`
+                              : "—"}
                           </TableCell>
                           <TableCell>
                             <Badge variant="outline">
@@ -498,7 +499,10 @@ export default function RevenueProjectionPage() {
                             </Badge>
                           </TableCell>
                           <TableCell className="text-right font-medium tabular-nums">
-                            {formatCurrency(inv.listTotal)}
+                            {formatCurrency(inv.subTotal)}
+                          </TableCell>
+                          <TableCell className="text-muted-foreground text-right tabular-nums">
+                            {formatCurrency(inv.tax)}
                           </TableCell>
                           <TableCell className="text-right tabular-nums">
                             {formatCurrency(inv.grossTotal)}
@@ -512,13 +516,21 @@ export default function RevenueProjectionPage() {
                         </TableRow>
                       ))}
                       <TableRow className="border-t-2 font-semibold">
-                        <TableCell colSpan={7}>
+                        <TableCell colSpan={6}>
                           Total ({data.closedInvoices.length} invoices)
                         </TableCell>
                         <TableCell className="text-right tabular-nums">
                           {formatCurrency(
                             data.closedInvoices.reduce(
-                              (s, i) => s + i.listTotal,
+                              (s, i) => s + i.subTotal,
+                              0,
+                            ),
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {formatCurrency(
+                            data.closedInvoices.reduce(
+                              (s, i) => s + i.tax,
                               0,
                             ),
                           )}
