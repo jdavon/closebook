@@ -34,6 +34,7 @@ import {
   EQUIPMENT_TYPE_LABELS,
   type RevenueProjectionResponse,
   type ClosedInvoice,
+  type DateMode,
 } from "@/lib/utils/revenue-projection";
 import {
   ComposedChart,
@@ -85,15 +86,17 @@ export default function RevenueProjectionPage() {
   const [data, setData] = useState<RevenueProjectionResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [dateMode, setDateMode] = useState<DateMode>("invoice_date");
 
-  const fetchData = async () => {
+  const fetchData = async (mode?: DateMode) => {
+    const activeMode = mode ?? dateMode;
     setLoading(true);
     setError(null);
     try {
       const res = await fetch("/api/revenue-projection", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ entityId }),
+        body: JSON.stringify({ entityId, dateMode: activeMode }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -106,6 +109,11 @@ export default function RevenueProjectionPage() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleDateModeChange = (mode: DateMode) => {
+    setDateMode(mode);
+    fetchData(mode);
   };
 
   useEffect(() => {
@@ -154,7 +162,7 @@ export default function RevenueProjectionPage() {
             <h1 className="text-2xl font-bold">Revenue Projection</h1>
             <p className="text-destructive text-sm">{error}</p>
           </div>
-          <Button onClick={fetchData} variant="outline" size="sm">
+          <Button onClick={() => fetchData()} variant="outline" size="sm">
             <RefreshCw className="mr-2 h-4 w-4" />
             Retry
           </Button>
@@ -175,19 +183,43 @@ export default function RevenueProjectionPage() {
             Versatile — RentalWorks invoices, orders & quotes
           </p>
         </div>
-        <Button
-          onClick={fetchData}
-          variant="outline"
-          size="sm"
-          disabled={loading}
-        >
-          {loading ? (
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-          ) : (
-            <RefreshCw className="mr-2 h-4 w-4" />
-          )}
-          Refresh
-        </Button>
+        <div className="flex items-center gap-3">
+          <div className="bg-muted inline-flex items-center rounded-lg p-1">
+            <button
+              onClick={() => handleDateModeChange("invoice_date")}
+              className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                dateMode === "invoice_date"
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              Invoice Date
+            </button>
+            <button
+              onClick={() => handleDateModeChange("billing_date")}
+              className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                dateMode === "billing_date"
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              Billing Date
+            </button>
+          </div>
+          <Button
+            onClick={() => fetchData()}
+            variant="outline"
+            size="sm"
+            disabled={loading}
+          >
+            {loading ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCw className="mr-2 h-4 w-4" />
+            )}
+            Refresh
+          </Button>
+        </div>
       </div>
 
       {/* KPI Cards */}
@@ -388,7 +420,10 @@ export default function RevenueProjectionPage() {
             <CardHeader>
               <CardTitle>Closed Invoices</CardTitle>
               <CardDescription>
-                Revenue assigned by rental billing date (not invoice date)
+                Revenue grouped by{" "}
+                {dateMode === "invoice_date"
+                  ? "invoice date"
+                  : "rental billing date"}
               </CardDescription>
             </CardHeader>
             <CardContent>

@@ -109,6 +109,8 @@ export interface EquipmentBreakdown {
   percentage: number;
 }
 
+export type DateMode = "invoice_date" | "billing_date";
+
 export interface RevenueProjectionResponse {
   ytdRevenue: number;
   currentMonthActual: number;
@@ -121,6 +123,7 @@ export interface RevenueProjectionResponse {
   closedInvoices: ClosedInvoice[];
   equipmentBreakdown: EquipmentBreakdown[];
   dataAsOf: string;
+  dateMode: DateMode;
 }
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -200,10 +203,17 @@ export function processRevenueData(
   rawInvoices: RWInvoiceRow[],
   rawOrders: RWOrderRow[],
   rawQuotes: RWQuoteRow[],
+  dateMode: DateMode = "invoice_date",
 ): RevenueProjectionResponse {
   const now = new Date();
   const currentMonthKey = getMonthKey(now.toISOString());
   const currentYear = now.getFullYear();
+
+  // Date selector: which date to use for grouping invoices into months
+  const getInvoiceGroupDate = (inv: RWInvoiceRow) =>
+    dateMode === "billing_date"
+      ? inv.BillingEndDate || inv.BillingStartDate || inv.InvoiceDate
+      : inv.InvoiceDate;
 
   // --- Filter to Versatile warehouse ---
 
@@ -252,17 +262,17 @@ export function processRevenueData(
     monthMap.set(mk, { closed: 0, pending: 0, pipeline: 0 });
   }
 
-  // Aggregate closed invoices by rental date (BillingEndDate preferred, then BillingStartDate, then InvoiceDate)
+  // Aggregate closed invoices by the selected date mode
   for (const inv of closedInvoices) {
-    const mk = getMonthKey(inv.BillingEndDate || inv.BillingStartDate || inv.InvoiceDate);
+    const mk = getMonthKey(getInvoiceGroupDate(inv));
     if (mk && monthMap.has(mk)) {
       monthMap.get(mk)!.closed += toNum(inv.InvoiceListTotal);
     }
   }
 
-  // Aggregate pending invoices by billing date when available
+  // Aggregate pending invoices by the selected date mode
   for (const inv of pendingInvoices) {
-    const mk = getMonthKey(inv.BillingEndDate || inv.BillingStartDate || inv.InvoiceDate);
+    const mk = getMonthKey(getInvoiceGroupDate(inv));
     if (mk && monthMap.has(mk)) {
       monthMap.get(mk)!.pending += toNum(inv.InvoiceListTotal);
     }
@@ -305,13 +315,10 @@ export function processRevenueData(
     };
   });
 
-  // --- KPIs (based on rental/billing date) ---
-  const getRentalDate = (inv: RWInvoiceRow) =>
-    inv.BillingEndDate || inv.BillingStartDate || inv.InvoiceDate;
-
+  // --- KPIs ---
   const ytdRevenue = closedInvoices
     .filter((inv) => {
-      const d = new Date(getRentalDate(inv));
+      const d = new Date(getInvoiceGroupDate(inv));
       return !isNaN(d.getTime()) && d.getFullYear() === currentYear;
     })
     .reduce((sum, inv) => sum + toNum(inv.InvoiceListTotal), 0);
@@ -338,10 +345,10 @@ export function processRevenueData(
     0,
   );
 
-  // --- Equipment breakdown (YTD closed invoices, by rental date) ---
+  // --- Equipment breakdown (YTD closed invoices) ---
   const equipTotals: Record<string, number> = {};
   for (const inv of closedInvoices) {
-    const d = new Date(getRentalDate(inv));
+    const d = new Date(getInvoiceGroupDate(inv));
     if (isNaN(d.getTime()) || d.getFullYear() !== currentYear) continue;
     const type = classifyEquipmentType(
       inv.OrderDescription || inv.InvoiceDescription || "",
@@ -375,10 +382,10 @@ export function processRevenueData(
     }))
     .sort((a, b) => b.total - a.total);
 
-  // --- Closed invoices table (sorted by rental date descending) ---
+  // --- Closed invoices table ---
   const closedInvoiceRows: ClosedInvoice[] = closedInvoices
     .map((inv) => {
-      const rentalDate = getRentalDate(inv);
+      const groupDate = getInvoiceGroupDate(inv);
       return {
         invoiceId: inv.InvoiceId,
         invoiceNumber: inv.InvoiceNumber,
@@ -396,14 +403,12 @@ export function processRevenueData(
         equipmentType: classifyEquipmentType(
           inv.OrderDescription || inv.InvoiceDescription || "",
         ),
-        month: getMonthKey(rentalDate),
+        month: getMonthKey(groupDate),
       };
     })
     .sort((a, b) => {
-      // Sort by billing end date descending (most recent first)
-      const dateA = a.billingEndDate || a.invoiceDate;
-      const dateB = b.billingEndDate || b.invoiceDate;
-      return dateB.localeCompare(dateA);
+      // Sort by invoice date descending (most recent first)
+      return b.invoiceDate.localeCompare(a.invoiceDate);
     });
 
   const pipelineQuotes: PipelineQuote[] = activeQuotes
@@ -431,5 +436,6 @@ export function processRevenueData(
     closedInvoices: closedInvoiceRows,
     equipmentBreakdown,
     dataAsOf: new Date().toISOString(),
+    dateMode,
   };
 }

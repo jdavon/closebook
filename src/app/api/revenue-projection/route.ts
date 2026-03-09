@@ -4,6 +4,7 @@ import {
   type RWInvoiceRow,
   type RWOrderRow,
   type RWQuoteRow,
+  type DateMode,
 } from "@/lib/utils/revenue-projection";
 
 export const maxDuration = 60;
@@ -11,7 +12,10 @@ export const maxDuration = 60;
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { entityId } = body as { entityId: string };
+    const { entityId, dateMode = "invoice_date" } = body as {
+      entityId: string;
+      dateMode?: DateMode;
+    };
 
     if (!entityId) {
       return NextResponse.json(
@@ -42,14 +46,15 @@ export async function POST(request: Request) {
     const orderStartDate = formatRWDate(threeMonthsAgo);
 
     // Fetch invoices, orders, and quotes in parallel
+    // Use InvoiceDate for filtering since it's the default grouping mode
     const [invoiceResult, orderResult, quoteResult] = await Promise.all([
       rw.browse<RWInvoiceRow>("invoice", {
         pagesize: 2000,
-        searchfields: ["BillingEndDate"],
+        searchfields: ["InvoiceDate"],
         searchfieldoperators: [">="],
         searchfieldvalues: [invoiceStartDate],
         searchfieldtypes: ["date"],
-        orderby: "BillingEndDate",
+        orderby: "InvoiceDate",
         orderbydirection: "desc",
       }),
       rw.browse<RWOrderRow>("order", {
@@ -76,6 +81,7 @@ export async function POST(request: Request) {
       invoiceResult.rows,
       orderResult.rows,
       quoteResult.rows,
+      dateMode,
     );
 
     return NextResponse.json(result);
