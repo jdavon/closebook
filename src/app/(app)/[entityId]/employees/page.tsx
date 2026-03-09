@@ -47,7 +47,9 @@ import {
   Pencil,
   Check,
   X,
+  Upload,
 } from "lucide-react";
+import { ImportAllocationsDialog } from "./import-allocations-dialog";
 
 // --- Constants ---
 
@@ -260,6 +262,7 @@ export default function EmployeeRosterPage() {
   const [deptFilter, setDeptFilter] = useState<string>("all");
   const [payTypeFilter, setPayTypeFilter] = useState<string>("all");
   const [companyFilter, setCompanyFilter] = useState<string>("all");
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
 
   // Determine if this entity is an employing entity (Silverco or HDR)
   const paylocityCompanyId = EMPLOYING_ENTITIES[entityId] ?? null;
@@ -288,6 +291,19 @@ export default function EmployeeRosterPage() {
       }
     }
     load();
+  }, []);
+
+  // Refresh allocations (called after import wizard completes)
+  const refreshAllocations = useCallback(async () => {
+    try {
+      const res = await fetch("/api/paylocity/allocations");
+      if (res.ok) {
+        const data = await res.json();
+        setAllocations(data.allocations ?? []);
+      }
+    } catch {
+      // Silent fail — stale data is acceptable
+    }
   }, []);
 
   // Build allocation lookup: "employeeId:companyId" → override
@@ -481,12 +497,22 @@ export default function EmployeeRosterPage() {
                 : "Employee roster, compensation, and department breakdown"}
             </p>
           </div>
-          <Link href={`/${entityId}/employees/settings`}>
-            <Button variant="outline" size="sm">
-              <Settings className="mr-2 h-4 w-4" />
-              Settings
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setImportDialogOpen(true)}
+            >
+              <Upload className="mr-2 h-4 w-4" />
+              Import
             </Button>
-          </Link>
+            <Link href={`/${entityId}/employees/settings`}>
+              <Button variant="outline" size="sm">
+                <Settings className="mr-2 h-4 w-4" />
+                Settings
+              </Button>
+            </Link>
+          </div>
         </div>
 
         {/* KPI Cards */}
@@ -757,6 +783,16 @@ export default function EmployeeRosterPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Import Allocations Dialog */}
+      <ImportAllocationsDialog
+        open={importDialogOpen}
+        onOpenChange={setImportDialogOpen}
+        employees={displayEmployees}
+        operatingEntities={OPERATING_ENTITIES}
+        paylocityCompanyId={paylocityCompanyId}
+        onComplete={refreshAllocations}
+      />
     </TooltipProvider>
   );
 }
