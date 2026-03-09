@@ -533,6 +533,12 @@ export default function EmployeeRosterPage() {
               <Upload className="mr-2 h-4 w-4" />
               Import
             </Button>
+            <Link href={`/${entityId}/employees/overtime`}>
+              <Button variant="outline" size="sm">
+                <TrendingUp className="mr-2 h-4 w-4" />
+                Overtime
+              </Button>
+            </Link>
             <Link href={`/${entityId}/employees/settings`}>
               <Button variant="outline" size="sm">
                 <Settings className="mr-2 h-4 w-4" />
