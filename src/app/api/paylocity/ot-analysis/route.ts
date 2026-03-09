@@ -246,22 +246,20 @@ export async function GET(request: NextRequest) {
             totals[key] = round2(totals[key]);
           }
 
-          // Only include employees who have any pay data
-          if (summaries.length > 0) {
-            otEmployees.push({
-              id: emp.id,
-              companyId,
-              displayName,
-              department: cc.department,
-              operatingEntityId: cc.operatingEntityId,
-              operatingEntityCode: cc.operatingEntityCode,
-              operatingEntityName: cc.operatingEntityName,
-              payType: emp.currentPayRate?.payType ?? "Unknown",
-              costCenterCode: emp.position?.costCenter1 ?? "UNKNOWN",
-              monthlyHours,
-              totals,
-            });
-          }
+          // Include ALL active employees (even those with zero OT / no pay data)
+          otEmployees.push({
+            id: emp.id,
+            companyId,
+            displayName,
+            department: cc.department,
+            operatingEntityId: cc.operatingEntityId,
+            operatingEntityCode: cc.operatingEntityCode,
+            operatingEntityName: cc.operatingEntityName,
+            payType: emp.currentPayRate?.payType ?? "Unknown",
+            costCenterCode: emp.position?.costCenter1 ?? "UNKNOWN",
+            monthlyHours,
+            totals,
+          });
         }
       }
     }
