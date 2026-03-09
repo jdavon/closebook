@@ -244,13 +244,16 @@ export function processRevenueData(
   });
 
   // --- Categorize invoices ---
-  const closedInvoices = validInvoices.filter(
-    (inv) => (inv.Status || "").toUpperCase() === "CLOSED",
+  // "Processed" is a finalized status in RW, same as "Closed"
+  const CLOSED_STATUSES = new Set(["CLOSED", "PROCESSED"]);
+  const PENDING_STATUSES = new Set(["NEW", "APPROVED"]);
+
+  const closedInvoices = validInvoices.filter((inv) =>
+    CLOSED_STATUSES.has((inv.Status || "").toUpperCase()),
   );
-  const pendingInvoices = validInvoices.filter((inv) => {
-    const s = (inv.Status || "").toUpperCase();
-    return s === "NEW" || s === "APPROVED";
-  });
+  const pendingInvoices = validInvoices.filter((inv) =>
+    PENDING_STATUSES.has((inv.Status || "").toUpperCase()),
+  );
 
   // --- Build monthly buckets (12 months back + current + 3 forward) ---
   const monthKeys = generateMonthKeys(12, 3);
