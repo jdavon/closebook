@@ -27,6 +27,8 @@ import {
   Layers,
   HandCoins,
   ArrowLeftRight,
+  TrendingUp,
+  ChevronRight,
 } from "lucide-react";
 import {
   Sidebar,
@@ -39,8 +41,16 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarMenuSub,
+  SidebarMenuSubButton,
+  SidebarMenuSubItem,
   SidebarRail,
 } from "@/components/ui/sidebar";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -90,11 +100,6 @@ export function AppSidebar({ user, entityId: entityIdProp }: AppSidebarProps) {
           icon: Receipt,
         },
         {
-          title: "Payroll Accruals",
-          url: `${entityPrefix}/payroll`,
-          icon: Users,
-        },
-        {
           title: "Commissions",
           url: `${entityPrefix}/commissions`,
           icon: Percent,
@@ -103,6 +108,11 @@ export function AppSidebar({ user, entityId: entityIdProp }: AppSidebarProps) {
           title: "Rebate Tracker",
           url: `${entityPrefix}/rebates`,
           icon: HandCoins,
+        },
+        {
+          title: "Revenue Projection",
+          url: `${entityPrefix}/revenue-projection`,
+          icon: TrendingUp,
         },
       ]
     : [];
@@ -294,11 +304,58 @@ export function AppSidebar({ user, entityId: entityIdProp }: AppSidebarProps) {
           </SidebarGroupContent>
         </SidebarGroup>
 
-        {toolsItems.length > 0 && (
+        {entityId && (
           <SidebarGroup>
             <SidebarGroupLabel>Tools</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
+                {/* Collapsible Employees section */}
+                <Collapsible
+                  defaultOpen={pathname.startsWith(`${entityPrefix}/employees`)}
+                  className="group/collapsible"
+                >
+                  <SidebarMenuItem>
+                    <CollapsibleTrigger asChild>
+                      <SidebarMenuButton
+                        isActive={pathname.startsWith(`${entityPrefix}/employees`)}
+                      >
+                        <Users />
+                        <span>Employees</span>
+                        <ChevronRight className="ml-auto transition-transform group-data-[state=open]/collapsible:rotate-90" />
+                      </SidebarMenuButton>
+                    </CollapsibleTrigger>
+                    <CollapsibleContent>
+                      <SidebarMenuSub>
+                        <SidebarMenuSubItem>
+                          <SidebarMenuSubButton
+                            asChild
+                            isActive={pathname === `${entityPrefix}/employees`}
+                          >
+                            <Link href={`${entityPrefix}/employees`}>Roster</Link>
+                          </SidebarMenuSubButton>
+                        </SidebarMenuSubItem>
+                        <SidebarMenuSubItem>
+                          <SidebarMenuSubButton
+                            asChild
+                            isActive={pathname.startsWith(`${entityPrefix}/employees/accruals`)}
+                          >
+                            <Link href={`${entityPrefix}/employees/accruals`}>Payroll Accruals</Link>
+                          </SidebarMenuSubButton>
+                        </SidebarMenuSubItem>
+                        <SidebarMenuSubItem>
+                          <SidebarMenuSubButton
+                            asChild
+                            isActive={pathname.startsWith(`${entityPrefix}/employees/details`)}
+                          >
+                            <Link href={`${entityPrefix}/employees/details`}>Details</Link>
+                          </SidebarMenuSubButton>
+                        </SidebarMenuSubItem>
+                      </SidebarMenuSub>
+                    </CollapsibleContent>
+                  </SidebarMenuItem>
+                </Collapsible>
+
+                {/* Other tools */}
                 {toolsItems.map((item) => (
                   <SidebarMenuItem key={item.title}>
                     <SidebarMenuButton
