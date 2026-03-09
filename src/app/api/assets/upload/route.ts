@@ -236,7 +236,7 @@ function buildHeaderMap(headers: string[]) {
     vehicleClass: find(["vehicleclass", "class", "classtype", "type", "category"]),
     mileage: find(["mileage", "miles", "odometer"]),
     titleNumber: find(["titlenumber", "title"]),
-    acquisitionDate: find(["acquisitiondate", "purchasedate", "acquired", "purchase", "dateacquired"]),
+    acquisitionDate: find(["acquisitiondate", "acqdate", "purchasedate", "acquired", "purchase", "dateacquired"]),
     acquisitionCost: find(["acquisitioncost", "cost", "purchaseprice", "price", "amount"]),
     inServiceDate: find(["inservicedate", "inservice", "servicedate", "placedinservice"]),
     bookUsefulLife: find(["bookusefullife", "usefullife", "booklife", "lifemonths"]),

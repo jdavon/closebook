@@ -248,7 +248,7 @@ function buildHeaderMap(headers: string[]): Record<FieldKey, string> {
     title_number: find(["titlenumber", "title"]),
     registration_expiry: find(["registrationexpiry", "regexpiry", "registration"]),
     vehicle_notes: find(["notes", "comments", "memo"]),
-    acquisition_date: find(["acquisitiondate", "purchasedate", "acquired", "dateacquired"]),
+    acquisition_date: find(["acquisitiondate", "acqdate", "purchasedate", "acquired", "dateacquired"]),
     acquisition_cost: find(["acquisitioncost", "cost", "purchaseprice", "price", "amount"]),
     in_service_date: find(["inservicedate", "inservice", "servicedate", "placedinservice"]),
     book_depreciation_method: find(["bookmethod", "bookdepreciation", "deprmethod"]),
