@@ -29,6 +29,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
   Users,
   DollarSign,
   Building2,
@@ -36,6 +42,7 @@ import {
   TrendingUp,
   Loader2,
   Settings,
+  Info,
 } from "lucide-react";
 
 // --- Types ---
@@ -50,6 +57,8 @@ interface MappedEmployee {
   jobTitle: string;
   payType: string;
   annualComp: number;
+  erTaxes: number;
+  totalComp: number;
   baseRate: number;
   hireDate: string | null;
   costCenterCode: string;
@@ -135,8 +144,10 @@ export default function EmployeeRosterPage() {
   }, [entityEmployees, deptFilter, payTypeFilter, search]);
 
   // KPIs
-  const totalComp = entityEmployees.reduce((s, e) => s + e.annualComp, 0);
-  const avgComp = entityEmployees.length > 0 ? totalComp / entityEmployees.length : 0;
+  const totalAnnualComp = entityEmployees.reduce((s, e) => s + e.annualComp, 0);
+  const totalERTaxes = entityEmployees.reduce((s, e) => s + e.erTaxes, 0);
+  const totalFullComp = entityEmployees.reduce((s, e) => s + e.totalComp, 0);
+  const avgComp = entityEmployees.length > 0 ? totalFullComp / entityEmployees.length : 0;
   const deptCount = uniqueDepts.length;
 
   if (loading) {
@@ -161,200 +172,236 @@ export default function EmployeeRosterPage() {
   }
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Employees</h1>
-          <p className="text-muted-foreground">
-            Employee roster, compensation, and department breakdown
-          </p>
+    <TooltipProvider>
+      <div className="space-y-6">
+        {/* Header */}
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight">Employees</h1>
+            <p className="text-muted-foreground">
+              Employee roster, compensation, and department breakdown
+            </p>
+          </div>
+          <Link href={`/${entityId}/employees/settings`}>
+            <Button variant="outline" size="sm">
+              <Settings className="mr-2 h-4 w-4" />
+              Settings
+            </Button>
+          </Link>
         </div>
-        <Link href={`/${entityId}/employees/settings`}>
-          <Button variant="outline" size="sm">
-            <Settings className="mr-2 h-4 w-4" />
-            Settings
-          </Button>
-        </Link>
-      </div>
 
-      {/* KPI Cards */}
-      <div className="grid gap-4 md:grid-cols-4">
+        {/* KPI Cards */}
+        <div className="grid gap-4 md:grid-cols-4">
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Headcount</CardTitle>
+              <Users className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{entityEmployees.length}</div>
+              <p className="text-xs text-muted-foreground">Active employees</p>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Total Cost</CardTitle>
+              <DollarSign className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{formatCompact(totalFullComp)}</div>
+              <p className="text-xs text-muted-foreground">
+                Wages {formatCompact(totalAnnualComp)} + ER taxes {formatCompact(totalERTaxes)}
+              </p>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Avg Total Comp</CardTitle>
+              <TrendingUp className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{formatCompact(avgComp)}</div>
+              <p className="text-xs text-muted-foreground">Per employee (incl. ER taxes)</p>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Departments</CardTitle>
+              <Building2 className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{deptCount}</div>
+              <p className="text-xs text-muted-foreground">Active departments</p>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Employee Table */}
         <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Headcount</CardTitle>
-            <Users className="h-4 w-4 text-muted-foreground" />
+          <CardHeader>
+            <CardTitle className="text-base">Employee Roster</CardTitle>
+            <CardDescription>
+              {entityEmployees.length} active employee{entityEmployees.length !== 1 ? "s" : ""}
+            </CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{entityEmployees.length}</div>
-            <p className="text-xs text-muted-foreground">Active employees</p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Annual Payroll</CardTitle>
-            <DollarSign className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{formatCompact(totalComp)}</div>
-            <p className="text-xs text-muted-foreground">Total annual compensation</p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Avg Compensation</CardTitle>
-            <TrendingUp className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{formatCompact(avgComp)}</div>
-            <p className="text-xs text-muted-foreground">Per employee annual</p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Departments</CardTitle>
-            <Building2 className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{deptCount}</div>
-            <p className="text-xs text-muted-foreground">Active departments</p>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Employee Table */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Employee Roster</CardTitle>
-          <CardDescription>
-            {entityEmployees.length} active employee{entityEmployees.length !== 1 ? "s" : ""}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {/* Filter Bar */}
-          <div className="mb-4 flex flex-wrap items-center gap-3">
-            <div className="relative flex-1 min-w-[200px]">
-              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                placeholder="Search by name, title, or department..."
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="pl-9"
-              />
+            {/* Filter Bar */}
+            <div className="mb-4 flex flex-wrap items-center gap-3">
+              <div className="relative flex-1 min-w-[200px]">
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  placeholder="Search by name, title, or department..."
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  className="pl-9"
+                />
+              </div>
+              <Select value={deptFilter} onValueChange={setDeptFilter}>
+                <SelectTrigger className="w-[200px]">
+                  <SelectValue placeholder="All Departments" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Departments</SelectItem>
+                  {uniqueDepts.map((dept) => (
+                    <SelectItem key={dept} value={dept}>
+                      {dept}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select value={payTypeFilter} onValueChange={setPayTypeFilter}>
+                <SelectTrigger className="w-[150px]">
+                  <SelectValue placeholder="All Types" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Types</SelectItem>
+                  <SelectItem value="Salary">Salary</SelectItem>
+                  <SelectItem value="Hourly">Hourly</SelectItem>
+                </SelectContent>
+              </Select>
+              <span className="text-sm text-muted-foreground">
+                {filteredEmployees.length} of {entityEmployees.length}
+              </span>
             </div>
-            <Select value={deptFilter} onValueChange={setDeptFilter}>
-              <SelectTrigger className="w-[200px]">
-                <SelectValue placeholder="All Departments" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Departments</SelectItem>
-                {uniqueDepts.map((dept) => (
-                  <SelectItem key={dept} value={dept}>
-                    {dept}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Select value={payTypeFilter} onValueChange={setPayTypeFilter}>
-              <SelectTrigger className="w-[150px]">
-                <SelectValue placeholder="All Types" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Types</SelectItem>
-                <SelectItem value="Salary">Salary</SelectItem>
-                <SelectItem value="Hourly">Hourly</SelectItem>
-              </SelectContent>
-            </Select>
-            <span className="text-sm text-muted-foreground">
-              {filteredEmployees.length} of {entityEmployees.length}
-            </span>
-          </div>
 
-          {/* Table */}
-          <div className="overflow-x-auto rounded-md border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Job Title</TableHead>
-                  <TableHead>Department</TableHead>
-                  <TableHead>Pay Type</TableHead>
-                  <TableHead className="text-right">Annual Comp</TableHead>
-                  <TableHead className="text-right">Base Rate</TableHead>
-                  <TableHead>Hire Date</TableHead>
-                  <TableHead>Status</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filteredEmployees.map((emp) => (
-                  <TableRow key={emp.id}>
-                    <TableCell className="font-medium">{emp.displayName}</TableCell>
-                    <TableCell className="max-w-[200px] truncate">
-                      {emp.jobTitle || "---"}
-                    </TableCell>
-                    <TableCell>{emp.department}</TableCell>
-                    <TableCell>
-                      <Badge variant={emp.payType === "Salary" ? "default" : "secondary"}>
-                        {emp.payType}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-right font-mono">
-                      {formatCurrency(emp.annualComp)}
-                    </TableCell>
-                    <TableCell className="text-right font-mono text-muted-foreground">
-                      {emp.baseRate > 0
-                        ? `$${emp.baseRate.toFixed(2)}${emp.payType === "Hourly" ? "/hr" : ""}`
-                        : "---"}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {emp.hireDate
-                        ? new Date(emp.hireDate).toLocaleDateString("en-US", {
-                            month: "short",
-                            day: "numeric",
-                            year: "numeric",
-                          })
-                        : "---"}
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant="outline" className="text-xs">
-                        {emp.statusType || emp.status || "Active"}
-                      </Badge>
-                    </TableCell>
-                  </TableRow>
-                ))}
-                {filteredEmployees.length === 0 && (
+            {/* Table */}
+            <div className="overflow-x-auto rounded-md border">
+              <Table>
+                <TableHeader>
                   <TableRow>
-                    <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
-                      No employees match the current filters.
-                    </TableCell>
+                    <TableHead>Name</TableHead>
+                    <TableHead>Job Title</TableHead>
+                    <TableHead>Department</TableHead>
+                    <TableHead>Pay Type</TableHead>
+                    <TableHead className="text-right">Annual Comp</TableHead>
+                    <TableHead className="text-right">ER Taxes</TableHead>
+                    <TableHead className="text-right">
+                      <span className="inline-flex items-center gap-1">
+                        Total Comp
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Info className="h-3 w-3 text-muted-foreground" />
+                          </TooltipTrigger>
+                          <TooltipContent side="top" className="max-w-xs text-xs">
+                            Annual wages + employer payroll taxes (FICA SS, Medicare, FUTA, CA SUI, ETT, SDI)
+                          </TooltipContent>
+                        </Tooltip>
+                      </span>
+                    </TableHead>
+                    <TableHead className="text-right">Base Rate</TableHead>
+                    <TableHead>Hire Date</TableHead>
+                    <TableHead>Status</TableHead>
                   </TableRow>
-                )}
-              </TableBody>
-            </Table>
-          </div>
-
-          {/* Totals */}
-          {filteredEmployees.length > 0 && (
-            <div className="mt-3 flex justify-end gap-6 text-sm">
-              <span className="text-muted-foreground">
-                Total Annual:{" "}
-                <span className="font-semibold text-foreground">
-                  {formatCurrency(filteredEmployees.reduce((s, e) => s + e.annualComp, 0))}
-                </span>
-              </span>
-              <span className="text-muted-foreground">
-                Monthly:{" "}
-                <span className="font-semibold text-foreground">
-                  {formatCurrency(filteredEmployees.reduce((s, e) => s + e.annualComp, 0) / 12)}
-                </span>
-              </span>
+                </TableHeader>
+                <TableBody>
+                  {filteredEmployees.map((emp) => (
+                    <TableRow key={emp.id}>
+                      <TableCell className="font-medium">{emp.displayName}</TableCell>
+                      <TableCell className="max-w-[200px] truncate">
+                        {emp.jobTitle || "---"}
+                      </TableCell>
+                      <TableCell>{emp.department}</TableCell>
+                      <TableCell>
+                        <Badge variant={emp.payType === "Salary" ? "default" : "secondary"}>
+                          {emp.payType}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-right font-mono">
+                        {formatCurrency(emp.annualComp)}
+                      </TableCell>
+                      <TableCell className="text-right font-mono text-muted-foreground">
+                        {formatCurrency(emp.erTaxes)}
+                      </TableCell>
+                      <TableCell className="text-right font-mono font-semibold">
+                        {formatCurrency(emp.totalComp)}
+                      </TableCell>
+                      <TableCell className="text-right font-mono text-muted-foreground">
+                        {emp.baseRate > 0
+                          ? `$${emp.baseRate.toFixed(2)}${emp.payType === "Hourly" ? "/hr" : ""}`
+                          : "---"}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {emp.hireDate
+                          ? new Date(emp.hireDate).toLocaleDateString("en-US", {
+                              month: "short",
+                              day: "numeric",
+                              year: "numeric",
+                            })
+                          : "---"}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="outline" className="text-xs">
+                          {emp.statusType || emp.status || "Active"}
+                        </Badge>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                  {filteredEmployees.length === 0 && (
+                    <TableRow>
+                      <TableCell colSpan={10} className="text-center text-muted-foreground py-8">
+                        No employees match the current filters.
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
             </div>
-          )}
-        </CardContent>
-      </Card>
-    </div>
+
+            {/* Totals */}
+            {filteredEmployees.length > 0 && (
+              <div className="mt-3 flex justify-end gap-6 text-sm">
+                <span className="text-muted-foreground">
+                  Annual Wages:{" "}
+                  <span className="font-semibold text-foreground">
+                    {formatCurrency(filteredEmployees.reduce((s, e) => s + e.annualComp, 0))}
+                  </span>
+                </span>
+                <span className="text-muted-foreground">
+                  ER Taxes:{" "}
+                  <span className="font-semibold text-foreground">
+                    {formatCurrency(filteredEmployees.reduce((s, e) => s + e.erTaxes, 0))}
+                  </span>
+                </span>
+                <span className="text-muted-foreground">
+                  Total Cost:{" "}
+                  <span className="font-bold text-foreground">
+                    {formatCurrency(filteredEmployees.reduce((s, e) => s + e.totalComp, 0))}
+                  </span>
+                </span>
+                <span className="text-muted-foreground">
+                  Monthly:{" "}
+                  <span className="font-semibold text-foreground">
+                    {formatCurrency(filteredEmployees.reduce((s, e) => s + e.totalComp, 0) / 12)}
+                  </span>
+                </span>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    </TooltipProvider>
   );
 }

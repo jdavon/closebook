@@ -372,6 +372,32 @@ export function calculateAccruals(
   };
 }
 
+// ─── Annual Employer Cost Estimation ─────────────────────────────────
+
+/**
+ * Estimate annual employer payroll taxes for a given annual compensation.
+ * This is a simplified full-year estimate (assumes employee hits caps mid-year).
+ * Used for "Total Comp" display on dashboards and roster pages.
+ *
+ * Components: FICA SS, Medicare, FUTA, CA SUI, CA ETT, CA SDI
+ */
+export function estimateAnnualERTaxes(annualComp: number): {
+  total: number;
+  breakdown: Record<string, number>;
+} {
+  const breakdown: Record<string, number> = {};
+  let total = 0;
+
+  for (const [key, { rate, cap }] of Object.entries(TAX_RATES)) {
+    const taxableWages = cap === Infinity ? annualComp : Math.min(annualComp, cap);
+    const tax = round(taxableWages * rate);
+    breakdown[key] = tax;
+    total += tax;
+  }
+
+  return { total: round(total), breakdown };
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────
 
 function round(n: number): number {

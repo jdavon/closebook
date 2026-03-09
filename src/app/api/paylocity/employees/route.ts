@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getAllCompanyClients } from "@/lib/paylocity";
 import { getOperatingEntityForCostCenter } from "@/lib/paylocity/cost-center-config";
-import { getAnnualComp } from "@/lib/utils/payroll-calculations";
+import { getAnnualComp, estimateAnnualERTaxes } from "@/lib/utils/payroll-calculations";
 
 /**
  * GET /api/paylocity/employees
@@ -27,6 +27,8 @@ interface MappedEmployee {
   jobTitle: string;
   payType: string;
   annualComp: number;
+  erTaxes: number;
+  totalComp: number;
   baseRate: number;
   hireDate: string | null;
   costCenterCode: string;
@@ -70,6 +72,8 @@ export async function GET() {
     for (const { companyId, employees: rawEmployees } of results) {
       for (const emp of rawEmployees) {
         const cc = getOperatingEntityForCostCenter(emp.position?.costCenter1, companyId);
+        const annualComp = getAnnualComp(emp);
+        const { total: erTaxes } = estimateAnnualERTaxes(annualComp);
         employees.push({
           id: emp.id,
           companyId,
@@ -80,7 +84,9 @@ export async function GET() {
           statusType: emp.currentStatus?.statusType ?? "A",
           jobTitle: emp.info?.jobTitle ?? "",
           payType: emp.currentPayRate?.payType ?? "Unknown",
-          annualComp: getAnnualComp(emp),
+          annualComp,
+          erTaxes,
+          totalComp: annualComp + erTaxes,
           baseRate: emp.currentPayRate?.baseRate ?? 0,
           hireDate: emp.info?.hireDate ?? null,
           costCenterCode: emp.position?.costCenter1 ?? "UNKNOWN",

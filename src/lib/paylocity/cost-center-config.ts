@@ -296,8 +296,14 @@ export function getOperatingEntityForCostCenter(
     };
   }
 
-  return map[costCenterCode] ?? {
-    code: costCenterCode,
+  // Paylocity returns cost center codes with descriptions, e.g. "08 - Versatile Lot Ops"
+  // Strip the description suffix to get just the numeric code for lookup
+  const numericCode = costCenterCode.includes(" - ")
+    ? costCenterCode.split(" - ")[0].trim()
+    : costCenterCode.trim();
+
+  return map[numericCode] ?? {
+    code: numericCode,
     department: `Unknown (${costCenterCode})`,
     operatingEntityId: fallbackEntityId,
     operatingEntityCode: fallbackCode,
