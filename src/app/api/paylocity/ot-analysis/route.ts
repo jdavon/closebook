@@ -112,20 +112,24 @@ export async function GET(request: NextRequest) {
         const batch = rawEmployees.slice(i, i + batchSize);
         const batchResults = await Promise.all(
           batch.map(async (emp) => {
+            // Fetch summary and details independently — if details fails,
+            // we still keep the summary (which is the primary data source)
+            let summaries: PayStatementSummary[] = [];
+            let details: PayStatementDetail[] = [];
+
             try {
-              // Fetch BOTH summary and details concurrently per employee
-              const [summaries, details] = await Promise.all([
-                client.getPayStatementSummary(emp.id, year),
-                client.getPayStatementDetails(emp.id, year),
-              ]);
-              return { emp, summaries, details };
+              summaries = await client.getPayStatementSummary(emp.id, year);
             } catch {
-              return {
-                emp,
-                summaries: [] as PayStatementSummary[],
-                details: [] as PayStatementDetail[],
-              };
+              // No summary data for this employee — skip
             }
+
+            try {
+              details = await client.getPayStatementDetails(emp.id, year);
+            } catch {
+              // Details unavailable — OK, we still have summary for OT/REG
+            }
+
+            return { emp, summaries, details };
           })
         );
 
