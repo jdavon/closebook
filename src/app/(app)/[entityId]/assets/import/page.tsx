@@ -57,6 +57,8 @@ type FieldKey =
   | "tax_useful_life_months"
   | "section_179_amount"
   | "bonus_depreciation_amount"
+  | "book_accumulated_depreciation"
+  | "tax_accumulated_depreciation"
   | "status";
 
 interface AssetRow {
@@ -88,6 +90,8 @@ interface AssetRow {
   tax_useful_life_months: string;
   section_179_amount: string;
   bonus_depreciation_amount: string;
+  book_accumulated_depreciation: string;
+  tax_accumulated_depreciation: string;
   status: string;
   [key: string]: unknown;
 }
@@ -178,12 +182,14 @@ const COLUMNS: ColumnDef[] = [
   { key: "book_depreciation_method", label: "Book Method", group: "book", type: "select", width: 150, options: BOOK_METHOD_OPTIONS },
   { key: "book_useful_life_months", label: "Life (mo)", group: "book", type: "number", width: 85, placeholder: "60" },
   { key: "book_salvage_value", label: "Salvage", group: "book", type: "number", width: 100, placeholder: "0" },
+  { key: "book_accumulated_depreciation", label: "Book Accum Depr", shortLabel: "Accum", group: "book", type: "number", width: 130, placeholder: "Auto-calc" },
   // Tax Basis
   { key: "tax_cost_basis", label: "Tax Basis", group: "tax", type: "number", width: 120, placeholder: "= Acq Cost" },
   { key: "tax_depreciation_method", label: "Tax Method", group: "tax", type: "select", width: 160, options: TAX_METHOD_OPTIONS },
   { key: "tax_useful_life_months", label: "Tax Life (mo)", group: "tax", type: "number", width: 95, placeholder: "Auto" },
   { key: "section_179_amount", label: "Sec 179", group: "tax", type: "number", width: 100, placeholder: "0" },
   { key: "bonus_depreciation_amount", label: "Bonus Depr", group: "tax", type: "number", width: 110, placeholder: "0" },
+  { key: "tax_accumulated_depreciation", label: "Tax Accum Depr", shortLabel: "Tax Accum", group: "tax", type: "number", width: 130, placeholder: "Auto-calc" },
   // Status
   { key: "status", label: "Status", group: "status", type: "select", width: 120, options: STATUS_OPTIONS },
 ];
@@ -260,6 +266,8 @@ function buildHeaderMap(headers: string[]): Record<FieldKey, string> {
     tax_useful_life_months: find(["taxusefullife", "taxlife"]),
     section_179_amount: find(["section179", "sec179", "179"]),
     bonus_depreciation_amount: find(["bonusdepreciation", "bonus", "bonusdepr"]),
+    book_accumulated_depreciation: find(["bookaccumulateddepreciation", "bookaccumdepr", "accumdepr", "accumulateddepreciation", "bookaccum", "netbookvalue", "nbv", "bookvalue"]),
+    tax_accumulated_depreciation: find(["taxaccumulateddepreciation", "taxaccumdepr", "taxaccum"]),
     status: find(["status", "assetstatus"]),
   };
 }
@@ -302,6 +310,8 @@ function createEmptyRow(): AssetRow {
     tax_useful_life_months: "",
     section_179_amount: "0",
     bonus_depreciation_amount: "0",
+    book_accumulated_depreciation: "",
+    tax_accumulated_depreciation: "",
     status: "active",
   };
 }
@@ -392,6 +402,7 @@ function validateRow(row: AssetRow): Partial<Record<FieldKey, string>> {
 const CURRENCY_FIELDS: Set<string> = new Set([
   "acquisition_cost", "book_salvage_value", "tax_cost_basis",
   "section_179_amount", "bonus_depreciation_amount",
+  "book_accumulated_depreciation", "tax_accumulated_depreciation",
 ]);
 
 function formatCellDisplay(col: ColumnDef, value: unknown): string {
@@ -555,7 +566,7 @@ export default function AssetImportWizardPage() {
     const { data: assets } = await supabase
       .from("fixed_assets")
       .select(
-        "asset_tag, asset_name, vehicle_class, vehicle_year, vehicle_make, vehicle_model, vehicle_trim, vin, license_plate, license_state, mileage_at_acquisition, title_number, registration_expiry, vehicle_notes, acquisition_date, acquisition_cost, in_service_date, book_depreciation_method, book_useful_life_months, book_salvage_value, tax_cost_basis, tax_depreciation_method, tax_useful_life_months, section_179_amount, bonus_depreciation_amount, status"
+        "asset_tag, asset_name, vehicle_class, vehicle_year, vehicle_make, vehicle_model, vehicle_trim, vin, license_plate, license_state, mileage_at_acquisition, title_number, registration_expiry, vehicle_notes, acquisition_date, acquisition_cost, in_service_date, book_depreciation_method, book_useful_life_months, book_salvage_value, book_accumulated_depreciation, tax_cost_basis, tax_depreciation_method, tax_useful_life_months, section_179_amount, bonus_depreciation_amount, tax_accumulated_depreciation, status"
       )
       .eq("entity_id", entityId)
       .order("acquisition_date");
