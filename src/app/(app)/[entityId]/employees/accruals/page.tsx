@@ -83,6 +83,9 @@ interface AccrualEmployee {
   accrualDays: number;
   wageAccrual: number;
   taxAccrual: number;
+  benefitAccrual: number;
+  annualBenefitCost: number;
+  benefitBreakdown: Record<string, number>;
   totalAccrual: number;
   taxBreakdown: Record<string, number>;
 }
@@ -211,7 +214,8 @@ export default function PayrollAccrualsPage() {
   const entityTotalComp = entityEmployees.reduce((s, e) => s + e.annualComp, 0);
   const entityTotalWageAccrual = entityEmployees.reduce((s, e) => s + e.wageAccrual, 0);
   const entityTotalTaxAccrual = entityEmployees.reduce((s, e) => s + e.taxAccrual, 0);
-  const entityTotalAccrual = entityTotalWageAccrual + entityTotalTaxAccrual;
+  const entityTotalBenefitAccrual = entityEmployees.reduce((s, e) => s + (e.benefitAccrual ?? 0), 0);
+  const entityTotalAccrual = entityTotalWageAccrual + entityTotalTaxAccrual + entityTotalBenefitAccrual;
 
   // --- Handlers ---
 
@@ -588,7 +592,7 @@ export default function PayrollAccrualsPage() {
           ) : (
             <>
               {/* Employee Summary */}
-              <div className="grid grid-cols-5 gap-4">
+              <div className="grid grid-cols-6 gap-4">
                 <Card>
                   <CardContent className="pt-6">
                     <div className="flex items-center gap-2">
@@ -636,11 +640,25 @@ export default function PayrollAccrualsPage() {
                 <Card>
                   <CardContent className="pt-6">
                     <div className="flex items-center gap-2">
+                      <Users className="h-4 w-4 text-muted-foreground" />
+                      <p className="text-sm text-muted-foreground">ER Benefits</p>
+                    </div>
+                    <p className="text-2xl font-semibold tabular-nums mt-1">
+                      {formatCurrency(entityTotalBenefitAccrual)}
+                    </p>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="pt-6">
+                    <div className="flex items-center gap-2">
                       <DollarSign className="h-4 w-4 text-muted-foreground" />
                       <p className="text-sm text-muted-foreground">Total Cost</p>
                     </div>
                     <p className="text-2xl font-semibold tabular-nums mt-1">
                       {formatCurrency(entityTotalAccrual)}
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      Wages + Tax + Benefits
                     </p>
                   </CardContent>
                 </Card>
@@ -719,6 +737,7 @@ export default function PayrollAccrualsPage() {
                             <TableHead className="text-right">Accrual Days</TableHead>
                             <TableHead className="text-right">Accrued Wages</TableHead>
                             <TableHead className="text-right">Employer Tax</TableHead>
+                            <TableHead className="text-right" title="Employer-paid benefits (medical, 401k match, etc.) pro-rated for the accrual period">ER Benefits</TableHead>
                             <TableHead className="text-right">Total</TableHead>
                           </TableRow>
                         </TableHeader>
@@ -757,6 +776,13 @@ export default function PayrollAccrualsPage() {
                               <TableCell className="text-right font-mono">
                                 {formatCurrency(emp.taxAccrual)}
                               </TableCell>
+                              <TableCell className="text-right font-mono" title={
+                                Object.entries(emp.benefitBreakdown ?? {})
+                                  .map(([k, v]) => `${k}: $${v.toFixed(2)}`)
+                                  .join(", ") || "No employer benefits"
+                              }>
+                                {formatCurrency(emp.benefitAccrual ?? 0)}
+                              </TableCell>
                               <TableCell className="text-right font-mono font-semibold">
                                 {formatCurrency(emp.totalAccrual)}
                               </TableCell>
@@ -773,6 +799,9 @@ export default function PayrollAccrualsPage() {
                             </TableCell>
                             <TableCell className="text-right font-mono">
                               {formatCurrency(entityTotalTaxAccrual)}
+                            </TableCell>
+                            <TableCell className="text-right font-mono">
+                              {formatCurrency(entityTotalBenefitAccrual)}
                             </TableCell>
                             <TableCell className="text-right font-mono">
                               {formatCurrency(entityTotalAccrual)}

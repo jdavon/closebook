@@ -9,7 +9,7 @@
  * Tax accrual: per-employee, respecting annual wage base caps and YTD wages.
  */
 
-import type { Employee, PayStatementSummary } from "@/lib/paylocity/types";
+import type { Employee, PayStatementSummary, PayStatementDetail } from "@/lib/paylocity/types";
 import {
   getOperatingEntityForCostCenter,
   EMPLOYING_ENTITY_ID,
@@ -41,6 +41,85 @@ export const TAX_RATES = {
   CA_SDI: { rate: 0.011, cap: 145600, label: "CA SDI" },
 } as const;
 
+// ─── Employer-Paid Benefits ──────────────────────────────────────────
+//
+// Pay statement detail types that represent employer-paid benefit costs.
+// These are NOT employee deductions — they are company-paid MEMO earnings.
+//
+// Identified from Paylocity pay statement detail analysis:
+//   ERMED  (detType: "Memo")         — Employer medical/dental/vision contribution
+//   401ER  (detType: "MemoERMatch")  — Employer 401(k) match
+//
+// Employee deductions (DNTL, MDCL, 401K, VISON, LIFE) come out of the
+// employee's paycheck and should NOT be included in employer cost.
+
+/**
+ * Pay statement detail types that indicate employer-paid benefits.
+ * We match on `detType` (case-insensitive) to catch all MEMO-type codes.
+ */
+export const EMPLOYER_BENEFIT_DET_TYPES = new Set([
+  "memo",
+  "memoermatch",
+]);
+
+/**
+ * Per-employee employer benefit cost breakdown.
+ */
+export interface EmployerBenefitCost {
+  /** Total annual employer benefit cost for this employee */
+  total: number;
+  /** Breakdown by code: ERMED, 401ER, etc. */
+  breakdown: Record<string, number>;
+}
+
+/**
+ * Extract employer-paid benefit costs from pay statement detail lines.
+ * Only includes MEMO-type items (employer contributions), NOT employee deductions.
+ *
+ * @param details - All pay statement detail lines for an employee for a year
+ * @returns Employer benefit cost total and breakdown by code
+ */
+export function extractEmployerBenefitCosts(
+  details: PayStatementDetail[]
+): EmployerBenefitCost {
+  const breakdown: Record<string, number> = {};
+  let total = 0;
+
+  for (const d of details) {
+    const detTypeLower = (d.detType ?? "").toLowerCase();
+    if (EMPLOYER_BENEFIT_DET_TYPES.has(detTypeLower)) {
+      const amount = d.amount ?? 0;
+      if (amount > 0) {
+        breakdown[d.detCode] = (breakdown[d.detCode] ?? 0) + amount;
+        total += amount;
+      }
+    }
+  }
+
+  // Round everything
+  for (const key of Object.keys(breakdown)) {
+    breakdown[key] = round(breakdown[key]);
+  }
+
+  return { total: round(total), breakdown };
+}
+
+/**
+ * Annualize employer benefit costs from partial-year data.
+ * If we have YTD data for N months, extrapolate to 12 months.
+ *
+ * @param ytdCost - Year-to-date employer benefit cost
+ * @param monthsOfData - Number of months of pay data available
+ * @returns Estimated annual employer benefit cost
+ */
+export function annualizeEmployerBenefits(
+  ytdCost: number,
+  monthsOfData: number
+): number {
+  if (monthsOfData <= 0 || ytdCost <= 0) return 0;
+  return round((ytdCost / monthsOfData) * 12);
+}
+
 // ─── Types ───────────────────────────────────────────────────────────
 
 export interface EmployeeAccrualInput {
@@ -51,6 +130,10 @@ export interface EmployeeAccrualInput {
   lastCheckDate: string | null;
   /** Most recent pay statement for reference */
   lastPayStatement?: PayStatementSummary;
+  /** Annualized employer benefit cost (medical, 401k match, etc.) */
+  annualBenefitCost?: number;
+  /** Breakdown of employer benefits by code */
+  benefitBreakdown?: Record<string, number>;
 }
 
 export interface AccrualLineItem {
@@ -61,7 +144,7 @@ export interface AccrualLineItem {
   /** Employing entity (always Silverco) */
   employingEntityId: string;
   /** Accrual type */
-  type: "wages" | "payroll_tax" | "pto";
+  type: "wages" | "payroll_tax" | "pto" | "benefits";
   /** Human-readable description */
   description: string;
   /** Dollar amount */
@@ -82,6 +165,12 @@ export interface EmployeeAccrualResult {
   wageAccrual: number;
   taxAccrual: number;
   taxBreakdown: Record<string, number>;
+  /** Monthly pro-rata employer benefit cost */
+  benefitAccrual: number;
+  /** Annualized employer benefit cost */
+  annualBenefitCost: number;
+  /** Breakdown by benefit code (ERMED, 401ER, etc.) */
+  benefitBreakdown: Record<string, number>;
 }
 
 export interface AccrualResult {
@@ -92,6 +181,7 @@ export interface AccrualResult {
   /** Summary totals */
   totalWageAccrual: number;
   totalTaxAccrual: number;
+  totalBenefitAccrual: number;
   totalAccrual: number;
   employeeCount: number;
   /** Line items grouped by operating entity (for journal entries) */
@@ -227,7 +317,7 @@ export function calculateAccruals(
   const employeeDetails: EmployeeAccrualResult[] = [];
 
   // Aggregate by operating entity
-  const entityWages: Record<string, { entry: CostCenterEntry; wages: number; taxes: number; taxBreakdown: Record<string, number> }> = {};
+  const entityWages: Record<string, { entry: CostCenterEntry; wages: number; taxes: number; taxBreakdown: Record<string, number>; benefits: number; benefitBreakdown: Record<string, number> }> = {};
 
   for (const input of inputs) {
     const { employee, ytdGrossWages, lastCheckDate } = input;
@@ -265,6 +355,14 @@ export function calculateAccruals(
       ytdGrossWages
     );
 
+    // Employer benefit cost — pro-rata for the accrual period
+    const annualBenefitCost = input.annualBenefitCost ?? 0;
+    const benefitBreakdown = input.benefitBreakdown ?? {};
+    // Monthly pro-rata: annualBenefitCost × (accrual days / working days per year)
+    const benefitAccrual = annualBenefitCost > 0
+      ? round(annualBenefitCost * (accrualDays / WORKING_DAYS_PER_YEAR))
+      : 0;
+
     // Map to operating entity (company-scoped for correct cost center resolution)
     const costCenterCode = employee.position?.costCenter1 ?? null;
     const costCenterEntry = getOperatingEntityForCostCenter(
@@ -280,15 +378,24 @@ export function calculateAccruals(
         wages: 0,
         taxes: 0,
         taxBreakdown: {},
+        benefits: 0,
+        benefitBreakdown: {},
       };
     }
     entityWages[entityKey].wages += wageAccrual;
     entityWages[entityKey].taxes += taxAccrual;
+    entityWages[entityKey].benefits += benefitAccrual;
 
     // Merge tax breakdown
     for (const [taxKey, taxAmount] of Object.entries(taxBreakdown)) {
       entityWages[entityKey].taxBreakdown[taxKey] =
         (entityWages[entityKey].taxBreakdown[taxKey] || 0) + taxAmount;
+    }
+
+    // Merge benefit breakdown
+    for (const [bKey, bAmount] of Object.entries(benefitBreakdown)) {
+      entityWages[entityKey].benefitBreakdown[bKey] =
+        (entityWages[entityKey].benefitBreakdown[bKey] || 0) + (bAmount * (accrualDays / WORKING_DAYS_PER_YEAR));
     }
 
     employeeDetails.push({
@@ -303,6 +410,9 @@ export function calculateAccruals(
       wageAccrual,
       taxAccrual,
       taxBreakdown,
+      benefitAccrual,
+      annualBenefitCost,
+      benefitBreakdown,
     });
   }
 
@@ -310,10 +420,12 @@ export function calculateAccruals(
   const lineItems: AccrualLineItem[] = [];
   let totalWageAccrual = 0;
   let totalTaxAccrual = 0;
+  let totalBenefitAccrual = 0;
 
   for (const [, data] of Object.entries(entityWages)) {
     const wages = round(data.wages);
     const taxes = round(data.taxes);
+    const benefits = round(data.benefits);
 
     if (wages > 0) {
       lineItems.push({
@@ -346,16 +458,36 @@ export function calculateAccruals(
       });
     }
 
+    if (benefits > 0) {
+      const roundedBenefits: Record<string, number> = {};
+      for (const [k, v] of Object.entries(data.benefitBreakdown)) {
+        roundedBenefits[k] = round(v);
+      }
+
+      lineItems.push({
+        operatingEntityId: data.entry.operatingEntityId,
+        operatingEntityCode: data.entry.operatingEntityCode,
+        operatingEntityName: data.entry.operatingEntityName,
+        employingEntityId: EMPLOYING_ENTITY_ID,
+        type: "benefits",
+        description: `Employer benefits — ${data.entry.operatingEntityName}`,
+        amount: benefits,
+        details: roundedBenefits,
+      });
+    }
+
     totalWageAccrual += wages;
     totalTaxAccrual += taxes;
+    totalBenefitAccrual += benefits;
   }
 
-  // Sort line items: wages first, then taxes, grouped by entity
+  // Sort line items: wages first, then taxes, then benefits, grouped by entity
+  const typeOrder = { wages: 0, payroll_tax: 1, benefits: 2, pto: 3 };
   lineItems.sort((a, b) => {
     if (a.operatingEntityCode !== b.operatingEntityCode) {
       return a.operatingEntityCode.localeCompare(b.operatingEntityCode);
     }
-    return a.type === "wages" ? -1 : 1;
+    return (typeOrder[a.type] ?? 9) - (typeOrder[b.type] ?? 9);
   });
 
   return {
@@ -364,7 +496,8 @@ export function calculateAccruals(
     periodEndDate: periodEndStr,
     totalWageAccrual: round(totalWageAccrual),
     totalTaxAccrual: round(totalTaxAccrual),
-    totalAccrual: round(totalWageAccrual + totalTaxAccrual),
+    totalBenefitAccrual: round(totalBenefitAccrual),
+    totalAccrual: round(totalWageAccrual + totalTaxAccrual + totalBenefitAccrual),
     employeeCount: employeeDetails.length,
     lineItems,
     employeeDetails,
@@ -420,6 +553,7 @@ export interface EntityPayrollSummary {
   headcount: number;
   totalAnnualComp: number;
   totalMonthlyComp: number;
+  totalAnnualBenefits: number;
   departments: {
     department: string;
     headcount: number;
@@ -430,12 +564,19 @@ export interface EntityPayrollSummary {
 /**
  * Aggregate employee data into per-entity payroll summaries.
  * Used by dashboards for KPI cards and charts.
+ *
+ * @param employees - Employee list with _companyId tags
+ * @param benefitCosts - Optional map of "employeeId:companyId" → annual employer benefit cost
  */
-export function aggregateByEntity(employees: (Employee & { _companyId?: string })[]): EntityPayrollSummary[] {
+export function aggregateByEntity(
+  employees: (Employee & { _companyId?: string })[],
+  benefitCosts?: Record<string, number>
+): EntityPayrollSummary[] {
   const entityMap: Record<string, {
     entityId: string;
     entityCode: string;
     entityName: string;
+    totalBenefits: number;
     deptMap: Record<string, { headcount: number; totalAnnualComp: number }>;
   }> = {};
 
@@ -448,6 +589,7 @@ export function aggregateByEntity(employees: (Employee & { _companyId?: string }
         entityId: cc.operatingEntityId,
         entityCode: cc.operatingEntityCode,
         entityName: cc.operatingEntityName,
+        totalBenefits: 0,
         deptMap: {},
       };
     }
@@ -459,6 +601,12 @@ export function aggregateByEntity(employees: (Employee & { _companyId?: string }
 
     entity.deptMap[cc.department].headcount++;
     entity.deptMap[cc.department].totalAnnualComp += annualComp;
+
+    // Add employer benefit cost if available
+    if (benefitCosts) {
+      const benefitKey = `${emp.id}:${emp._companyId}`;
+      entity.totalBenefits += benefitCosts[benefitKey] ?? 0;
+    }
   }
 
   return Object.values(entityMap).map((e) => {
@@ -478,6 +626,7 @@ export function aggregateByEntity(employees: (Employee & { _companyId?: string }
       headcount,
       totalAnnualComp: round(totalAnnualComp),
       totalMonthlyComp: round(totalAnnualComp / 12),
+      totalAnnualBenefits: round(e.totalBenefits),
       departments: departments.sort((a, b) => b.totalAnnualComp - a.totalAnnualComp),
     };
   }).sort((a, b) => b.totalAnnualComp - a.totalAnnualComp);

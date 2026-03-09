@@ -3,6 +3,8 @@ import { getAllCompanyClients } from "@/lib/paylocity";
 import {
   calculateAccruals,
   getAnnualComp,
+  extractEmployerBenefitCosts,
+  annualizeEmployerBenefits,
   type EmployeeAccrualInput,
 } from "@/lib/utils/payroll-calculations";
 import type { Employee } from "@/lib/paylocity/types";
@@ -13,7 +15,7 @@ import { getOperatingEntityForCostCenter } from "@/lib/paylocity/cost-center-con
  *
  * Returns per-employee accrual calculations for a given period.
  * This runs the same calculation engine as sync but doesn't save anything.
- * Shows exactly how each employee's accrued wages and taxes are computed.
+ * Shows exactly how each employee's accrued wages, taxes, and employer benefits are computed.
  */
 
 // In-memory cache keyed by "year-month"
@@ -46,7 +48,10 @@ function buildResponse(
       accrualDays: detail.accrualDays,
       wageAccrual: detail.wageAccrual,
       taxAccrual: detail.taxAccrual,
-      totalAccrual: Math.round((detail.wageAccrual + detail.taxAccrual) * 100) / 100,
+      benefitAccrual: detail.benefitAccrual,
+      annualBenefitCost: detail.annualBenefitCost,
+      benefitBreakdown: detail.benefitBreakdown,
+      totalAccrual: Math.round((detail.wageAccrual + detail.taxAccrual + detail.benefitAccrual) * 100) / 100,
       taxBreakdown: detail.taxBreakdown,
     };
   });
@@ -65,6 +70,7 @@ function buildResponse(
     periodEndDate: accrualResult.periodEndDate,
     totalWageAccrual: accrualResult.totalWageAccrual,
     totalTaxAccrual: accrualResult.totalTaxAccrual,
+    totalBenefitAccrual: accrualResult.totalBenefitAccrual,
     totalAccrual: accrualResult.totalAccrual,
     employeeCount: accrualResult.employeeCount,
     employees,
@@ -104,7 +110,7 @@ export async function GET(request: NextRequest) {
       })
     );
 
-    // 2. Batch-fetch pay statements to get YTD wages + last check date
+    // 2. Batch-fetch pay statements + pay details for YTD wages, last check date, and benefit costs
     const inputs: EmployeeAccrualInput[] = [];
     const allEmployees: { emp: Employee; companyId: string; cc: ReturnType<typeof getOperatingEntityForCostCenter> }[] = [];
     const batchSize = 5;
@@ -121,7 +127,11 @@ export async function GET(request: NextRequest) {
             allEmployees.push({ emp, companyId, cc });
 
             try {
-              const payStatements = await client.getPayStatementSummary(emp.id, periodYear);
+              // Fetch pay statement summaries AND details in parallel
+              const [payStatements, payDetails] = await Promise.all([
+                client.getPayStatementSummary(emp.id, periodYear),
+                client.getPayStatementDetails(emp.id, periodYear),
+              ]);
 
               const sorted = [...payStatements].sort(
                 (a, b) => new Date(b.checkDate).getTime() - new Date(a.checkDate).getTime()
@@ -132,11 +142,21 @@ export async function GET(request: NextRequest) {
                 (ps) => new Date(ps.checkDate) <= periodEndDate
               );
 
+              // Extract employer benefit costs from pay details
+              const benefitCosts = extractEmployerBenefitCosts(payDetails);
+              const annualBenefitCost = annualizeEmployerBenefits(benefitCosts.total, periodMonth);
+              const annualizedBreakdown: Record<string, number> = {};
+              for (const [code, amount] of Object.entries(benefitCosts.breakdown)) {
+                annualizedBreakdown[code] = Math.round(annualizeEmployerBenefits(amount, periodMonth) * 100) / 100;
+              }
+
               return {
                 employee: emp,
                 ytdGrossWages: relevantStatements.reduce((sum, ps) => sum + (ps.grossPay || 0), 0),
                 lastCheckDate: relevantStatements[0]?.checkDate ?? null,
                 lastPayStatement: relevantStatements[0],
+                annualBenefitCost,
+                benefitBreakdown: annualizedBreakdown,
               } satisfies EmployeeAccrualInput;
             } catch {
               return {

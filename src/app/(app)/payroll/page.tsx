@@ -68,6 +68,8 @@ interface MappedEmployee {
   operatingEntityId: string;
   operatingEntityCode: string;
   operatingEntityName: string;
+  erBenefits: number;
+  erBenefitBreakdown: Record<string, number>;
 }
 
 // --- Constants ---
@@ -138,6 +140,7 @@ export default function OrgPayrollPage() {
         entityId: string;
         headcount: number;
         totalComp: number;
+        totalBenefits: number;
         departments: Record<string, { headcount: number; totalComp: number }>;
       }
     > = {};
@@ -151,11 +154,13 @@ export default function OrgPayrollPage() {
           entityId: emp.operatingEntityId,
           headcount: 0,
           totalComp: 0,
+          totalBenefits: 0,
           departments: {},
         };
       }
       map[key].headcount++;
       map[key].totalComp += emp.annualComp;
+      map[key].totalBenefits += emp.erBenefits ?? 0;
 
       if (!map[key].departments[emp.department]) {
         map[key].departments[emp.department] = { headcount: 0, totalComp: 0 };
@@ -171,6 +176,7 @@ export default function OrgPayrollPage() {
   const totalAnnualComp = employees.reduce((s, e) => s + e.annualComp, 0);
   const totalMonthlyComp = totalAnnualComp / 12;
   const avgComp = totalHeadcount > 0 ? totalAnnualComp / totalHeadcount : 0;
+  const totalAnnualBenefits = employees.reduce((s, e) => s + (e.erBenefits ?? 0), 0);
 
   // Filter options
   const uniqueEntities = useMemo(
@@ -256,7 +262,7 @@ export default function OrgPayrollPage() {
       </div>
 
       {/* KPI Cards */}
-      <div className="grid gap-4 md:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-5">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Total Headcount</CardTitle>
@@ -279,6 +285,19 @@ export default function OrgPayrollPage() {
             <div className="text-2xl font-bold">{formatCompact(totalAnnualComp)}</div>
             <p className="text-xs text-muted-foreground">
               Total annual compensation
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">ER Benefits</CardTitle>
+            <Users className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{formatCompact(totalAnnualBenefits)}</div>
+            <p className="text-xs text-muted-foreground">
+              Employer-paid benefits (annual)
             </p>
           </CardContent>
         </Card>
@@ -436,6 +455,11 @@ export default function OrgPayrollPage() {
                 <div className="mt-1 text-xs text-muted-foreground">
                   {formatCurrency(entity.totalComp)} annual
                 </div>
+                {entity.totalBenefits > 0 && (
+                  <div className="mt-0.5 text-xs text-muted-foreground">
+                    + {formatCurrency(entity.totalBenefits)} ER benefits
+                  </div>
+                )}
               </CardContent>
             </Card>
           </Link>
@@ -502,6 +526,7 @@ export default function OrgPayrollPage() {
                   <TableHead>Job Title</TableHead>
                   <TableHead>Pay Type</TableHead>
                   <TableHead className="text-right">Annual Comp</TableHead>
+                  <TableHead className="text-right" title="Employer-paid benefits (medical, 401k match, etc.)">ER Benefits</TableHead>
                   <TableHead className="text-right">Monthly</TableHead>
                 </TableRow>
               </TableHeader>
@@ -533,6 +558,13 @@ export default function OrgPayrollPage() {
                     <TableCell className="text-right font-mono">
                       {formatCurrency(emp.annualComp)}
                     </TableCell>
+                    <TableCell className="text-right font-mono text-muted-foreground" title={
+                      Object.entries(emp.erBenefitBreakdown ?? {})
+                        .map(([k, v]) => `${k}: $${v.toFixed(2)}`)
+                        .join(", ") || "No employer benefits"
+                    }>
+                      {formatCurrency(emp.erBenefits ?? 0)}
+                    </TableCell>
                     <TableCell className="text-right font-mono text-muted-foreground">
                       {formatCurrency(emp.annualComp / 12)}
                     </TableCell>
@@ -540,7 +572,7 @@ export default function OrgPayrollPage() {
                 ))}
                 {filteredEmployees.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
+                    <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
                       No employees match the current filters.
                     </TableCell>
                   </TableRow>
@@ -556,6 +588,12 @@ export default function OrgPayrollPage() {
                 Total Annual:{" "}
                 <span className="font-semibold text-foreground">
                   {formatCurrency(filteredEmployees.reduce((s, e) => s + e.annualComp, 0))}
+                </span>
+              </span>
+              <span className="text-muted-foreground">
+                ER Benefits:{" "}
+                <span className="font-semibold text-foreground">
+                  {formatCurrency(filteredEmployees.reduce((s, e) => s + (e.erBenefits ?? 0), 0))}
                 </span>
               </span>
               <span className="text-muted-foreground">

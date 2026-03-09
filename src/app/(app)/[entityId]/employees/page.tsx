@@ -83,6 +83,8 @@ interface MappedEmployee {
   payType: string;
   annualComp: number;
   erTaxes: number;
+  erBenefits: number;
+  erBenefitBreakdown: Record<string, number>;
   totalComp: number;
   baseRate: number;
   hireDate: string | null;
@@ -403,6 +405,7 @@ export default function EmployeeRosterPage() {
   // KPIs
   const totalAnnualComp = displayEmployees.reduce((s, e) => s + e.annualComp, 0);
   const totalERTaxes = displayEmployees.reduce((s, e) => s + e.erTaxes, 0);
+  const totalERBenefits = displayEmployees.reduce((s, e) => s + (e.erBenefits ?? 0), 0);
   const totalFullComp = displayEmployees.reduce((s, e) => s + e.totalComp, 0);
   const avgComp = displayEmployees.length > 0 ? totalFullComp / displayEmployees.length : 0;
   const deptCount = uniqueDepts.length;
@@ -577,7 +580,7 @@ export default function EmployeeRosterPage() {
             <CardContent>
               <div className="text-2xl font-bold">{formatCompact(totalFullComp)}</div>
               <p className="text-xs text-muted-foreground">
-                Wages {formatCompact(totalAnnualComp)} + ER taxes {formatCompact(totalERTaxes)}
+                Wages {formatCompact(totalAnnualComp)} + Taxes {formatCompact(totalERTaxes)} + Benefits {formatCompact(totalERBenefits)}
               </p>
             </CardContent>
           </Card>
@@ -715,13 +718,26 @@ export default function EmployeeRosterPage() {
                     <TableHead className="text-right">ER Taxes</TableHead>
                     <TableHead className="text-right">
                       <span className="inline-flex items-center gap-1">
+                        ER Benefits
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Info className="h-3 w-3 text-muted-foreground" />
+                          </TooltipTrigger>
+                          <TooltipContent side="top" className="max-w-xs text-xs">
+                            Annualized employer-paid benefits (medical, 401k match). Does not include employee-paid deductions.
+                          </TooltipContent>
+                        </Tooltip>
+                      </span>
+                    </TableHead>
+                    <TableHead className="text-right">
+                      <span className="inline-flex items-center gap-1">
                         Total Comp
                         <Tooltip>
                           <TooltipTrigger asChild>
                             <Info className="h-3 w-3 text-muted-foreground" />
                           </TooltipTrigger>
                           <TooltipContent side="top" className="max-w-xs text-xs">
-                            Annual wages + employer payroll taxes (FICA SS, Medicare, FUTA, CA SUI, ETT, SDI)
+                            Annual wages + employer payroll taxes + employer-paid benefits
                           </TooltipContent>
                         </Tooltip>
                       </span>
@@ -776,6 +792,18 @@ export default function EmployeeRosterPage() {
                       <TableCell className="text-right font-mono text-muted-foreground">
                         {formatCurrency(emp.erTaxes)}
                       </TableCell>
+                      <TableCell
+                        className="text-right font-mono text-muted-foreground"
+                        title={
+                          emp.erBenefitBreakdown && Object.keys(emp.erBenefitBreakdown).length > 0
+                            ? Object.entries(emp.erBenefitBreakdown)
+                                .map(([k, v]) => `${k}: $${v.toLocaleString()}`)
+                                .join(", ")
+                            : "No employer benefits"
+                        }
+                      >
+                        {(emp.erBenefits ?? 0) > 0 ? formatCurrency(emp.erBenefits) : "---"}
+                      </TableCell>
                       <TableCell className="text-right font-mono font-semibold">
                         {formatCurrency(emp.totalComp)}
                       </TableCell>
@@ -788,7 +816,7 @@ export default function EmployeeRosterPage() {
                   ))}
                   {filteredEmployees.length === 0 && (
                     <TableRow>
-                      <TableCell colSpan={11} className="text-center text-muted-foreground py-8">
+                      <TableCell colSpan={12} className="text-center text-muted-foreground py-8">
                         No employees match the current filters.
                       </TableCell>
                     </TableRow>
@@ -810,6 +838,12 @@ export default function EmployeeRosterPage() {
                   ER Taxes:{" "}
                   <span className="font-semibold text-foreground">
                     {formatCurrency(filteredEmployees.reduce((s, e) => s + e.erTaxes, 0))}
+                  </span>
+                </span>
+                <span className="text-muted-foreground">
+                  ER Benefits:{" "}
+                  <span className="font-semibold text-foreground">
+                    {formatCurrency(filteredEmployees.reduce((s, e) => s + (e.erBenefits ?? 0), 0))}
                   </span>
                 </span>
                 <span className="text-muted-foreground">

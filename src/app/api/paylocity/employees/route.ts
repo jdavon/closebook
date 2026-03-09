@@ -1,13 +1,19 @@
 import { NextResponse } from "next/server";
 import { getAllCompanyClients } from "@/lib/paylocity";
+import type { PaylocityClient } from "@/lib/paylocity";
 import { getOperatingEntityForCostCenter } from "@/lib/paylocity/cost-center-config";
-import { getAnnualComp, estimateAnnualERTaxes } from "@/lib/utils/payroll-calculations";
+import {
+  getAnnualComp,
+  estimateAnnualERTaxes,
+  extractEmployerBenefitCosts,
+  annualizeEmployerBenefits,
+} from "@/lib/utils/payroll-calculations";
 
 /**
  * GET /api/paylocity/employees
  *
  * Returns all active employees across all configured Paylocity companies,
- * with entity mapping, department, and pay info.
+ * with entity mapping, department, pay info, and employer-paid benefit costs.
  * Used by both org-level and entity-level dashboards.
  *
  * Response cached for 5 minutes via in-memory cache.
@@ -28,6 +34,8 @@ interface MappedEmployee {
   payType: string;
   annualComp: number;
   erTaxes: number;
+  erBenefits: number;
+  erBenefitBreakdown: Record<string, number>;
   totalComp: number;
   baseRate: number;
   hireDate: string | null;
@@ -60,16 +68,49 @@ export async function GET() {
           activeOnly: true,
           include: ["info", "position", "payrate", "status"],
         });
-        return { companyId: client.companyId, employees: raw };
+        return { companyId: client.companyId, client, employees: raw };
       })
     );
 
+    // Determine current year and how many months of data we have
+    const now = new Date();
+    const year = now.getFullYear();
+    const currentMonth = now.getMonth() + 1; // 1-12
+
     // Merge and map employees from all companies
-    // Note: activeOnly=true in the API call already filters to active employees,
-    // so no need for a statusType check (batch endpoint doesn't return it at top level)
     const employees: MappedEmployee[] = [];
 
-    for (const { companyId, employees: rawEmployees } of results) {
+    for (const { companyId, client, employees: rawEmployees } of results) {
+      // Batch-fetch pay statement details for employer benefit costs
+      // Process in batches of 5 to respect API concurrency
+      const batchSize = 5;
+      const employeeBenefits: Record<string, { total: number; breakdown: Record<string, number> }> = {};
+
+      for (let i = 0; i < rawEmployees.length; i += batchSize) {
+        const batch = rawEmployees.slice(i, i + batchSize);
+        await Promise.all(
+          batch.map(async (emp) => {
+            try {
+              const details = await client.getPayStatementDetails(emp.id, year);
+              if (details.length > 0) {
+                const costs = extractEmployerBenefitCosts(details);
+                if (costs.total > 0) {
+                  // Annualize based on how many months of data we have
+                  const annualized = annualizeEmployerBenefits(costs.total, currentMonth);
+                  const annualizedBreakdown: Record<string, number> = {};
+                  for (const [code, amount] of Object.entries(costs.breakdown)) {
+                    annualizedBreakdown[code] = Math.round(annualizeEmployerBenefits(amount, currentMonth) * 100) / 100;
+                  }
+                  employeeBenefits[emp.id] = { total: annualized, breakdown: annualizedBreakdown };
+                }
+              }
+            } catch {
+              // Silent fail — employee just won't have benefit data
+            }
+          })
+        );
+      }
+
       for (const emp of rawEmployees) {
         // Skip ghost/placeholder records with no name data
         const firstName = emp.info?.firstName ?? "";
@@ -80,6 +121,8 @@ export async function GET() {
         const cc = getOperatingEntityForCostCenter(emp.position?.costCenter1, companyId);
         const annualComp = getAnnualComp(emp);
         const { total: erTaxes } = estimateAnnualERTaxes(annualComp);
+        const benefits = employeeBenefits[emp.id] ?? { total: 0, breakdown: {} };
+
         employees.push({
           id: emp.id,
           companyId,
@@ -92,7 +135,9 @@ export async function GET() {
           payType: emp.currentPayRate?.payType ?? "Unknown",
           annualComp,
           erTaxes,
-          totalComp: annualComp + erTaxes,
+          erBenefits: benefits.total,
+          erBenefitBreakdown: benefits.breakdown,
+          totalComp: annualComp + erTaxes + benefits.total,
           baseRate: emp.currentPayRate?.baseRate ?? 0,
           hireDate: emp.info?.hireDate ?? null,
           costCenterCode: emp.position?.costCenter1 ?? "UNKNOWN",
