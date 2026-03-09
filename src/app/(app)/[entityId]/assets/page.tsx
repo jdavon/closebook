@@ -26,7 +26,18 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Plus, ArrowRight, Car, Search, Upload } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Plus, ArrowRight, Car, Search, Upload, Trash2 } from "lucide-react";
 import { formatCurrency } from "@/lib/utils/dates";
 import {
   getVehicleClassification,
@@ -77,6 +88,9 @@ export default function AssetsPage() {
   const [masterTypeFilter, setMasterTypeFilter] = useState<string>("all");
   const [reportingGroupFilter, setReportingGroupFilter] = useState<string>("all");
   const [searchQuery, setSearchQuery] = useState("");
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const loadAssets = useCallback(async () => {
     let query = supabase
@@ -136,6 +150,45 @@ export default function AssetsPage() {
     return true;
   });
 
+  const allFilteredSelected =
+    filteredAssets.length > 0 &&
+    filteredAssets.every((a) => selectedIds.has(a.id));
+
+  const toggleSelectAll = () => {
+    if (allFilteredSelected) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(filteredAssets.map((a) => a.id)));
+    }
+  };
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const handleDelete = async () => {
+    setDeleting(true);
+    // Delete depreciation records first (foreign key), then assets
+    const ids = Array.from(selectedIds);
+    await supabase
+      .from("fixed_asset_depreciation")
+      .delete()
+      .in("asset_id", ids);
+    await supabase
+      .from("fixed_assets")
+      .delete()
+      .in("id", ids);
+    setSelectedIds(new Set());
+    setShowDeleteDialog(false);
+    setDeleting(false);
+    loadAssets();
+  };
+
   const totalCost = filteredAssets.reduce((s, a) => s + a.acquisition_cost, 0);
   const totalBookNbv = filteredAssets.reduce((s, a) => s + a.book_net_value, 0);
   const totalTaxNbv = filteredAssets.reduce((s, a) => s + a.tax_net_value, 0);
@@ -150,6 +203,15 @@ export default function AssetsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {selectedIds.size > 0 && (
+            <Button
+              variant="destructive"
+              onClick={() => setShowDeleteDialog(true)}
+            >
+              <Trash2 className="mr-2 h-4 w-4" />
+              Delete ({selectedIds.size})
+            </Button>
+          )}
           <Link href={`/${entityId}/assets/import`}>
             <Button variant="outline">
               <Upload className="mr-2 h-4 w-4" />
@@ -290,6 +352,13 @@ export default function AssetsPage() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead className="w-10">
+                    <Checkbox
+                      checked={allFilteredSelected}
+                      onCheckedChange={toggleSelectAll}
+                      aria-label="Select all assets"
+                    />
+                  </TableHead>
                   <TableHead>Asset Tag</TableHead>
                   <TableHead>Class</TableHead>
                   <TableHead>Vehicle</TableHead>
@@ -307,6 +376,13 @@ export default function AssetsPage() {
                   const classification = getVehicleClassification(asset.vehicle_class);
                   return (
                     <TableRow key={asset.id}>
+                      <TableCell>
+                        <Checkbox
+                          checked={selectedIds.has(asset.id)}
+                          onCheckedChange={() => toggleSelect(asset.id)}
+                          aria-label={`Select ${asset.asset_name}`}
+                        />
+                      </TableCell>
                       <TableCell className="font-medium">
                         {asset.asset_tag ?? "---"}
                       </TableCell>
@@ -364,6 +440,28 @@ export default function AssetsPage() {
           )}
         </CardContent>
       </Card>
+
+      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete {selectedIds.size} asset{selectedIds.size !== 1 ? "s" : ""}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete the selected asset{selectedIds.size !== 1 ? "s" : ""} and
+              all associated depreciation records. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleDelete}
+              disabled={deleting}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {deleting ? "Deleting..." : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
