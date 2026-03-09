@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAllCompanyClients } from "@/lib/paylocity";
 import { getOperatingEntityForCostCenter } from "@/lib/paylocity/cost-center-config";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { getISOWeek, getISOWeekYear } from "date-fns";
 import type {
   PayStatementSummary,
   PayStatementDetail,
@@ -49,6 +50,7 @@ interface OTEmployee {
   payType: string;
   costCenterCode: string;
   monthlyHours: Record<string, MonthlyHours>;
+  weeklyHours: Record<string, MonthlyHours>;
   totals: {
     otHours: number;
     otDollars: number;
@@ -74,6 +76,28 @@ interface AllocationRow {
 
 // detCodes to extract from detail line items (supplemental to summary)
 const DETAIL_CODES = new Set(["DT", "MEAL"]);
+
+/** Convert a "YYYY-MM-DD" check date to an ISO week key like "2026-W10" */
+function toWeekKey(checkDate: string): string | null {
+  const d = new Date(checkDate);
+  if (isNaN(d.getTime())) return null;
+  const isoYear = getISOWeekYear(d);
+  const isoWeek = getISOWeek(d);
+  return `${isoYear}-W${String(isoWeek).padStart(2, "0")}`;
+}
+
+function ensureBucket(
+  map: Record<string, MonthlyHours>,
+  key: string
+): MonthlyHours {
+  if (!map[key]) {
+    map[key] = {
+      otHours: 0, otDollars: 0, dtHours: 0, dtDollars: 0,
+      mealHours: 0, mealDollars: 0, regHours: 0, regDollars: 0,
+    };
+  }
+  return map[key];
+}
 
 // In-memory cache (5 min TTL)
 let cachedData: { data: unknown; year: number; fetchedAt: number } | null =
@@ -201,6 +225,7 @@ export async function GET(request: NextRequest) {
 
           // ── Aggregate from SUMMARY (OT + REG) ──
           const monthlyHours: Record<string, MonthlyHours> = {};
+          const weeklyHours: Record<string, MonthlyHours> = {};
           const totals = {
             otHours: 0,
             otDollars: 0,
@@ -217,21 +242,9 @@ export async function GET(request: NextRequest) {
           for (const ps of summaries) {
             const month = ps.checkDate?.slice(0, 7); // "YYYY-MM"
             if (!month) continue;
+            const week = toWeekKey(ps.checkDate);
 
-            if (!monthlyHours[month]) {
-              monthlyHours[month] = {
-                otHours: 0,
-                otDollars: 0,
-                dtHours: 0,
-                dtDollars: 0,
-                mealHours: 0,
-                mealDollars: 0,
-                regHours: 0,
-                regDollars: 0,
-              };
-            }
-
-            const m = monthlyHours[month];
+            const m = ensureBucket(monthlyHours, month);
 
             // OT from summary (trusted aggregate)
             const otH = ps.overtimeHours || 0;
@@ -248,6 +261,15 @@ export async function GET(request: NextRequest) {
             m.regDollars += regD;
             totals.regHours += regH;
             totals.regDollars += regD;
+
+            // Weekly bucket (mirrors monthly)
+            if (week) {
+              const w = ensureBucket(weeklyHours, week);
+              w.otHours += otH;
+              w.otDollars += otD;
+              w.regHours += regH;
+              w.regDollars += regD;
+            }
           }
 
           // ── Aggregate from DETAILS (DT + MEAL only) ──
@@ -257,24 +279,11 @@ export async function GET(request: NextRequest) {
 
             const month = d.checkDate?.slice(0, 7);
             if (!month) continue;
-
-            // Ensure month bucket exists (may have been created by summary above)
-            if (!monthlyHours[month]) {
-              monthlyHours[month] = {
-                otHours: 0,
-                otDollars: 0,
-                dtHours: 0,
-                dtDollars: 0,
-                mealHours: 0,
-                mealDollars: 0,
-                regHours: 0,
-                regDollars: 0,
-              };
-            }
+            const week = toWeekKey(d.checkDate);
 
             const hrs = d.hours || 0;
             const amt = d.amount || 0;
-            const m = monthlyHours[month];
+            const m = ensureBucket(monthlyHours, month);
 
             if (code === "DT") {
               m.dtHours += hrs;
@@ -286,6 +295,18 @@ export async function GET(request: NextRequest) {
               m.mealDollars += amt;
               totals.mealHours += hrs;
               totals.mealDollars += amt;
+            }
+
+            // Weekly bucket (mirrors monthly)
+            if (week) {
+              const w = ensureBucket(weeklyHours, week);
+              if (code === "DT") {
+                w.dtHours += hrs;
+                w.dtDollars += amt;
+              } else if (code === "MEAL") {
+                w.mealHours += hrs;
+                w.mealDollars += amt;
+              }
             }
           }
 
@@ -313,20 +334,22 @@ export async function GET(request: NextRequest) {
             payType: emp.currentPayRate?.payType ?? "Unknown",
             costCenterCode: emp.position?.costCenter1 ?? "UNKNOWN",
             monthlyHours,
+            weeklyHours,
             totals,
           });
         }
       }
     }
 
-    // Collect all months
+    // Collect all months and weeks
     const monthSet = new Set<string>();
+    const weekSet = new Set<string>();
     for (const emp of otEmployees) {
-      for (const m of Object.keys(emp.monthlyHours)) {
-        monthSet.add(m);
-      }
+      for (const m of Object.keys(emp.monthlyHours)) monthSet.add(m);
+      for (const w of Object.keys(emp.weeklyHours)) weekSet.add(w);
     }
     const months = [...monthSet].sort();
+    const weeks = [...weekSet].sort();
 
     // Compute org-level KPIs
     const kpis = {
@@ -367,6 +390,7 @@ export async function GET(request: NextRequest) {
       year,
       employees: otEmployees,
       months,
+      weeks,
       kpis,
     };
 

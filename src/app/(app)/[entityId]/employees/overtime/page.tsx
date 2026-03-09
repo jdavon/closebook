@@ -26,10 +26,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Clock,
   DollarSign,
-  Users,
   ChevronRight,
   ChevronDown,
   ArrowLeft,
@@ -37,6 +37,14 @@ import {
   TrendingUp,
 } from "lucide-react";
 import { formatCurrency, getCurrentPeriod } from "@/lib/utils/dates";
+
+// --- Constants ---
+
+/** Employing entity IDs → Paylocity company IDs (mirrors employees page) */
+const EMPLOYING_ENTITIES: Record<string, string> = {
+  "b664a9c1-3817-4df4-9261-f51b3403a5de": "132427", // Silverco
+  "7529580d-3b44-4a9b-91f4-bc2db25f5211": "316791", // HDR
+};
 
 // --- Types ---
 
@@ -62,6 +70,7 @@ interface OTEmployee {
   operatingEntityName: string;
   payType: string;
   monthlyHours: Record<string, MonthlyHours>;
+  weeklyHours: Record<string, MonthlyHours>;
   totals: {
     otHours: number;
     otDollars: number;
@@ -102,10 +111,19 @@ function monthLabel(yyyymm: string): string {
   return date.toLocaleString("en-US", { month: "long", year: "numeric" });
 }
 
-// Summing helpers for aggregating MonthlyHours across employees
-function emptyHours(): MonthlyHours {
-  return { otHours: 0, otDollars: 0, dtHours: 0, dtDollars: 0, mealHours: 0, mealDollars: 0, regHours: 0, regDollars: 0 };
+function weekLabel(key: string): string {
+  // "2026-W10" → "Week 10"
+  const weekStr = key.split("-W")[1];
+  return `Week ${parseInt(weekStr, 10)}`;
 }
+
+function emptyHours(): MonthlyHours {
+  return {
+    otHours: 0, otDollars: 0, dtHours: 0, dtDollars: 0,
+    mealHours: 0, mealDollars: 0, regHours: 0, regDollars: 0,
+  };
+}
+
 function addHours(a: MonthlyHours, b: MonthlyHours): MonthlyHours {
   return {
     otHours: a.otHours + b.otHours,
@@ -118,34 +136,60 @@ function addHours(a: MonthlyHours, b: MonthlyHours): MonthlyHours {
     regDollars: a.regDollars + b.regDollars,
   };
 }
-function premiumHours(h: MonthlyHours): number {
+
+function premiumHrs(h: MonthlyHours): number {
   return h.otHours + h.dtHours + h.mealHours;
 }
-function premiumDollars(h: MonthlyHours): number {
+
+function premiumDlrs(h: MonthlyHours): number {
   return h.otDollars + h.dtDollars + h.mealDollars;
 }
-function totalHours(h: MonthlyHours): number {
+
+function totalHrs(h: MonthlyHours): number {
   return h.regHours + h.otHours + h.dtHours + h.mealHours;
 }
 
-// Aggregated types for the hierarchy
-interface EmpRow {
+/** Get the hours for a specific period, or totals for "all" */
+function getEmployeePeriodHours(
+  emp: OTEmployee,
+  period: string,
+  granularity: "monthly" | "weekly"
+): MonthlyHours {
+  if (period === "all") {
+    return {
+      otHours: emp.totals.otHours,
+      otDollars: emp.totals.otDollars,
+      dtHours: emp.totals.dtHours,
+      dtDollars: emp.totals.dtDollars,
+      mealHours: emp.totals.mealHours,
+      mealDollars: emp.totals.mealDollars,
+      regHours: emp.totals.regHours,
+      regDollars: emp.totals.regDollars,
+    };
+  }
+  const source = granularity === "weekly" ? emp.weeklyHours : emp.monthlyHours;
+  return source?.[period] ?? emptyHours();
+}
+
+// --- Aggregated Tree Types ---
+
+interface EmployeeNode {
   id: string;
   displayName: string;
   payType: string;
   hours: MonthlyHours;
 }
 
-interface ClassAgg {
+interface ClassNode {
   classLabel: string;
   hours: MonthlyHours;
-  employees: EmpRow[];
+  employees: EmployeeNode[];
 }
 
-interface MonthAgg {
-  month: string;
+interface DepartmentNode {
+  department: string;
   hours: MonthlyHours;
-  classes: ClassAgg[];
+  classes: ClassNode[];
 }
 
 // --- Page ---
@@ -158,14 +202,20 @@ export default function OvertimeAnalysisPage() {
   const [year, setYear] = useState(current.year);
   const [rawEmployees, setRawEmployees] = useState<OTEmployee[]>([]);
   const [allocations, setAllocations] = useState<AllocationOverride[]>([]);
+  const [availableMonths, setAvailableMonths] = useState<string[]>([]);
+  const [availableWeeks, setAvailableWeeks] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Collapsible state
-  const [expandedMonths, setExpandedMonths] = useState<Set<string>>(new Set());
-  const [expandedDepts, setExpandedDepts] = useState<Set<string>>(new Set());
+  // View controls
+  const [granularity, setGranularity] = useState<"monthly" | "weekly">("monthly");
+  const [selectedPeriod, setSelectedPeriod] = useState<string>("all");
 
-  // --- Fetch Data (OT analysis + allocations in parallel) ---
+  // Collapsible state
+  const [expandedDepts, setExpandedDepts] = useState<Set<string>>(new Set());
+  const [expandedClasses, setExpandedClasses] = useState<Set<string>>(new Set());
+
+  // --- Fetch Data ---
   useEffect(() => {
     async function load() {
       setLoading(true);
@@ -178,6 +228,8 @@ export default function OvertimeAnalysisPage() {
         if (!otRes.ok) throw new Error(`Failed to fetch: ${otRes.status}`);
         const otData = await otRes.json();
         setRawEmployees(otData.employees ?? []);
+        setAvailableMonths(otData.months ?? []);
+        setAvailableWeeks(otData.weeks ?? []);
 
         if (allocRes.ok) {
           const allocData = await allocRes.json();
@@ -194,7 +246,12 @@ export default function OvertimeAnalysisPage() {
     load();
   }, [year]);
 
-  // Build allocation lookup (same pattern as employees page)
+  // Reset period when granularity changes
+  useEffect(() => {
+    setSelectedPeriod("all");
+  }, [granularity]);
+
+  // Build allocation lookup
   const allocationMap = useMemo(() => {
     const map: Record<string, AllocationOverride> = {};
     for (const a of allocations) {
@@ -203,16 +260,16 @@ export default function OvertimeAnalysisPage() {
     return map;
   }, [allocations]);
 
-  // Apply client-side allocation overrides (matches employees page logic exactly)
-  // This ensures OT analysis uses the same entity/class/dept resolution as the roster
+  // Apply client-side allocation overrides
   const allEmployees = useMemo(() => {
     return rawEmployees.map((emp) => {
       const override = allocationMap[`${emp.id}:${emp.companyId}`];
       if (!override) return emp;
 
-      const effectiveEntityId = override.allocated_entity_id || emp.operatingEntityId;
-      const effectiveEntityName = override.allocated_entity_name || emp.operatingEntityName;
-      // Derive entity code from name for backward compat
+      const effectiveEntityId =
+        override.allocated_entity_id || emp.operatingEntityId;
+      const effectiveEntityName =
+        override.allocated_entity_name || emp.operatingEntityName;
       const effectiveEntityCode = effectiveEntityName.includes("Silverco")
         ? "AVON"
         : effectiveEntityName.includes("Avon Rental")
@@ -234,108 +291,124 @@ export default function OvertimeAnalysisPage() {
     });
   }, [rawEmployees, allocationMap]);
 
-  // Filter to this entity (using client-side resolved entity IDs)
-  const entityEmployees = useMemo(
-    () => allEmployees.filter((e) => e.operatingEntityId === entityId),
-    [allEmployees, entityId]
-  );
+  // Filter to this entity's employee pool.
+  // For employing entities (Silverco, HDR): include ALL employees from the
+  // Paylocity company (matching the Roster tab on the employees page), PLUS
+  // any employees from other companies that are allocated here.
+  // For non-employing entities: use allocation-based filtering only.
+  const paylocityCompanyId = EMPLOYING_ENTITIES[entityId] ?? null;
 
-  // Entity-level totals
-  const entityTotals = useMemo(() => {
-    const t = {
-      otHours: 0, otDollars: 0,
-      dtHours: 0, dtDollars: 0,
-      mealHours: 0, mealDollars: 0,
-      regHours: 0, regDollars: 0,
-      premiumHours: 0, premiumDollars: 0,
-    };
-    for (const e of entityEmployees) {
-      t.otHours += e.totals.otHours;
-      t.otDollars += e.totals.otDollars;
-      t.dtHours += e.totals.dtHours;
-      t.dtDollars += e.totals.dtDollars;
-      t.mealHours += e.totals.mealHours;
-      t.mealDollars += e.totals.mealDollars;
-      t.regHours += e.totals.regHours;
-      t.regDollars += e.totals.regDollars;
-      t.premiumHours += e.totals.premiumHours;
-      t.premiumDollars += e.totals.premiumDollars;
+  const entityEmployees = useMemo(() => {
+    if (paylocityCompanyId) {
+      // Employing entity — union of roster + cross-company allocations
+      return allEmployees.filter(
+        (e) =>
+          e.companyId === paylocityCompanyId ||
+          e.operatingEntityId === entityId
+      );
     }
-    return t;
-  }, [entityEmployees]);
+    // Non-employing entity — allocation-based only
+    return allEmployees.filter((e) => e.operatingEntityId === entityId);
+  }, [allEmployees, entityId, paylocityCompanyId]);
 
-  const employeesWithPremium = entityEmployees.filter(
-    (e) => e.totals.premiumHours > 0
-  ).length;
-  const entityTotalHrs = entityTotals.regHours + entityTotals.premiumHours;
+  // Build Department > Class > Employee org tree for the selected period
+  const orgTree: DepartmentNode[] = useMemo(() => {
+    // 1. Group employees by department → class
+    const deptMap = new Map<string, Map<string, OTEmployee[]>>();
 
-  // Build month → department → employee hierarchy
-  const monthlyData: MonthAgg[] = useMemo(() => {
-    // Collect all months
-    const monthSet = new Set<string>();
     for (const emp of entityEmployees) {
-      for (const m of Object.keys(emp.monthlyHours)) {
-        monthSet.add(m);
-      }
+      const dept = emp.department || "Unassigned";
+      const cls = emp.classValue || "Unassigned";
+
+      if (!deptMap.has(dept)) deptMap.set(dept, new Map());
+      const classMap = deptMap.get(dept)!;
+      if (!classMap.has(cls)) classMap.set(cls, []);
+      classMap.get(cls)!.push(emp);
     }
 
-    const months = [...monthSet].sort().reverse(); // newest first
+    // 2. Build tree nodes with hours for the selected period
+    const departments: DepartmentNode[] = [];
 
-    return months.map((month) => {
-      const classMap: Record<string, ClassAgg> = {};
+    for (const [dept, classMap] of deptMap) {
+      const classes: ClassNode[] = [];
 
-      for (const emp of entityEmployees) {
-        const mData = emp.monthlyHours[month];
-        if (!mData) continue;
+      for (const [cls, employees] of classMap) {
+        const empNodes: EmployeeNode[] = employees
+          .map((emp) => ({
+            id: emp.id,
+            displayName: emp.displayName,
+            payType: emp.payType,
+            hours: getEmployeePeriodHours(emp, selectedPeriod, granularity),
+          }))
+          .sort((a, b) => a.displayName.localeCompare(b.displayName));
 
-        const cls = emp.classValue || emp.department || "Unassigned";
-        if (!classMap[cls]) {
-          classMap[cls] = {
-            classLabel: cls,
-            hours: emptyHours(),
-            employees: [],
-          };
-        }
-        classMap[cls].hours = addHours(classMap[cls].hours, mData);
-        classMap[cls].employees.push({
-          id: emp.id,
-          displayName: emp.displayName,
-          payType: emp.payType,
-          hours: mData,
+        const classHours = empNodes.reduce(
+          (sum, e) => addHours(sum, e.hours),
+          emptyHours()
+        );
+
+        classes.push({
+          classLabel: cls,
+          hours: classHours,
+          employees: empNodes,
         });
       }
 
-      // Sort classes by premium hours desc, employees within each by premium hours desc
-      const classes = Object.values(classMap)
-        .sort((a, b) => premiumHours(b.hours) - premiumHours(a.hours))
-        .map((c) => ({
-          ...c,
-          employees: c.employees.sort(
-            (a, b) => premiumHours(b.hours) - premiumHours(a.hours)
-          ),
-        }));
+      // Sort classes alphabetically
+      classes.sort((a, b) => a.classLabel.localeCompare(b.classLabel));
 
-      const monthHours = classes.reduce(
-        (s, c) => addHours(s, c.hours),
+      const deptHours = classes.reduce(
+        (sum, c) => addHours(sum, c.hours),
         emptyHours()
       );
 
-      return { month, hours: monthHours, classes };
-    });
-  }, [entityEmployees]);
+      departments.push({
+        department: dept,
+        hours: deptHours,
+        classes,
+      });
+    }
+
+    // Sort departments alphabetically
+    departments.sort((a, b) => a.department.localeCompare(b.department));
+
+    return departments;
+  }, [entityEmployees, selectedPeriod, granularity]);
+
+  // Auto-expand all departments on load
+  useEffect(() => {
+    if (orgTree.length > 0) {
+      setExpandedDepts(new Set(orgTree.map((d) => d.department)));
+    }
+  }, [orgTree]);
+
+  // Entity-level totals for the selected period
+  const entityTotals = useMemo(() => {
+    return orgTree.reduce(
+      (sum, dept) => addHours(sum, dept.hours),
+      emptyHours()
+    );
+  }, [orgTree]);
+
+  const entityPremiumHrs = premiumHrs(entityTotals);
+  const entityTotalHrs = totalHrs(entityTotals);
+  const employeesWithPremium = entityEmployees.filter((e) => {
+    const h = getEmployeePeriodHours(e, selectedPeriod, granularity);
+    return premiumHrs(h) > 0;
+  }).length;
 
   // Toggle handlers
-  function toggleMonth(month: string) {
-    setExpandedMonths((prev) => {
+  function toggleDept(dept: string) {
+    setExpandedDepts((prev) => {
       const next = new Set(prev);
-      if (next.has(month)) next.delete(month);
-      else next.add(month);
+      if (next.has(dept)) next.delete(dept);
+      else next.add(dept);
       return next;
     });
   }
 
   function toggleClass(key: string) {
-    setExpandedDepts((prev) => {
+    setExpandedClasses((prev) => {
       const next = new Set(prev);
       if (next.has(key)) next.delete(key);
       else next.add(key);
@@ -345,7 +418,24 @@ export default function OvertimeAnalysisPage() {
 
   const years = Array.from({ length: 5 }, (_, i) => current.year - 2 + i);
 
-  // Render a row of hours columns (OT / DT / Meal / Premium Total / Reg / Total / %)
+  // Period options for the dropdown
+  const periodOptions = useMemo(() => {
+    const periods = granularity === "weekly" ? availableWeeks : availableMonths;
+    return periods.map((key) => ({
+      key,
+      label: granularity === "weekly" ? weekLabel(key) : monthLabel(key),
+    }));
+  }, [granularity, availableMonths, availableWeeks]);
+
+  // Period label for display
+  const periodLabel =
+    selectedPeriod === "all"
+      ? "YTD"
+      : granularity === "weekly"
+        ? weekLabel(selectedPeriod)
+        : monthLabel(selectedPeriod);
+
+  // Render a row of hours columns
   function HoursCells({
     h,
     bold = false,
@@ -356,9 +446,9 @@ export default function OvertimeAnalysisPage() {
     muted?: boolean;
   }) {
     const cls = `text-right tabular-nums ${bold ? "font-semibold" : ""} ${muted ? "text-muted-foreground" : ""}`;
-    const ph = premiumHours(h);
-    const pd = premiumDollars(h);
-    const th = totalHours(h);
+    const ph = premiumHrs(h);
+    const pd = premiumDlrs(h);
+    const th = totalHrs(h);
     return (
       <>
         <TableCell className={cls}>{fmtHrs(h.otHours)}</TableCell>
@@ -394,14 +484,14 @@ export default function OvertimeAnalysisPage() {
             Overtime Analysis
           </h1>
           <p className="text-muted-foreground">
-            OT, double time, and meal premiums — by month, class, and
+            OT, double time, and meal premiums — by department, class, and
             employee
           </p>
         </div>
       </div>
 
-      {/* Year Selector */}
-      <div className="flex items-center gap-4">
+      {/* Controls Row */}
+      <div className="flex flex-wrap items-center gap-4">
         <Select
           value={String(year)}
           onValueChange={(v) => setYear(Number(v))}
@@ -417,8 +507,33 @@ export default function OvertimeAnalysisPage() {
             ))}
           </SelectContent>
         </Select>
+
+        <Tabs
+          value={granularity}
+          onValueChange={(v) => setGranularity(v as "monthly" | "weekly")}
+        >
+          <TabsList>
+            <TabsTrigger value="monthly">Monthly</TabsTrigger>
+            <TabsTrigger value="weekly">Weekly</TabsTrigger>
+          </TabsList>
+        </Tabs>
+
+        <Select value={selectedPeriod} onValueChange={setSelectedPeriod}>
+          <SelectTrigger className="w-[220px]">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Year (YTD)</SelectItem>
+            {periodOptions.map((p) => (
+              <SelectItem key={p.key} value={p.key}>
+                {p.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
         <span className="text-sm text-muted-foreground">
-          Showing premium pay data for {year}
+          {entityEmployees.length} employees &middot; {periodLabel}
         </span>
       </div>
 
@@ -471,8 +586,10 @@ export default function OvertimeAnalysisPage() {
                   {fmtHrs(entityTotals.dtHours + entityTotals.mealHours)}
                 </p>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  DT: {fmtHrs(entityTotals.dtHours)} hrs ({formatCurrency(entityTotals.dtDollars)})
-                  &nbsp;|&nbsp; Meal: {fmtHrs(entityTotals.mealHours)} hrs ({formatCurrency(entityTotals.mealDollars)})
+                  DT: {fmtHrs(entityTotals.dtHours)} hrs (
+                  {formatCurrency(entityTotals.dtDollars)}) &nbsp;|&nbsp; Meal:{" "}
+                  {fmtHrs(entityTotals.mealHours)} hrs (
+                  {formatCurrency(entityTotals.mealDollars)})
                 </p>
               </CardContent>
             </Card>
@@ -485,10 +602,10 @@ export default function OvertimeAnalysisPage() {
                   </p>
                 </div>
                 <p className="text-2xl font-semibold tabular-nums mt-1">
-                  {formatCurrency(entityTotals.premiumDollars)}
+                  {formatCurrency(premiumDlrs(entityTotals))}
                 </p>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  {fmtHrs(entityTotals.premiumHours)} premium hours YTD
+                  {fmtHrs(entityPremiumHrs)} premium hours &middot; {periodLabel}
                 </p>
               </CardContent>
             </Card>
@@ -501,7 +618,7 @@ export default function OvertimeAnalysisPage() {
                   </p>
                 </div>
                 <p className="text-2xl font-semibold tabular-nums mt-1">
-                  {pct(entityTotals.premiumHours, entityTotalHrs)}
+                  {pct(entityPremiumHrs, entityTotalHrs)}
                 </p>
                 <p className="text-xs text-muted-foreground mt-0.5">
                   {employeesWithPremium} of {entityEmployees.length} employees
@@ -510,23 +627,24 @@ export default function OvertimeAnalysisPage() {
             </Card>
           </div>
 
-          {/* Monthly Breakdown Table */}
+          {/* Department > Class > Employee Table */}
           <Card>
             <CardHeader>
-              <CardTitle>Monthly Breakdown</CardTitle>
+              <CardTitle>
+                {periodLabel} Breakdown
+              </CardTitle>
               <CardDescription>
-                Click a month to expand by class, then click a class to
-                see individual employees. Sorted by premium hours (largest
-                first).
+                Click a department to expand by class, then click a class to see
+                individual employees. Sorted alphabetically.
               </CardDescription>
             </CardHeader>
             <CardContent>
-              {monthlyData.length === 0 ? (
+              {orgTree.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-12">
                   <Clock className="h-12 w-12 text-muted-foreground mb-4" />
-                  <h3 className="text-lg font-medium mb-2">No Data</h3>
+                  <h3 className="text-lg font-medium mb-2">No Employees</h3>
                   <p className="text-muted-foreground text-center">
-                    No pay statement data found for {year}.
+                    No employees allocated to this entity.
                   </p>
                 </div>
               ) : (
@@ -535,126 +653,72 @@ export default function OvertimeAnalysisPage() {
                     <TableHeader>
                       <TableRow>
                         <TableHead className="w-[280px]">
-                          Month / Class / Employee
+                          Department / Class / Employee
                         </TableHead>
-                        <TableHead className="text-right" title="Overtime hours (1.5x rate)">
+                        <TableHead
+                          className="text-right"
+                          title="Overtime hours (1.5x rate)"
+                        >
                           OT Hrs
                         </TableHead>
-                        <TableHead className="text-right" title="Double time hours (2x rate)">
+                        <TableHead
+                          className="text-right"
+                          title="Double time hours (2x rate)"
+                        >
                           DT Hrs
                         </TableHead>
-                        <TableHead className="text-right" title="Meal premium hours">
+                        <TableHead
+                          className="text-right"
+                          title="Meal premium hours"
+                        >
                           Meal Hrs
                         </TableHead>
-                        <TableHead className="text-right" title="Total premium pay cost (OT + DT + Meal)">
+                        <TableHead
+                          className="text-right"
+                          title="Total premium pay cost (OT + DT + Meal)"
+                        >
                           Premium $
                         </TableHead>
-                        <TableHead className="text-right" title="Regular hours for comparison">
+                        <TableHead
+                          className="text-right"
+                          title="Regular hours for comparison"
+                        >
                           Reg Hrs
                         </TableHead>
-                        <TableHead className="text-right" title="Premium hours as % of total hours">
+                        <TableHead
+                          className="text-right"
+                          title="Premium hours as % of total hours"
+                        >
                           Prem %
                         </TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {monthlyData.map((m) => {
-                        const monthExpanded = expandedMonths.has(m.month);
+                      {orgTree.map((dept) => {
+                        const deptExpanded = expandedDepts.has(dept.department);
+                        const totalEmpCount = dept.classes.reduce(
+                          (s, c) => s + c.employees.length,
+                          0
+                        );
+
                         return (
-                          <>
-                            {/* Month Row */}
-                            <TableRow
-                              key={m.month}
-                              className="cursor-pointer hover:bg-muted/50 font-semibold bg-muted/30"
-                              onClick={() => toggleMonth(m.month)}
-                            >
-                              <TableCell>
-                                <div className="flex items-center gap-2">
-                                  {monthExpanded ? (
-                                    <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />
-                                  ) : (
-                                    <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
-                                  )}
-                                  <span>{monthLabel(m.month)}</span>
-                                </div>
-                              </TableCell>
-                              <HoursCells h={m.hours} bold />
-                            </TableRow>
-
-                            {/* Class Rows */}
-                            {monthExpanded &&
-                              m.classes.map((cls) => {
-                                const clsKey = `${m.month}::${cls.classLabel}`;
-                                const clsExpanded =
-                                  expandedDepts.has(clsKey);
-                                return (
-                                  <>
-                                    <TableRow
-                                      key={clsKey}
-                                      className="cursor-pointer hover:bg-muted/30"
-                                      onClick={() => toggleClass(clsKey)}
-                                    >
-                                      <TableCell>
-                                        <div className="flex items-center gap-2 pl-6">
-                                          {clsExpanded ? (
-                                            <ChevronDown className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                                          ) : (
-                                            <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                                          )}
-                                          <span className="font-medium">
-                                            {cls.classLabel}
-                                          </span>
-                                          <span className="text-xs text-muted-foreground">
-                                            ({cls.employees.length} emp)
-                                          </span>
-                                        </div>
-                                      </TableCell>
-                                      <HoursCells h={cls.hours} />
-                                    </TableRow>
-
-                                    {/* Employee Rows */}
-                                    {clsExpanded &&
-                                      cls.employees.map((emp) => (
-                                        <TableRow
-                                          key={`${clsKey}::${emp.id}`}
-                                          className="text-sm"
-                                        >
-                                          <TableCell>
-                                            <div className="flex items-center gap-2 pl-14">
-                                              <span className="text-muted-foreground">
-                                                {emp.displayName}
-                                              </span>
-                                              <span className="text-xs text-muted-foreground/60">
-                                                {emp.payType}
-                                              </span>
-                                            </div>
-                                          </TableCell>
-                                          <HoursCells h={emp.hours} muted />
-                                        </TableRow>
-                                      ))}
-                                  </>
-                                );
-                              })}
-                          </>
+                          <DeptSection
+                            key={dept.department}
+                            dept={dept}
+                            expanded={deptExpanded}
+                            totalEmpCount={totalEmpCount}
+                            expandedClasses={expandedClasses}
+                            onToggleDept={() => toggleDept(dept.department)}
+                            onToggleClass={toggleClass}
+                            HoursCells={HoursCells}
+                          />
                         );
                       })}
 
                       {/* Grand Total Row */}
                       <TableRow className="font-semibold border-t-2">
-                        <TableCell>YTD Total</TableCell>
-                        <HoursCells
-                          h={{
-                            otHours: entityTotals.otHours,
-                            otDollars: entityTotals.otDollars,
-                            dtHours: entityTotals.dtHours,
-                            dtDollars: entityTotals.dtDollars,
-                            mealHours: entityTotals.mealHours,
-                            mealDollars: entityTotals.mealDollars,
-                            regHours: entityTotals.regHours,
-                            regDollars: entityTotals.regDollars,
-                          }}
-                          bold
-                        />
+                        <TableCell>{periodLabel} Total</TableCell>
+                        <HoursCells h={entityTotals} bold />
                       </TableRow>
                     </TableBody>
                   </Table>
@@ -665,5 +729,123 @@ export default function OvertimeAnalysisPage() {
         </>
       )}
     </div>
+  );
+}
+
+// --- Sub-components to avoid key issues with fragments ---
+
+function DeptSection({
+  dept,
+  expanded,
+  totalEmpCount,
+  expandedClasses,
+  onToggleDept,
+  onToggleClass,
+  HoursCells,
+}: {
+  dept: DepartmentNode;
+  expanded: boolean;
+  totalEmpCount: number;
+  expandedClasses: Set<string>;
+  onToggleDept: () => void;
+  onToggleClass: (key: string) => void;
+  HoursCells: React.FC<{ h: MonthlyHours; bold?: boolean; muted?: boolean }>;
+}) {
+  return (
+    <>
+      {/* Department Row */}
+      <TableRow
+        className="cursor-pointer hover:bg-muted/50 font-semibold bg-muted/30"
+        onClick={onToggleDept}
+      >
+        <TableCell>
+          <div className="flex items-center gap-2">
+            {expanded ? (
+              <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />
+            ) : (
+              <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
+            )}
+            <span>{dept.department}</span>
+            <span className="text-xs text-muted-foreground font-normal">
+              ({totalEmpCount} emp)
+            </span>
+          </div>
+        </TableCell>
+        <HoursCells h={dept.hours} bold />
+      </TableRow>
+
+      {/* Class Rows */}
+      {expanded &&
+        dept.classes.map((cls) => {
+          const clsKey = `${dept.department}::${cls.classLabel}`;
+          const clsExpanded = expandedClasses.has(clsKey);
+          return (
+            <ClassSection
+              key={clsKey}
+              cls={cls}
+              clsKey={clsKey}
+              expanded={clsExpanded}
+              onToggle={() => onToggleClass(clsKey)}
+              HoursCells={HoursCells}
+            />
+          );
+        })}
+    </>
+  );
+}
+
+function ClassSection({
+  cls,
+  clsKey,
+  expanded,
+  onToggle,
+  HoursCells,
+}: {
+  cls: ClassNode;
+  clsKey: string;
+  expanded: boolean;
+  onToggle: () => void;
+  HoursCells: React.FC<{ h: MonthlyHours; bold?: boolean; muted?: boolean }>;
+}) {
+  return (
+    <>
+      <TableRow
+        className="cursor-pointer hover:bg-muted/30"
+        onClick={onToggle}
+      >
+        <TableCell>
+          <div className="flex items-center gap-2 pl-6">
+            {expanded ? (
+              <ChevronDown className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+            ) : (
+              <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+            )}
+            <span className="font-medium">{cls.classLabel}</span>
+            <span className="text-xs text-muted-foreground">
+              ({cls.employees.length} emp)
+            </span>
+          </div>
+        </TableCell>
+        <HoursCells h={cls.hours} />
+      </TableRow>
+
+      {/* Employee Rows */}
+      {expanded &&
+        cls.employees.map((emp) => (
+          <TableRow key={`${clsKey}::${emp.id}`} className="text-sm">
+            <TableCell>
+              <div className="flex items-center gap-2 pl-14">
+                <span className="text-muted-foreground">
+                  {emp.displayName}
+                </span>
+                <span className="text-xs text-muted-foreground/60">
+                  {emp.payType}
+                </span>
+              </div>
+            </TableCell>
+            <HoursCells h={emp.hours} muted />
+          </TableRow>
+        ))}
+    </>
   );
 }
