@@ -34,6 +34,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Users,
   DollarSign,
@@ -263,10 +264,13 @@ export default function EmployeeRosterPage() {
   const [payTypeFilter, setPayTypeFilter] = useState<string>("all");
   const [companyFilter, setCompanyFilter] = useState<string>("all");
   const [importDialogOpen, setImportDialogOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<"roster" | "allocations">("roster");
 
   // Determine if this entity is an employing entity (Silverco or HDR)
   const paylocityCompanyId = EMPLOYING_ENTITIES[entityId] ?? null;
   const isEmployingEntity = paylocityCompanyId !== null;
+  const currentEntity = OPERATING_ENTITIES.find((e) => e.id === entityId);
+  const entityName = currentEntity?.name ?? "this entity";
 
   // Fetch employees + allocations
   useEffect(() => {
@@ -293,6 +297,13 @@ export default function EmployeeRosterPage() {
     load();
   }, []);
 
+  // Reset company filter when switching to allocations tab (irrelevant there)
+  useEffect(() => {
+    if (activeTab === "allocations") {
+      setCompanyFilter("all");
+    }
+  }, [activeTab]);
+
   // Refresh allocations (called after import wizard completes)
   const refreshAllocations = useCallback(async () => {
     try {
@@ -315,24 +326,9 @@ export default function EmployeeRosterPage() {
     return map;
   }, [allocations]);
 
-  // Select employees to display:
-  // - Employing entity (Silverco/HDR): show ALL employees from that Paylocity company
-  // - Operating entity (VS/ARH/HSS): show employees allocated to that entity
-  const baseEmployees = useMemo(() => {
-    if (isEmployingEntity) {
-      return employees.filter((e) => e.companyId === paylocityCompanyId);
-    }
-    return employees.filter((e) => {
-      // Check override first
-      const override = allocationMap[`${e.id}:${e.companyId}`];
-      const effectiveEntityId = override?.allocated_entity_id || e.operatingEntityId;
-      return effectiveEntityId === entityId;
-    });
-  }, [employees, entityId, isEmployingEntity, paylocityCompanyId, allocationMap]);
-
-  // Merge employees with allocation overrides
-  const displayEmployees: DisplayEmployee[] = useMemo(() => {
-    return baseEmployees.map((emp) => {
+  // Helper: merge a single employee with allocation overrides
+  const mergeOverrides = useCallback(
+    (emp: MappedEmployee): DisplayEmployee => {
       const override = allocationMap[`${emp.id}:${emp.companyId}`];
       return {
         ...emp,
@@ -342,8 +338,34 @@ export default function EmployeeRosterPage() {
         effectiveEntityName: override?.allocated_entity_name || emp.operatingEntityName,
         hasOverrides: !!override,
       };
-    });
-  }, [baseEmployees, allocationMap]);
+    },
+    [allocationMap]
+  );
+
+  // Roster employees: ALL from the Paylocity company (clerical view)
+  const rosterDisplayEmployees: DisplayEmployee[] = useMemo(() => {
+    if (!isEmployingEntity) return [];
+    return employees
+      .filter((e) => e.companyId === paylocityCompanyId)
+      .map(mergeOverrides);
+  }, [employees, isEmployingEntity, paylocityCompanyId, mergeOverrides]);
+
+  // Cost allocation employees: those whose effective entity matches THIS entity (across all companies)
+  const allocDisplayEmployees: DisplayEmployee[] = useMemo(() => {
+    return employees
+      .filter((e) => {
+        const override = allocationMap[`${e.id}:${e.companyId}`];
+        const effectiveEntityId = override?.allocated_entity_id || e.operatingEntityId;
+        return effectiveEntityId === entityId;
+      })
+      .map(mergeOverrides);
+  }, [employees, entityId, allocationMap, mergeOverrides]);
+
+  // Active display employees based on tab selection
+  const displayEmployees: DisplayEmployee[] = useMemo(() => {
+    if (!isEmployingEntity) return allocDisplayEmployees;
+    return activeTab === "roster" ? rosterDisplayEmployees : allocDisplayEmployees;
+  }, [isEmployingEntity, activeTab, rosterDisplayEmployees, allocDisplayEmployees]);
 
   // Department and company lists for filters
   const uniqueDepts = useMemo(
@@ -493,7 +515,9 @@ export default function EmployeeRosterPage() {
             <h1 className="text-2xl font-semibold tracking-tight">Employees</h1>
             <p className="text-muted-foreground">
               {isEmployingEntity
-                ? "Full payroll roster — click any Department, Class, or Company cell to edit"
+                ? activeTab === "roster"
+                  ? "Full payroll roster — click any Department, Class, or Company cell to edit"
+                  : `Employees allocated to ${entityName} with compensation costs`
                 : "Employee roster, compensation, and department breakdown"}
             </p>
           </div>
@@ -514,6 +538,23 @@ export default function EmployeeRosterPage() {
             </Link>
           </div>
         </div>
+
+        {/* Tabs — only for employing entities (Silverco, HDR) */}
+        {isEmployingEntity && (
+          <Tabs
+            value={activeTab}
+            onValueChange={(v) => setActiveTab(v as "roster" | "allocations")}
+          >
+            <TabsList>
+              <TabsTrigger value="roster">
+                Roster ({rosterDisplayEmployees.length})
+              </TabsTrigger>
+              <TabsTrigger value="allocations">
+                Cost Allocations ({allocDisplayEmployees.length})
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
+        )}
 
         {/* KPI Cards */}
         <div className="grid gap-4 md:grid-cols-5">
@@ -580,10 +621,15 @@ export default function EmployeeRosterPage() {
         {/* Employee Table */}
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Employee Roster</CardTitle>
+            <CardTitle className="text-base">
+              {isEmployingEntity && activeTab === "allocations"
+                ? "Cost Allocations"
+                : "Employee Roster"}
+            </CardTitle>
             <CardDescription>
-              {displayEmployees.length} active employee{displayEmployees.length !== 1 ? "s" : ""}
-              {isEmployingEntity && " (full payroll company view)"}
+              {isEmployingEntity && activeTab === "allocations"
+                ? `${displayEmployees.length} employee${displayEmployees.length !== 1 ? "s" : ""} allocated to ${entityName}`
+                : `${displayEmployees.length} active employee${displayEmployees.length !== 1 ? "s" : ""}${isEmployingEntity ? " (full payroll company view)" : ""}`}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -598,7 +644,7 @@ export default function EmployeeRosterPage() {
                   className="pl-9"
                 />
               </div>
-              {isEmployingEntity && (
+              {isEmployingEntity && activeTab === "roster" && (
                 <Select value={companyFilter} onValueChange={setCompanyFilter}>
                   <SelectTrigger className="w-[200px]">
                     <SelectValue placeholder="All Companies" />
