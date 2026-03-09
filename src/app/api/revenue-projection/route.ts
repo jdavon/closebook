@@ -45,11 +45,11 @@ export async function POST(request: Request) {
     const [invoiceResult, orderResult, quoteResult] = await Promise.all([
       rw.browse<RWInvoiceRow>("invoice", {
         pagesize: 2000,
-        searchfields: ["InvoiceDate"],
+        searchfields: ["BillingEndDate"],
         searchfieldoperators: [">="],
         searchfieldvalues: [invoiceStartDate],
         searchfieldtypes: ["date"],
-        orderby: "InvoiceDate",
+        orderby: "BillingEndDate",
         orderbydirection: "desc",
       }),
       rw.browse<RWOrderRow>("order", {

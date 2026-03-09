@@ -33,6 +33,7 @@ import { formatCurrency } from "@/lib/utils/dates";
 import {
   EQUIPMENT_TYPE_LABELS,
   type RevenueProjectionResponse,
+  type ClosedInvoice,
 } from "@/lib/utils/revenue-projection";
 import {
   ComposedChart,
@@ -57,6 +58,17 @@ const EQUIP_COLORS: Record<string, string> = {
   studio: "#ea580c",
   pro_supplies: "#9333ea",
 };
+
+function formatDate(dateStr: string | null | undefined): string {
+  if (!dateStr) return "—";
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return dateStr;
+  return d.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
 
 function formatCompact(value: number): string {
   if (value >= 1_000_000) return `$${(value / 1_000_000).toFixed(1)}M`;
@@ -210,6 +222,9 @@ export default function RevenueProjectionPage() {
       <Tabs defaultValue="overview">
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="invoices">
+            Invoices ({data.closedInvoices.length})
+          </TabsTrigger>
           <TabsTrigger value="pipeline">
             Pipeline ({data.pipelineOrders.length})
           </TabsTrigger>
@@ -365,6 +380,130 @@ export default function RevenueProjectionPage() {
               </CardContent>
             </Card>
           )}
+        </TabsContent>
+
+        {/* Invoices Tab */}
+        <TabsContent value="invoices">
+          <Card>
+            <CardHeader>
+              <CardTitle>Closed Invoices</CardTitle>
+              <CardDescription>
+                Revenue assigned by rental billing date (not invoice date)
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {data.closedInvoices.length === 0 ? (
+                <p className="text-muted-foreground py-8 text-center text-sm">
+                  No closed invoices found.
+                </p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Invoice #</TableHead>
+                        <TableHead>Customer</TableHead>
+                        <TableHead>Deal</TableHead>
+                        <TableHead>Order</TableHead>
+                        <TableHead>Billing Start</TableHead>
+                        <TableHead>Billing End</TableHead>
+                        <TableHead>Revenue Month</TableHead>
+                        <TableHead className="text-right">
+                          List Total
+                        </TableHead>
+                        <TableHead className="text-right">
+                          Gross Total
+                        </TableHead>
+                        <TableHead>Type</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {data.closedInvoices.map((inv) => (
+                        <TableRow key={inv.invoiceId}>
+                          <TableCell className="font-medium">
+                            {inv.invoiceNumber}
+                          </TableCell>
+                          <TableCell>{inv.customer}</TableCell>
+                          <TableCell className="max-w-[150px] truncate">
+                            {inv.deal}
+                          </TableCell>
+                          <TableCell className="max-w-[180px] truncate">
+                            {inv.orderDescription || inv.orderNumber}
+                          </TableCell>
+                          <TableCell className="text-muted-foreground whitespace-nowrap">
+                            {formatDate(inv.billingStartDate)}
+                          </TableCell>
+                          <TableCell className="text-muted-foreground whitespace-nowrap">
+                            {formatDate(inv.billingEndDate)}
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant="outline">
+                              {inv.month
+                                ? inv.month.replace(
+                                    /^(\d{4})-(\d{2})$/,
+                                    (_, y, m) => {
+                                      const months = [
+                                        "Jan",
+                                        "Feb",
+                                        "Mar",
+                                        "Apr",
+                                        "May",
+                                        "Jun",
+                                        "Jul",
+                                        "Aug",
+                                        "Sep",
+                                        "Oct",
+                                        "Nov",
+                                        "Dec",
+                                      ];
+                                      return `${months[Number(m) - 1]} ${y.slice(2)}`;
+                                    },
+                                  )
+                                : "—"}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-right font-medium tabular-nums">
+                            {formatCurrency(inv.listTotal)}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums">
+                            {formatCurrency(inv.grossTotal)}
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant="secondary">
+                              {EQUIPMENT_TYPE_LABELS[inv.equipmentType] ||
+                                inv.equipmentType}
+                            </Badge>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                      <TableRow className="border-t-2 font-semibold">
+                        <TableCell colSpan={7}>
+                          Total ({data.closedInvoices.length} invoices)
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {formatCurrency(
+                            data.closedInvoices.reduce(
+                              (s, i) => s + i.listTotal,
+                              0,
+                            ),
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {formatCurrency(
+                            data.closedInvoices.reduce(
+                              (s, i) => s + i.grossTotal,
+                              0,
+                            ),
+                          )}
+                        </TableCell>
+                        <TableCell />
+                      </TableRow>
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
         </TabsContent>
 
         {/* Pipeline Tab */}
