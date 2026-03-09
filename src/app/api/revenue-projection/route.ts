@@ -42,19 +42,27 @@ export async function POST(request: Request) {
       1,
     );
 
-    const invoiceStartDate = formatRWDate(thirteenMonthsAgo);
+    // For billing_date mode, use BillingEndDate as the search/sort field.
+    // We also widen the lookback to 36 months because some invoices have
+    // InvoiceDates far older than their BillingEndDate (e.g. long-term rentals
+    // invoiced once with rolling billing periods).
+    const useBillingDate = dateMode === "billing_date";
+    const invoiceDateField = useBillingDate ? "BillingEndDate" : "InvoiceDate";
+    const invoiceLookbackDate = useBillingDate
+      ? new Date(now.getFullYear(), now.getMonth() - 36, 1)
+      : thirteenMonthsAgo;
+    const invoiceStartDate = formatRWDate(invoiceLookbackDate);
     const orderStartDate = formatRWDate(threeMonthsAgo);
 
     // Fetch invoices, orders, and quotes in parallel
-    // Use InvoiceDate for filtering since it's the default grouping mode
     const [invoiceResult, orderResult, quoteResult] = await Promise.all([
       rw.browse<RWInvoiceRow>("invoice", {
         pagesize: 2000,
-        searchfields: ["InvoiceDate"],
+        searchfields: [invoiceDateField],
         searchfieldoperators: [">="],
         searchfieldvalues: [invoiceStartDate],
         searchfieldtypes: ["date"],
-        orderby: "InvoiceDate",
+        orderby: invoiceDateField,
         orderbydirection: "desc",
       }),
       rw.browse<RWOrderRow>("order", {
