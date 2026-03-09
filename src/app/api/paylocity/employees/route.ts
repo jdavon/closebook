@@ -73,9 +73,9 @@ export async function GET() {
         employees.push({
           id: emp.id,
           companyId,
-          displayName: emp.displayName,
+          displayName: emp.displayName ?? (`${emp.info?.firstName ?? ""} ${emp.info?.lastName ?? emp.lastName ?? ""}`.trim() || `Employee ${emp.id}`),
           firstName: emp.info?.firstName ?? "",
-          lastName: emp.info?.lastName ?? emp.lastName,
+          lastName: emp.info?.lastName ?? emp.lastName ?? "",
           status: emp.currentStatus?.statusType ?? emp.status ?? "Active",
           statusType: emp.currentStatus?.statusType ?? "A",
           jobTitle: emp.info?.jobTitle ?? "",
@@ -92,7 +92,7 @@ export async function GET() {
       }
     }
 
-    employees.sort((a, b) => a.displayName.localeCompare(b.displayName));
+    employees.sort((a, b) => (a.displayName ?? "").localeCompare(b.displayName ?? ""));
 
     // Update cache
     cachedData = { employees, fetchedAt: Date.now() };
