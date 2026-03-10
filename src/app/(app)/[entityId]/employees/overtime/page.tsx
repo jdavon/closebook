@@ -1018,10 +1018,16 @@ function CalendarView({
   const daysInMonth = eachDayOfInterval({ start: monthStart, end: monthEnd });
 
   // Build a set of dates within pay period ranges for background highlighting
+  // Parse date strings as local time (not UTC) to avoid timezone day-shift
+  function parseLocalDate(dateStr: string): Date {
+    const [y, m, d] = dateStr.split("-").map(Number);
+    return new Date(y, m - 1, d);
+  }
+
   const periodRangeSet = new Set<string>();
   for (const pp of payPeriods) {
-    const start = new Date(pp.beginDate);
-    const end = new Date(pp.endDate);
+    const start = parseLocalDate(pp.beginDate);
+    const end = parseLocalDate(pp.endDate);
     const rangeDays = eachDayOfInterval({
       start: start < monthStart ? monthStart : start,
       end: end > monthEnd ? monthEnd : end,

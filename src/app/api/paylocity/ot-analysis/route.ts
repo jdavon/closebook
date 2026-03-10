@@ -297,20 +297,21 @@ export async function GET(request: NextRequest) {
               w.regDollars += regD;
             }
 
-            // Daily bucket (keyed by full check date)
+            // Daily bucket (keyed by YYYY-MM-DD, normalized from any date format)
             if (ps.checkDate) {
-              const day = ensureBucket(dailyHours, ps.checkDate);
+              const dayKey = ps.checkDate.slice(0, 10); // "YYYY-MM-DD"
+              const day = ensureBucket(dailyHours, dayKey);
               day.otHours += otH;
               day.otDollars += otD;
               day.regHours += regH;
               day.regDollars += regD;
 
               // Track pay period ranges for calendar view
-              if (!payPeriodMap.has(ps.checkDate)) {
-                payPeriodMap.set(ps.checkDate, {
-                  checkDate: ps.checkDate,
-                  beginDate: ps.beginDate,
-                  endDate: ps.endDate,
+              if (!payPeriodMap.has(dayKey)) {
+                payPeriodMap.set(dayKey, {
+                  checkDate: dayKey,
+                  beginDate: ps.beginDate?.slice(0, 10) ?? dayKey,
+                  endDate: ps.endDate?.slice(0, 10) ?? dayKey,
                 });
               }
             }
@@ -353,9 +354,10 @@ export async function GET(request: NextRequest) {
               }
             }
 
-            // Daily bucket (mirrors monthly)
+            // Daily bucket (normalized to YYYY-MM-DD)
             if (d.checkDate) {
-              const day = ensureBucket(dailyHours, d.checkDate);
+              const dayKey = d.checkDate.slice(0, 10); // "YYYY-MM-DD"
+              const day = ensureBucket(dailyHours, dayKey);
               if (code === "DT") {
                 day.dtHours += hrs;
                 day.dtDollars += amt;
