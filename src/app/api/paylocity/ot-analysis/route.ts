@@ -53,6 +53,7 @@ interface OTEmployee {
   costCenterCode: string;
   monthlyHours: Record<string, MonthlyHours>;
   weeklyHours: Record<string, MonthlyHours>;
+  dailyHours: Record<string, MonthlyHours>;
   dataStatus: DataStatus;
   totals: {
     otHours: number;
@@ -158,6 +159,8 @@ export async function GET(request: NextRequest) {
     );
 
     const otEmployees: OTEmployee[] = [];
+    // Collect unique pay periods (checkDate → beginDate/endDate) for calendar
+    const payPeriodMap = new Map<string, { checkDate: string; beginDate: string; endDate: string }>();
 
     for (const {
       companyId,
@@ -248,6 +251,7 @@ export async function GET(request: NextRequest) {
           // ── Aggregate from SUMMARY (OT + REG) ──
           const monthlyHours: Record<string, MonthlyHours> = {};
           const weeklyHours: Record<string, MonthlyHours> = {};
+          const dailyHours: Record<string, MonthlyHours> = {};
           const totals = {
             otHours: 0,
             otDollars: 0,
@@ -292,6 +296,24 @@ export async function GET(request: NextRequest) {
               w.regHours += regH;
               w.regDollars += regD;
             }
+
+            // Daily bucket (keyed by full check date)
+            if (ps.checkDate) {
+              const day = ensureBucket(dailyHours, ps.checkDate);
+              day.otHours += otH;
+              day.otDollars += otD;
+              day.regHours += regH;
+              day.regDollars += regD;
+
+              // Track pay period ranges for calendar view
+              if (!payPeriodMap.has(ps.checkDate)) {
+                payPeriodMap.set(ps.checkDate, {
+                  checkDate: ps.checkDate,
+                  beginDate: ps.beginDate,
+                  endDate: ps.endDate,
+                });
+              }
+            }
           }
 
           // ── Aggregate from DETAILS (DT + MEAL only) ──
@@ -330,6 +352,18 @@ export async function GET(request: NextRequest) {
                 w.mealDollars += amt;
               }
             }
+
+            // Daily bucket (mirrors monthly)
+            if (d.checkDate) {
+              const day = ensureBucket(dailyHours, d.checkDate);
+              if (code === "DT") {
+                day.dtHours += hrs;
+                day.dtDollars += amt;
+              } else if (code === "MEAL") {
+                day.mealHours += hrs;
+                day.mealDollars += amt;
+              }
+            }
           }
 
           // Premium = OT + DT + MEAL combined
@@ -357,6 +391,7 @@ export async function GET(request: NextRequest) {
             costCenterCode: emp.position?.costCenter1 ?? "UNKNOWN",
             monthlyHours,
             weeklyHours,
+            dailyHours,
             dataStatus,
             totals,
           });
@@ -364,15 +399,21 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // Collect all months and weeks
+    // Collect all months, weeks, and days
     const monthSet = new Set<string>();
     const weekSet = new Set<string>();
+    const daySet = new Set<string>();
     for (const emp of otEmployees) {
       for (const m of Object.keys(emp.monthlyHours)) monthSet.add(m);
       for (const w of Object.keys(emp.weeklyHours)) weekSet.add(w);
+      for (const d of Object.keys(emp.dailyHours)) daySet.add(d);
     }
     const months = [...monthSet].sort();
     const weeks = [...weekSet].sort();
+    const days = [...daySet].sort();
+    const payPeriods = [...payPeriodMap.values()].sort(
+      (a, b) => a.checkDate.localeCompare(b.checkDate)
+    );
 
     // Compute org-level KPIs
     const kpis = {
@@ -428,6 +469,8 @@ export async function GET(request: NextRequest) {
       employees: otEmployees,
       months,
       weeks,
+      days,
+      payPeriods,
       kpis,
       diagnostics: {
         totalEmployees: otEmployees.length,

@@ -32,11 +32,24 @@ import {
   DollarSign,
   ChevronRight,
   ChevronDown,
+  ChevronLeftIcon,
+  ChevronRightIcon,
   ArrowLeft,
   Loader2,
   TrendingUp,
   AlertTriangle,
+  CalendarDays,
+  TableIcon,
 } from "lucide-react";
+import {
+  startOfMonth,
+  endOfMonth,
+  eachDayOfInterval,
+  getDay,
+  format,
+  addMonths,
+  subMonths,
+} from "date-fns";
 import { formatCurrency, getCurrentPeriod } from "@/lib/utils/dates";
 
 // --- Constants ---
@@ -75,6 +88,7 @@ interface OTEmployee {
   dataStatus?: DataStatus;
   monthlyHours: Record<string, MonthlyHours>;
   weeklyHours: Record<string, MonthlyHours>;
+  dailyHours?: Record<string, MonthlyHours>;
   totals: {
     otHours: number;
     otDollars: number;
@@ -87,6 +101,12 @@ interface OTEmployee {
     premiumHours: number;
     premiumDollars: number;
   };
+}
+
+interface PayPeriod {
+  checkDate: string;
+  beginDate: string;
+  endDate: string;
 }
 
 interface Diagnostics {
@@ -217,11 +237,14 @@ export default function OvertimeAnalysisPage() {
   const [allocations, setAllocations] = useState<AllocationOverride[]>([]);
   const [availableMonths, setAvailableMonths] = useState<string[]>([]);
   const [availableWeeks, setAvailableWeeks] = useState<string[]>([]);
+  const [payPeriods, setPayPeriods] = useState<PayPeriod[]>([]);
   const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   // View controls
+  const [viewMode, setViewMode] = useState<"table" | "calendar">("table");
+  const [calendarMonth, setCalendarMonth] = useState<string>(""); // "YYYY-MM"
   const [granularity, setGranularity] = useState<"monthly" | "weekly">("monthly");
   const [selectedPeriod, setSelectedPeriod] = useState<string>("all");
 
@@ -244,7 +267,14 @@ export default function OvertimeAnalysisPage() {
         setRawEmployees(otData.employees ?? []);
         setAvailableMonths(otData.months ?? []);
         setAvailableWeeks(otData.weeks ?? []);
+        setPayPeriods(otData.payPeriods ?? []);
         setDiagnostics(otData.diagnostics ?? null);
+
+        // Default calendar month to most recent month with data
+        const months = otData.months ?? [];
+        if (months.length > 0) {
+          setCalendarMonth(months[months.length - 1]);
+        }
 
         if (allocRes.ok) {
           const allocData = await allocRes.json();
@@ -406,6 +436,24 @@ export default function OvertimeAnalysisPage() {
     );
   }, [orgTree]);
 
+  // Aggregate daily hours across all entity employees for calendar view
+  const calendarData = useMemo(() => {
+    const byDay: Record<string, MonthlyHours> = {};
+    for (const emp of entityEmployees) {
+      if (!emp.dailyHours) continue;
+      for (const [date, hours] of Object.entries(emp.dailyHours)) {
+        byDay[date] = byDay[date] ? addHours(byDay[date], hours) : { ...hours };
+      }
+    }
+    return byDay;
+  }, [entityEmployees]);
+
+  // Pay period ranges relevant to the calendar month
+  const calendarPayPeriods = useMemo(() => {
+    if (!calendarMonth) return [];
+    return payPeriods.filter((pp) => pp.checkDate.startsWith(calendarMonth));
+  }, [payPeriods, calendarMonth]);
+
   const entityPremiumHrs = premiumHrs(entityTotals);
   const entityTotalHrs = totalHrs(entityTotals);
   const employeesWithPremium = entityEmployees.filter((e) => {
@@ -525,31 +573,59 @@ export default function OvertimeAnalysisPage() {
         </Select>
 
         <Tabs
-          value={granularity}
-          onValueChange={(v) => setGranularity(v as "monthly" | "weekly")}
+          value={viewMode}
+          onValueChange={(v) => setViewMode(v as "table" | "calendar")}
         >
           <TabsList>
-            <TabsTrigger value="monthly">Monthly</TabsTrigger>
-            <TabsTrigger value="weekly">Weekly</TabsTrigger>
+            <TabsTrigger value="table" className="gap-1.5">
+              <TableIcon className="h-3.5 w-3.5" />
+              Table
+            </TabsTrigger>
+            <TabsTrigger value="calendar" className="gap-1.5">
+              <CalendarDays className="h-3.5 w-3.5" />
+              Calendar
+            </TabsTrigger>
           </TabsList>
         </Tabs>
 
-        <Select value={selectedPeriod} onValueChange={setSelectedPeriod}>
-          <SelectTrigger className="w-[220px]">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Year (YTD)</SelectItem>
-            {periodOptions.map((p) => (
-              <SelectItem key={p.key} value={p.key}>
-                {p.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        {viewMode === "table" && (
+          <>
+            <Tabs
+              value={granularity}
+              onValueChange={(v) =>
+                setGranularity(v as "monthly" | "weekly")
+              }
+            >
+              <TabsList>
+                <TabsTrigger value="monthly">Monthly</TabsTrigger>
+                <TabsTrigger value="weekly">Weekly</TabsTrigger>
+              </TabsList>
+            </Tabs>
+
+            <Select
+              value={selectedPeriod}
+              onValueChange={setSelectedPeriod}
+            >
+              <SelectTrigger className="w-[220px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Year (YTD)</SelectItem>
+                {periodOptions.map((p) => (
+                  <SelectItem key={p.key} value={p.key}>
+                    {p.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </>
+        )}
 
         <span className="text-sm text-muted-foreground">
-          {entityEmployees.length} employees &middot; {periodLabel}
+          {entityEmployees.length} employees &middot;{" "}
+          {viewMode === "calendar" && calendarMonth
+            ? monthLabel(calendarMonth)
+            : periodLabel}
         </span>
       </div>
 
@@ -662,105 +738,120 @@ export default function OvertimeAnalysisPage() {
             </div>
           )}
 
-          {/* Department > Class > Employee Table */}
-          <Card>
-            <CardHeader>
-              <CardTitle>
-                {periodLabel} Breakdown
-              </CardTitle>
-              <CardDescription>
-                Click a department to expand by class, then click a class to see
-                individual employees. Sorted alphabetically.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {orgTree.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-12">
-                  <Clock className="h-12 w-12 text-muted-foreground mb-4" />
-                  <h3 className="text-lg font-medium mb-2">No Employees</h3>
-                  <p className="text-muted-foreground text-center">
-                    No employees allocated to this entity.
-                  </p>
-                </div>
-              ) : (
-                <div className="overflow-x-auto rounded-md border">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead className="w-[280px]">
-                          Department / Class / Employee
-                        </TableHead>
-                        <TableHead
-                          className="text-right"
-                          title="Overtime hours (1.5x rate)"
-                        >
-                          OT Hrs
-                        </TableHead>
-                        <TableHead
-                          className="text-right"
-                          title="Double time hours (2x rate)"
-                        >
-                          DT Hrs
-                        </TableHead>
-                        <TableHead
-                          className="text-right"
-                          title="Meal premium hours"
-                        >
-                          Meal Hrs
-                        </TableHead>
-                        <TableHead
-                          className="text-right"
-                          title="Total premium pay cost (OT + DT + Meal)"
-                        >
-                          Premium $
-                        </TableHead>
-                        <TableHead
-                          className="text-right"
-                          title="Regular hours for comparison"
-                        >
-                          Reg Hrs
-                        </TableHead>
-                        <TableHead
-                          className="text-right"
-                          title="Premium hours as % of total hours"
-                        >
-                          Prem %
-                        </TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {orgTree.map((dept) => {
-                        const deptExpanded = expandedDepts.has(dept.department);
-                        const totalEmpCount = dept.classes.reduce(
-                          (s, c) => s + c.employees.length,
-                          0
-                        );
+          {viewMode === "table" ? (
+            /* Department > Class > Employee Table */
+            <Card>
+              <CardHeader>
+                <CardTitle>
+                  {periodLabel} Breakdown
+                </CardTitle>
+                <CardDescription>
+                  Click a department to expand by class, then click a class to
+                  see individual employees. Sorted alphabetically.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {orgTree.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-12">
+                    <Clock className="h-12 w-12 text-muted-foreground mb-4" />
+                    <h3 className="text-lg font-medium mb-2">No Employees</h3>
+                    <p className="text-muted-foreground text-center">
+                      No employees allocated to this entity.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto rounded-md border">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="w-[280px]">
+                            Department / Class / Employee
+                          </TableHead>
+                          <TableHead
+                            className="text-right"
+                            title="Overtime hours (1.5x rate)"
+                          >
+                            OT Hrs
+                          </TableHead>
+                          <TableHead
+                            className="text-right"
+                            title="Double time hours (2x rate)"
+                          >
+                            DT Hrs
+                          </TableHead>
+                          <TableHead
+                            className="text-right"
+                            title="Meal premium hours"
+                          >
+                            Meal Hrs
+                          </TableHead>
+                          <TableHead
+                            className="text-right"
+                            title="Total premium pay cost (OT + DT + Meal)"
+                          >
+                            Premium $
+                          </TableHead>
+                          <TableHead
+                            className="text-right"
+                            title="Regular hours for comparison"
+                          >
+                            Reg Hrs
+                          </TableHead>
+                          <TableHead
+                            className="text-right"
+                            title="Premium hours as % of total hours"
+                          >
+                            Prem %
+                          </TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {orgTree.map((dept) => {
+                          const deptExpanded = expandedDepts.has(
+                            dept.department
+                          );
+                          const totalEmpCount = dept.classes.reduce(
+                            (s, c) => s + c.employees.length,
+                            0
+                          );
 
-                        return (
-                          <DeptSection
-                            key={dept.department}
-                            dept={dept}
-                            expanded={deptExpanded}
-                            totalEmpCount={totalEmpCount}
-                            expandedClasses={expandedClasses}
-                            onToggleDept={() => toggleDept(dept.department)}
-                            onToggleClass={toggleClass}
-                            HoursCells={HoursCells}
-                          />
-                        );
-                      })}
+                          return (
+                            <DeptSection
+                              key={dept.department}
+                              dept={dept}
+                              expanded={deptExpanded}
+                              totalEmpCount={totalEmpCount}
+                              expandedClasses={expandedClasses}
+                              onToggleDept={() =>
+                                toggleDept(dept.department)
+                              }
+                              onToggleClass={toggleClass}
+                              HoursCells={HoursCells}
+                            />
+                          );
+                        })}
 
-                      {/* Grand Total Row */}
-                      <TableRow className="font-semibold border-t-2">
-                        <TableCell>{periodLabel} Total</TableCell>
-                        <HoursCells h={entityTotals} bold />
-                      </TableRow>
-                    </TableBody>
-                  </Table>
-                </div>
-              )}
-            </CardContent>
-          </Card>
+                        {/* Grand Total Row */}
+                        <TableRow className="font-semibold border-t-2">
+                          <TableCell>{periodLabel} Total</TableCell>
+                          <HoursCells h={entityTotals} bold />
+                        </TableRow>
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          ) : (
+            /* Calendar View */
+            <CalendarView
+              calendarMonth={calendarMonth}
+              onMonthChange={setCalendarMonth}
+              calendarData={calendarData}
+              payPeriods={calendarPayPeriods}
+              availableMonths={availableMonths}
+            />
+          )}
         </>
       )}
     </div>
@@ -898,5 +989,223 @@ function ClassSection({
           );
         })}
     </>
+  );
+}
+
+// --- Calendar View ---
+
+const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+function CalendarView({
+  calendarMonth,
+  onMonthChange,
+  calendarData,
+  payPeriods,
+  availableMonths,
+}: {
+  calendarMonth: string;
+  onMonthChange: (m: string) => void;
+  calendarData: Record<string, MonthlyHours>;
+  payPeriods: PayPeriod[];
+  availableMonths: string[];
+}) {
+  if (!calendarMonth) return null;
+
+  const [yearStr, monthStr] = calendarMonth.split("-");
+  const monthDate = new Date(Number(yearStr), Number(monthStr) - 1, 1);
+  const monthStart = startOfMonth(monthDate);
+  const monthEnd = endOfMonth(monthDate);
+  const daysInMonth = eachDayOfInterval({ start: monthStart, end: monthEnd });
+
+  // Build a set of dates within pay period ranges for background highlighting
+  const periodRangeSet = new Set<string>();
+  for (const pp of payPeriods) {
+    const start = new Date(pp.beginDate);
+    const end = new Date(pp.endDate);
+    const rangeDays = eachDayOfInterval({
+      start: start < monthStart ? monthStart : start,
+      end: end > monthEnd ? monthEnd : end,
+    });
+    for (const d of rangeDays) {
+      periodRangeSet.add(format(d, "yyyy-MM-dd"));
+    }
+  }
+
+  // Leading empty cells for alignment (days before the 1st)
+  const leadingBlanks = getDay(monthStart); // 0=Sun
+
+  // Month totals from calendar data
+  const monthTotal = Object.entries(calendarData)
+    .filter(([date]) => date.startsWith(calendarMonth))
+    .reduce((sum, [, h]) => addHours(sum, h), emptyHours());
+
+  const prevMonth = format(subMonths(monthDate, 1), "yyyy-MM");
+  const nextMonth = format(addMonths(monthDate, 1), "yyyy-MM");
+  const canGoPrev = availableMonths.includes(prevMonth);
+  const canGoNext = availableMonths.includes(nextMonth);
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center justify-between">
+          <div>
+            <CardTitle>
+              {format(monthDate, "MMMM yyyy")} Premium Calendar
+            </CardTitle>
+            <CardDescription>
+              Aggregate OT, DT, and Meal premiums across all employees per pay
+              date. Shaded bands show pay period ranges.
+            </CardDescription>
+          </div>
+          <div className="flex items-center gap-1">
+            <Button
+              variant="ghost"
+              size="icon"
+              disabled={!canGoPrev}
+              onClick={() => onMonthChange(prevMonth)}
+            >
+              <ChevronLeftIcon className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              disabled={!canGoNext}
+              onClick={() => onMonthChange(nextMonth)}
+            >
+              <ChevronRightIcon className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {/* Month summary bar */}
+        {premiumHrs(monthTotal) > 0 && (
+          <div className="flex flex-wrap gap-4 mb-4 p-3 rounded-lg bg-muted/50 text-sm">
+            <span>
+              <span className="font-medium text-blue-600 dark:text-blue-400">
+                OT:
+              </span>{" "}
+              {fmtHrs(monthTotal.otHours)} hrs (
+              {formatCurrency(monthTotal.otDollars)})
+            </span>
+            <span>
+              <span className="font-medium text-orange-600 dark:text-orange-400">
+                DT:
+              </span>{" "}
+              {fmtHrs(monthTotal.dtHours)} hrs (
+              {formatCurrency(monthTotal.dtDollars)})
+            </span>
+            <span>
+              <span className="font-medium text-purple-600 dark:text-purple-400">
+                Meal:
+              </span>{" "}
+              {fmtHrs(monthTotal.mealHours)} hrs (
+              {formatCurrency(monthTotal.mealDollars)})
+            </span>
+            <span className="font-semibold">
+              Total: {formatCurrency(premiumDlrs(monthTotal))}
+            </span>
+          </div>
+        )}
+
+        {/* Calendar Grid */}
+        <div className="grid grid-cols-7 gap-px bg-border rounded-lg overflow-hidden">
+          {/* Day name headers */}
+          {DAY_NAMES.map((name) => (
+            <div
+              key={name}
+              className="bg-muted px-2 py-1.5 text-xs font-medium text-muted-foreground text-center"
+            >
+              {name}
+            </div>
+          ))}
+
+          {/* Leading blanks */}
+          {Array.from({ length: leadingBlanks }).map((_, i) => (
+            <div key={`blank-${i}`} className="bg-background min-h-[100px]" />
+          ))}
+
+          {/* Day cells */}
+          {daysInMonth.map((date) => {
+            const dateStr = format(date, "yyyy-MM-dd");
+            const dayNum = date.getDate();
+            const isWeekend = getDay(date) === 0 || getDay(date) === 6;
+            const inPayPeriod = periodRangeSet.has(dateStr);
+            const dayData = calendarData[dateStr];
+            const hasData = dayData && premiumHrs(dayData) > 0;
+
+            return (
+              <div
+                key={dateStr}
+                className={`bg-background min-h-[100px] p-1.5 relative ${
+                  isWeekend ? "bg-muted/30" : ""
+                } ${inPayPeriod ? "bg-blue-50/50 dark:bg-blue-950/20" : ""}`}
+              >
+                <span
+                  className={`text-xs tabular-nums ${
+                    hasData
+                      ? "font-semibold text-foreground"
+                      : "text-muted-foreground/50"
+                  }`}
+                >
+                  {dayNum}
+                </span>
+                {hasData && (
+                  <div className="mt-1 space-y-0.5">
+                    {dayData.otHours > 0 && (
+                      <div className="flex items-center gap-1">
+                        <span className="inline-block w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0" />
+                        <span className="text-[10px] tabular-nums text-blue-700 dark:text-blue-300 leading-tight">
+                          OT {fmtHrs(dayData.otHours)}h
+                        </span>
+                      </div>
+                    )}
+                    {dayData.dtHours > 0 && (
+                      <div className="flex items-center gap-1">
+                        <span className="inline-block w-1.5 h-1.5 rounded-full bg-orange-500 shrink-0" />
+                        <span className="text-[10px] tabular-nums text-orange-700 dark:text-orange-300 leading-tight">
+                          DT {fmtHrs(dayData.dtHours)}h
+                        </span>
+                      </div>
+                    )}
+                    {dayData.mealHours > 0 && (
+                      <div className="flex items-center gap-1">
+                        <span className="inline-block w-1.5 h-1.5 rounded-full bg-purple-500 shrink-0" />
+                        <span className="text-[10px] tabular-nums text-purple-700 dark:text-purple-300 leading-tight">
+                          Meal {fmtHrs(dayData.mealHours)}h
+                        </span>
+                      </div>
+                    )}
+                    <div className="text-[10px] font-semibold tabular-nums text-foreground/80 mt-0.5 leading-tight">
+                      {formatCurrency(premiumDlrs(dayData))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Legend */}
+        <div className="flex flex-wrap gap-4 mt-3 text-xs text-muted-foreground">
+          <span className="flex items-center gap-1">
+            <span className="inline-block w-2 h-2 rounded-full bg-blue-500" />
+            Overtime (1.5x)
+          </span>
+          <span className="flex items-center gap-1">
+            <span className="inline-block w-2 h-2 rounded-full bg-orange-500" />
+            Double Time (2x)
+          </span>
+          <span className="flex items-center gap-1">
+            <span className="inline-block w-2 h-2 rounded-full bg-purple-500" />
+            Meal Premium
+          </span>
+          <span className="flex items-center gap-1">
+            <span className="inline-block w-3 h-2 rounded-sm bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800" />
+            Pay period range
+          </span>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
