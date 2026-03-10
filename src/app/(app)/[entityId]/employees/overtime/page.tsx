@@ -103,12 +103,6 @@ interface OTEmployee {
   };
 }
 
-interface PayPeriod {
-  checkDate: string;
-  beginDate: string;
-  endDate: string;
-}
-
 interface Diagnostics {
   totalEmployees: number;
   dataOk: number;
@@ -124,6 +118,48 @@ interface AllocationOverride {
   class: string | null;
   allocated_entity_id: string | null;
   allocated_entity_name: string | null;
+}
+
+// --- Punch Calendar Types (daily data from Punch Details API) ---
+
+interface PunchDayData {
+  regHours: number;
+  regDollars: number;
+  otHours: number;
+  otDollars: number;
+  dtHours: number;
+  dtDollars: number;
+  mealHours: number;
+  mealDollars: number;
+  totalWorkHours: number;
+}
+
+interface PunchCalendarEmployee {
+  id: string;
+  companyId: string;
+  displayName: string;
+  department: string;
+  classValue: string;
+  operatingEntityId: string;
+  operatingEntityCode: string;
+  operatingEntityName: string;
+  payType: string;
+  baseRate: number;
+  hasPunchData: boolean;
+  dailyData: Record<string, PunchDayData>;
+  monthTotals: PunchDayData;
+}
+
+interface PunchCalendarResponse {
+  year: number;
+  month: number;
+  employees: PunchCalendarEmployee[];
+  diagnostics: {
+    totalEmployees: number;
+    withData: number;
+    withoutData: number;
+    errors: number;
+  };
 }
 
 // --- Helpers ---
@@ -237,7 +273,6 @@ export default function OvertimeAnalysisPage() {
   const [allocations, setAllocations] = useState<AllocationOverride[]>([]);
   const [availableMonths, setAvailableMonths] = useState<string[]>([]);
   const [availableWeeks, setAvailableWeeks] = useState<string[]>([]);
-  const [payPeriods, setPayPeriods] = useState<PayPeriod[]>([]);
   const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -247,6 +282,12 @@ export default function OvertimeAnalysisPage() {
   const [calendarMonth, setCalendarMonth] = useState<string>(""); // "YYYY-MM"
   const [granularity, setGranularity] = useState<"monthly" | "weekly">("monthly");
   const [selectedPeriod, setSelectedPeriod] = useState<string>("all");
+
+  // Punch calendar state (lazy-loaded when calendar view is active)
+  const [punchData, setPunchData] = useState<PunchCalendarResponse | null>(null);
+  const [punchLoading, setPunchLoading] = useState(false);
+  const [punchError, setPunchError] = useState<string | null>(null);
+  const [selectedEmployeeId, setSelectedEmployeeId] = useState<string | null>(null);
 
   // Collapsible state
   const [expandedDepts, setExpandedDepts] = useState<Set<string>>(new Set());
@@ -267,7 +308,6 @@ export default function OvertimeAnalysisPage() {
         setRawEmployees(otData.employees ?? []);
         setAvailableMonths(otData.months ?? []);
         setAvailableWeeks(otData.weeks ?? []);
-        setPayPeriods(otData.payPeriods ?? []);
         setDiagnostics(otData.diagnostics ?? null);
 
         // Default calendar month to most recent month with data
@@ -436,23 +476,100 @@ export default function OvertimeAnalysisPage() {
     );
   }, [orgTree]);
 
-  // Aggregate daily hours across all entity employees for calendar view
-  const calendarData = useMemo(() => {
+  // --- Punch Calendar: lazy-load when calendar view is active ---
+  useEffect(() => {
+    if (viewMode !== "calendar" || !calendarMonth) return;
+
+    async function loadPunchData() {
+      setPunchLoading(true);
+      setPunchError(null);
+      try {
+        const [y, m] = calendarMonth.split("-");
+        const res = await fetch(
+          `/api/paylocity/punch-calendar?year=${y}&month=${Number(m)}`
+        );
+        if (!res.ok) throw new Error(`Failed to fetch: ${res.status}`);
+        const data = await res.json();
+        setPunchData(data);
+      } catch (err) {
+        setPunchError(
+          err instanceof Error ? err.message : "Failed to load punch data"
+        );
+      } finally {
+        setPunchLoading(false);
+      }
+    }
+    loadPunchData();
+  }, [viewMode, calendarMonth]);
+
+  // Clear employee selection when switching months or views
+  useEffect(() => {
+    setSelectedEmployeeId(null);
+  }, [calendarMonth, viewMode]);
+
+  // Filter punch employees to this entity
+  const punchEntityEmployees = useMemo(() => {
+    if (!punchData) return [];
+    const emps = punchData.employees;
+    if (paylocityCompanyId) {
+      return emps.filter(
+        (e) =>
+          e.companyId === paylocityCompanyId ||
+          e.operatingEntityId === entityId
+      );
+    }
+    return emps.filter((e) => e.operatingEntityId === entityId);
+  }, [punchData, entityId, paylocityCompanyId]);
+
+  // Entity-level punch daily aggregation (all employees summed)
+  const punchCalendarData = useMemo(() => {
     const byDay: Record<string, MonthlyHours> = {};
-    for (const emp of entityEmployees) {
-      if (!emp.dailyHours) continue;
-      for (const [date, hours] of Object.entries(emp.dailyHours)) {
-        byDay[date] = byDay[date] ? addHours(byDay[date], hours) : { ...hours };
+    for (const emp of punchEntityEmployees) {
+      for (const [date, day] of Object.entries(emp.dailyData)) {
+        if (!byDay[date]) byDay[date] = emptyHours();
+        byDay[date].otHours += day.otHours;
+        byDay[date].otDollars += day.otDollars;
+        byDay[date].dtHours += day.dtHours;
+        byDay[date].dtDollars += day.dtDollars;
+        byDay[date].mealHours += day.mealHours;
+        byDay[date].mealDollars += day.mealDollars;
+        byDay[date].regHours += day.regHours;
+        byDay[date].regDollars += day.regDollars;
       }
     }
     return byDay;
-  }, [entityEmployees]);
+  }, [punchEntityEmployees]);
 
-  // Pay period ranges relevant to the calendar month
-  const calendarPayPeriods = useMemo(() => {
-    if (!calendarMonth) return [];
-    return payPeriods.filter((pp) => pp.checkDate.startsWith(calendarMonth));
-  }, [payPeriods, calendarMonth]);
+  // Selected employee's data for drill-down
+  const selectedPunchEmployee = useMemo(() => {
+    if (!selectedEmployeeId) return null;
+    return punchEntityEmployees.find((e) => e.id === selectedEmployeeId) ?? null;
+  }, [punchEntityEmployees, selectedEmployeeId]);
+
+  const selectedEmployeeCalendarData = useMemo((): Record<string, MonthlyHours> => {
+    if (!selectedPunchEmployee) return {};
+    const result: Record<string, MonthlyHours> = {};
+    for (const [date, day] of Object.entries(selectedPunchEmployee.dailyData)) {
+      result[date] = {
+        otHours: day.otHours,
+        otDollars: day.otDollars,
+        dtHours: day.dtHours,
+        dtDollars: day.dtDollars,
+        mealHours: day.mealHours,
+        mealDollars: day.mealDollars,
+        regHours: day.regHours,
+        regDollars: day.regDollars,
+      };
+    }
+    return result;
+  }, [selectedPunchEmployee]);
+
+  // Employees with punch data, sorted for the selector dropdown
+  const punchEmployeesWithData = useMemo(() => {
+    return punchEntityEmployees
+      .filter((e) => e.hasPunchData)
+      .sort((a, b) => a.displayName.localeCompare(b.displayName));
+  }, [punchEntityEmployees]);
 
   const entityPremiumHrs = premiumHrs(entityTotals);
   const entityTotalHrs = totalHrs(entityTotals);
@@ -843,13 +960,22 @@ export default function OvertimeAnalysisPage() {
               </CardContent>
             </Card>
           ) : (
-            /* Calendar View */
+            /* Calendar View — punch-based daily data */
             <CalendarView
               calendarMonth={calendarMonth}
               onMonthChange={setCalendarMonth}
-              calendarData={calendarData}
-              payPeriods={calendarPayPeriods}
+              calendarData={
+                selectedEmployeeId
+                  ? selectedEmployeeCalendarData
+                  : punchCalendarData
+              }
               availableMonths={availableMonths}
+              loading={punchLoading}
+              error={punchError}
+              employees={punchEmployeesWithData}
+              selectedEmployeeId={selectedEmployeeId}
+              selectedEmployee={selectedPunchEmployee}
+              onSelectEmployee={setSelectedEmployeeId}
             />
           )}
         </>
@@ -1000,14 +1126,24 @@ function CalendarView({
   calendarMonth,
   onMonthChange,
   calendarData,
-  payPeriods,
   availableMonths,
+  loading,
+  error,
+  employees,
+  selectedEmployeeId,
+  selectedEmployee,
+  onSelectEmployee,
 }: {
   calendarMonth: string;
   onMonthChange: (m: string) => void;
   calendarData: Record<string, MonthlyHours>;
-  payPeriods: PayPeriod[];
   availableMonths: string[];
+  loading: boolean;
+  error: string | null;
+  employees: PunchCalendarEmployee[];
+  selectedEmployeeId: string | null;
+  selectedEmployee: PunchCalendarEmployee | null;
+  onSelectEmployee: (id: string | null) => void;
 }) {
   if (!calendarMonth) return null;
 
@@ -1017,26 +1153,6 @@ function CalendarView({
   const monthEnd = endOfMonth(monthDate);
   const daysInMonth = eachDayOfInterval({ start: monthStart, end: monthEnd });
 
-  // Build a set of dates within pay period ranges for background highlighting
-  // Parse date strings as local time (not UTC) to avoid timezone day-shift
-  function parseLocalDate(dateStr: string): Date {
-    const [y, m, d] = dateStr.split("-").map(Number);
-    return new Date(y, m - 1, d);
-  }
-
-  const periodRangeSet = new Set<string>();
-  for (const pp of payPeriods) {
-    const start = parseLocalDate(pp.beginDate);
-    const end = parseLocalDate(pp.endDate);
-    const rangeDays = eachDayOfInterval({
-      start: start < monthStart ? monthStart : start,
-      end: end > monthEnd ? monthEnd : end,
-    });
-    for (const d of rangeDays) {
-      periodRangeSet.add(format(d, "yyyy-MM-dd"));
-    }
-  }
-
   // Leading empty cells for alignment (days before the 1st)
   const leadingBlanks = getDay(monthStart); // 0=Sun
 
@@ -1045,22 +1161,27 @@ function CalendarView({
     .filter(([date]) => date.startsWith(calendarMonth))
     .reduce((sum, [, h]) => addHours(sum, h), emptyHours());
 
+  // Allow navigating to any month up to current month (not limited to availableMonths)
+  const now = new Date();
   const prevMonth = format(subMonths(monthDate, 1), "yyyy-MM");
   const nextMonth = format(addMonths(monthDate, 1), "yyyy-MM");
-  const canGoPrev = availableMonths.includes(prevMonth);
-  const canGoNext = availableMonths.includes(nextMonth);
+  const canGoPrev = true; // Can always go back
+  const canGoNext =
+    Number(nextMonth.replace("-", "")) <=
+    Number(format(now, "yyyy-MM").replace("-", ""));
 
   return (
     <Card>
       <CardHeader>
         <div className="flex items-center justify-between">
-          <div>
+          <div className="flex-1 min-w-0">
             <CardTitle>
               {format(monthDate, "MMMM yyyy")} Premium Calendar
             </CardTitle>
             <CardDescription>
-              Aggregate OT, DT, and Meal premiums across all employees per pay
-              date. Shaded bands show pay period ranges.
+              {selectedEmployee
+                ? `Daily OT, DT, and Meal premiums for ${selectedEmployee.displayName}`
+                : `Daily OT, DT, and Meal premiums from punch details across ${employees.length} employee${employees.length !== 1 ? "s" : ""}`}
             </CardDescription>
           </div>
           <div className="flex items-center gap-1">
@@ -1082,11 +1203,98 @@ function CalendarView({
             </Button>
           </div>
         </div>
+
+        {/* Employee selector */}
+        <div className="flex items-center gap-2 mt-2">
+          <Select
+            value={selectedEmployeeId ?? "__all__"}
+            onValueChange={(v) =>
+              onSelectEmployee(v === "__all__" ? null : v)
+            }
+          >
+            <SelectTrigger className="w-[320px]">
+              <SelectValue placeholder="All Employees" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__all__">
+                All Employees ({employees.length} with data)
+              </SelectItem>
+              {employees.map((emp) => (
+                <SelectItem key={`${emp.id}-${emp.companyId}`} value={emp.id}>
+                  {emp.displayName}
+                  <span className="text-muted-foreground ml-1 text-xs">
+                    — {emp.department}
+                  </span>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {selectedEmployeeId && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => onSelectEmployee(null)}
+              className="text-xs"
+            >
+              Clear
+            </Button>
+          )}
+        </div>
       </CardHeader>
-      <CardContent>
+      <CardContent className="relative">
+        {/* Loading overlay */}
+        {loading && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/60 rounded-lg">
+            <div className="text-center">
+              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground mx-auto mb-2" />
+              <p className="text-sm text-muted-foreground">
+                Loading punch data...
+              </p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Fetching daily punch details for all employees
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Error state */}
+        {error && !loading && (
+          <div className="flex items-start gap-3 p-3 rounded-lg bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800 text-red-800 dark:text-red-200 text-sm mb-4">
+            <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+            <div>
+              <p className="font-medium">Failed to load punch data</p>
+              <p className="text-red-700 dark:text-red-300 mt-0.5">{error}</p>
+            </div>
+          </div>
+        )}
+
+        {/* Employee info bar */}
+        {selectedEmployee && !loading && (
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-1 mb-4 p-3 rounded-lg bg-muted/50 text-sm border">
+            <span className="font-semibold">{selectedEmployee.displayName}</span>
+            <span className="text-muted-foreground">
+              {selectedEmployee.department}
+              {selectedEmployee.classValue ? ` / ${selectedEmployee.classValue}` : ""}
+            </span>
+            <span className="text-muted-foreground">
+              {selectedEmployee.payType} — {formatCurrency(selectedEmployee.baseRate)}/hr
+            </span>
+            <span className="text-muted-foreground">
+              {selectedEmployee.operatingEntityCode}
+            </span>
+          </div>
+        )}
+
         {/* Month summary bar */}
-        {premiumHrs(monthTotal) > 0 && (
+        {premiumHrs(monthTotal) > 0 && !loading && (
           <div className="flex flex-wrap gap-4 mb-4 p-3 rounded-lg bg-muted/50 text-sm">
+            <span>
+              <span className="font-medium text-green-600 dark:text-green-400">
+                Reg:
+              </span>{" "}
+              {fmtHrs(monthTotal.regHours)} hrs (
+              {formatCurrency(monthTotal.regDollars)})
+            </span>
             <span>
               <span className="font-medium text-blue-600 dark:text-blue-400">
                 OT:
@@ -1109,13 +1317,17 @@ function CalendarView({
               {formatCurrency(monthTotal.mealDollars)})
             </span>
             <span className="font-semibold">
-              Total: {formatCurrency(premiumDlrs(monthTotal))}
+              Premium Total: {formatCurrency(premiumDlrs(monthTotal))}
             </span>
           </div>
         )}
 
         {/* Calendar Grid */}
-        <div className="grid grid-cols-7 gap-px bg-border rounded-lg overflow-hidden">
+        <div
+          className={`grid grid-cols-7 gap-px bg-border rounded-lg overflow-hidden ${
+            loading ? "opacity-40 pointer-events-none" : ""
+          }`}
+        >
           {/* Day name headers */}
           {DAY_NAMES.map((name) => (
             <div
@@ -1136,16 +1348,16 @@ function CalendarView({
             const dateStr = format(date, "yyyy-MM-dd");
             const dayNum = date.getDate();
             const isWeekend = getDay(date) === 0 || getDay(date) === 6;
-            const inPayPeriod = periodRangeSet.has(dateStr);
             const dayData = calendarData[dateStr];
-            const hasData = dayData && premiumHrs(dayData) > 0;
+            const hasData = dayData && (premiumHrs(dayData) > 0 || dayData.regHours > 0);
+            const hasPremium = dayData && premiumHrs(dayData) > 0;
 
             return (
               <div
                 key={dateStr}
                 className={`bg-background min-h-[100px] p-1.5 relative ${
                   isWeekend ? "bg-muted/30" : ""
-                } ${inPayPeriod ? "bg-blue-50/50 dark:bg-blue-950/20" : ""}`}
+                } ${hasData && !hasPremium ? "bg-green-50/30 dark:bg-green-950/10" : ""}`}
               >
                 <span
                   className={`text-xs tabular-nums ${
@@ -1158,6 +1370,14 @@ function CalendarView({
                 </span>
                 {hasData && (
                   <div className="mt-1 space-y-0.5">
+                    {dayData.regHours > 0 && selectedEmployee && (
+                      <div className="flex items-center gap-1">
+                        <span className="inline-block w-1.5 h-1.5 rounded-full bg-green-500 shrink-0" />
+                        <span className="text-[10px] tabular-nums text-green-700 dark:text-green-300 leading-tight">
+                          Reg {fmtHrs(dayData.regHours)}h
+                        </span>
+                      </div>
+                    )}
                     {dayData.otHours > 0 && (
                       <div className="flex items-center gap-1">
                         <span className="inline-block w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0" />
@@ -1182,9 +1402,11 @@ function CalendarView({
                         </span>
                       </div>
                     )}
-                    <div className="text-[10px] font-semibold tabular-nums text-foreground/80 mt-0.5 leading-tight">
-                      {formatCurrency(premiumDlrs(dayData))}
-                    </div>
+                    {hasPremium && (
+                      <div className="text-[10px] font-semibold tabular-nums text-foreground/80 mt-0.5 leading-tight">
+                        {formatCurrency(premiumDlrs(dayData))}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -1194,6 +1416,12 @@ function CalendarView({
 
         {/* Legend */}
         <div className="flex flex-wrap gap-4 mt-3 text-xs text-muted-foreground">
+          {selectedEmployee && (
+            <span className="flex items-center gap-1">
+              <span className="inline-block w-2 h-2 rounded-full bg-green-500" />
+              Regular (1x)
+            </span>
+          )}
           <span className="flex items-center gap-1">
             <span className="inline-block w-2 h-2 rounded-full bg-blue-500" />
             Overtime (1.5x)
@@ -1205,10 +1433,6 @@ function CalendarView({
           <span className="flex items-center gap-1">
             <span className="inline-block w-2 h-2 rounded-full bg-purple-500" />
             Meal Premium
-          </span>
-          <span className="flex items-center gap-1">
-            <span className="inline-block w-3 h-2 rounded-sm bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800" />
-            Pay period range
           </span>
         </div>
       </CardContent>
