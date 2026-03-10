@@ -28,6 +28,12 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
   Clock,
   DollarSign,
   ChevronRight,
@@ -1121,6 +1127,165 @@ function ClassSection({
 // --- Calendar View ---
 
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const TOOLTIP_MAX_EMPLOYEES = 5;
+
+/** Tooltip content showing employee breakdown for a given day */
+function DayTooltipContent({
+  dateStr,
+  dayData,
+  employees,
+  selectedEmployee,
+}: {
+  dateStr: string;
+  dayData: MonthlyHours;
+  employees: PunchCalendarEmployee[];
+  selectedEmployee: PunchCalendarEmployee | null;
+}) {
+  const dateLabel = format(
+    new Date(
+      Number(dateStr.slice(0, 4)),
+      Number(dateStr.slice(5, 7)) - 1,
+      Number(dateStr.slice(8, 10))
+    ),
+    "EEEE, MMMM d"
+  );
+
+  // Selected employee mode — show individual breakdown
+  if (selectedEmployee) {
+    const empDay = selectedEmployee.dailyData[dateStr];
+    if (!empDay) return null;
+    return (
+      <div className="space-y-1.5">
+        <p className="font-semibold text-xs">{selectedEmployee.displayName}</p>
+        <p className="text-[11px] text-muted-foreground">{dateLabel}</p>
+        <div className="space-y-0.5 text-xs tabular-nums">
+          {empDay.regHours > 0 && (
+            <div className="flex justify-between gap-4">
+              <span className="flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-green-500 shrink-0" />
+                Reg
+              </span>
+              <span>{fmtHrs(empDay.regHours)}h ({formatCurrency(empDay.regDollars)})</span>
+            </div>
+          )}
+          {empDay.otHours > 0 && (
+            <div className="flex justify-between gap-4">
+              <span className="flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0" />
+                OT (1.5x)
+              </span>
+              <span>{fmtHrs(empDay.otHours)}h ({formatCurrency(empDay.otDollars)})</span>
+            </div>
+          )}
+          {empDay.dtHours > 0 && (
+            <div className="flex justify-between gap-4">
+              <span className="flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-orange-500 shrink-0" />
+                DT (2x)
+              </span>
+              <span>{fmtHrs(empDay.dtHours)}h ({formatCurrency(empDay.dtDollars)})</span>
+            </div>
+          )}
+          {empDay.mealHours > 0 && (
+            <div className="flex justify-between gap-4">
+              <span className="flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-purple-500 shrink-0" />
+                Meal
+              </span>
+              <span>{fmtHrs(empDay.mealHours)}h ({formatCurrency(empDay.mealDollars)})</span>
+            </div>
+          )}
+          <div className="flex justify-between gap-4 pt-1 border-t font-medium">
+            <span>Total</span>
+            <span>{fmtHrs(empDay.totalWorkHours)}h worked</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // All employees mode — show per-employee breakdown by category
+  type EmpContribution = { name: string; hours: number; dollars: number };
+
+  const otContributors: EmpContribution[] = [];
+  const dtContributors: EmpContribution[] = [];
+  const mealContributors: EmpContribution[] = [];
+
+  for (const emp of employees) {
+    const d = emp.dailyData[dateStr];
+    if (!d) continue;
+    if (d.otHours > 0) otContributors.push({ name: emp.displayName, hours: d.otHours, dollars: d.otDollars });
+    if (d.dtHours > 0) dtContributors.push({ name: emp.displayName, hours: d.dtHours, dollars: d.dtDollars });
+    if (d.mealHours > 0) mealContributors.push({ name: emp.displayName, hours: d.mealHours, dollars: d.mealDollars });
+  }
+
+  // Sort each category descending by hours
+  otContributors.sort((a, b) => b.hours - a.hours);
+  dtContributors.sort((a, b) => b.hours - a.hours);
+  mealContributors.sort((a, b) => b.hours - a.hours);
+
+  const hasAnyPremium =
+    otContributors.length > 0 || dtContributors.length > 0 || mealContributors.length > 0;
+
+  if (!hasAnyPremium) {
+    return (
+      <div className="space-y-1">
+        <p className="font-semibold text-xs">{dateLabel}</p>
+        <p className="text-[11px] text-muted-foreground">
+          No premium hours — {fmtHrs(dayData.regHours)}h regular only
+        </p>
+      </div>
+    );
+  }
+
+  function renderCategory(
+    label: string,
+    color: string,
+    totalHrs: number,
+    totalDlrs: number,
+    contributors: EmpContribution[]
+  ) {
+    if (contributors.length === 0) return null;
+    const shown = contributors.slice(0, TOOLTIP_MAX_EMPLOYEES);
+    const remaining = contributors.length - shown.length;
+
+    return (
+      <div className="space-y-0.5">
+        <div className="flex items-center gap-1.5 font-medium text-xs">
+          <span className={`w-1.5 h-1.5 rounded-full ${color} shrink-0`} />
+          {label} — {fmtHrs(totalHrs)}h ({formatCurrency(totalDlrs)})
+        </div>
+        {shown.map((c) => (
+          <div
+            key={c.name}
+            className="flex justify-between gap-3 text-[11px] tabular-nums text-muted-foreground pl-3"
+          >
+            <span className="truncate">{c.name}</span>
+            <span className="shrink-0">{fmtHrs(c.hours)}h</span>
+          </div>
+        ))}
+        {remaining > 0 && (
+          <p className="text-[11px] text-muted-foreground/70 pl-3">
+            +{remaining} more
+          </p>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      <p className="font-semibold text-xs">{dateLabel}</p>
+      {renderCategory("OT (1.5x)", "bg-blue-500", dayData.otHours, dayData.otDollars, otContributors)}
+      {renderCategory("DT (2x)", "bg-orange-500", dayData.dtHours, dayData.dtDollars, dtContributors)}
+      {renderCategory("Meal", "bg-purple-500", dayData.mealHours, dayData.mealDollars, mealContributors)}
+      <div className="flex justify-between text-xs font-medium pt-1 border-t tabular-nums">
+        <span>Premium Total</span>
+        <span>{formatCurrency(premiumDlrs(dayData))}</span>
+      </div>
+    </div>
+  );
+}
 
 function CalendarView({
   calendarMonth,
@@ -1323,96 +1488,125 @@ function CalendarView({
         )}
 
         {/* Calendar Grid */}
-        <div
-          className={`grid grid-cols-7 gap-px bg-border rounded-lg overflow-hidden ${
-            loading ? "opacity-40 pointer-events-none" : ""
-          }`}
-        >
-          {/* Day name headers */}
-          {DAY_NAMES.map((name) => (
-            <div
-              key={name}
-              className="bg-muted px-2 py-1.5 text-xs font-medium text-muted-foreground text-center"
-            >
-              {name}
-            </div>
-          ))}
-
-          {/* Leading blanks */}
-          {Array.from({ length: leadingBlanks }).map((_, i) => (
-            <div key={`blank-${i}`} className="bg-background min-h-[100px]" />
-          ))}
-
-          {/* Day cells */}
-          {daysInMonth.map((date) => {
-            const dateStr = format(date, "yyyy-MM-dd");
-            const dayNum = date.getDate();
-            const isWeekend = getDay(date) === 0 || getDay(date) === 6;
-            const dayData = calendarData[dateStr];
-            const hasData = dayData && (premiumHrs(dayData) > 0 || dayData.regHours > 0);
-            const hasPremium = dayData && premiumHrs(dayData) > 0;
-
-            return (
+        <TooltipProvider delayDuration={200}>
+          <div
+            className={`grid grid-cols-7 gap-px bg-border rounded-lg overflow-hidden ${
+              loading ? "opacity-40 pointer-events-none" : ""
+            }`}
+          >
+            {/* Day name headers */}
+            {DAY_NAMES.map((name) => (
               <div
-                key={dateStr}
-                className={`bg-background min-h-[100px] p-1.5 relative ${
-                  isWeekend ? "bg-muted/30" : ""
-                } ${hasData && !hasPremium ? "bg-green-50/30 dark:bg-green-950/10" : ""}`}
+                key={name}
+                className="bg-muted px-2 py-1.5 text-xs font-medium text-muted-foreground text-center"
               >
-                <span
-                  className={`text-xs tabular-nums ${
-                    hasData
-                      ? "font-semibold text-foreground"
-                      : "text-muted-foreground/50"
+                {name}
+              </div>
+            ))}
+
+            {/* Leading blanks */}
+            {Array.from({ length: leadingBlanks }).map((_, i) => (
+              <div key={`blank-${i}`} className="bg-background min-h-[100px]" />
+            ))}
+
+            {/* Day cells */}
+            {daysInMonth.map((date) => {
+              const dateStr = format(date, "yyyy-MM-dd");
+              const dayNum = date.getDate();
+              const isWeekend = getDay(date) === 0 || getDay(date) === 6;
+              const dayData = calendarData[dateStr];
+              const hasData = dayData && (premiumHrs(dayData) > 0 || dayData.regHours > 0);
+              const hasPremium = dayData && premiumHrs(dayData) > 0;
+
+              const dayCellContent = (
+                <div
+                  key={dateStr}
+                  className={`bg-background min-h-[100px] p-1.5 relative cursor-default ${
+                    isWeekend ? "bg-muted/30" : ""
+                  } ${hasData && !hasPremium ? "bg-green-50/30 dark:bg-green-950/10" : ""} ${
+                    hasData ? "hover:ring-1 hover:ring-primary/30 hover:z-10" : ""
                   }`}
                 >
-                  {dayNum}
-                </span>
-                {hasData && (
-                  <div className="mt-1 space-y-0.5">
-                    {dayData.regHours > 0 && selectedEmployee && (
-                      <div className="flex items-center gap-1">
-                        <span className="inline-block w-1.5 h-1.5 rounded-full bg-green-500 shrink-0" />
-                        <span className="text-[10px] tabular-nums text-green-700 dark:text-green-300 leading-tight">
-                          Reg {fmtHrs(dayData.regHours)}h
-                        </span>
-                      </div>
-                    )}
-                    {dayData.otHours > 0 && (
-                      <div className="flex items-center gap-1">
-                        <span className="inline-block w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0" />
-                        <span className="text-[10px] tabular-nums text-blue-700 dark:text-blue-300 leading-tight">
-                          OT {fmtHrs(dayData.otHours)}h
-                        </span>
-                      </div>
-                    )}
-                    {dayData.dtHours > 0 && (
-                      <div className="flex items-center gap-1">
-                        <span className="inline-block w-1.5 h-1.5 rounded-full bg-orange-500 shrink-0" />
-                        <span className="text-[10px] tabular-nums text-orange-700 dark:text-orange-300 leading-tight">
-                          DT {fmtHrs(dayData.dtHours)}h
-                        </span>
-                      </div>
-                    )}
-                    {dayData.mealHours > 0 && (
-                      <div className="flex items-center gap-1">
-                        <span className="inline-block w-1.5 h-1.5 rounded-full bg-purple-500 shrink-0" />
-                        <span className="text-[10px] tabular-nums text-purple-700 dark:text-purple-300 leading-tight">
-                          Meal {fmtHrs(dayData.mealHours)}h
-                        </span>
-                      </div>
-                    )}
-                    {hasPremium && (
-                      <div className="text-[10px] font-semibold tabular-nums text-foreground/80 mt-0.5 leading-tight">
-                        {formatCurrency(premiumDlrs(dayData))}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
+                  <span
+                    className={`text-xs tabular-nums ${
+                      hasData
+                        ? "font-semibold text-foreground"
+                        : "text-muted-foreground/50"
+                    }`}
+                  >
+                    {dayNum}
+                  </span>
+                  {hasData && (
+                    <div className="mt-1 space-y-0.5">
+                      {dayData.regHours > 0 && selectedEmployee && (
+                        <div className="flex items-center gap-1">
+                          <span className="inline-block w-1.5 h-1.5 rounded-full bg-green-500 shrink-0" />
+                          <span className="text-[10px] tabular-nums text-green-700 dark:text-green-300 leading-tight">
+                            Reg {fmtHrs(dayData.regHours)}h
+                          </span>
+                        </div>
+                      )}
+                      {dayData.otHours > 0 && (
+                        <div className="flex items-center gap-1">
+                          <span className="inline-block w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0" />
+                          <span className="text-[10px] tabular-nums text-blue-700 dark:text-blue-300 leading-tight">
+                            OT {fmtHrs(dayData.otHours)}h
+                          </span>
+                        </div>
+                      )}
+                      {dayData.dtHours > 0 && (
+                        <div className="flex items-center gap-1">
+                          <span className="inline-block w-1.5 h-1.5 rounded-full bg-orange-500 shrink-0" />
+                          <span className="text-[10px] tabular-nums text-orange-700 dark:text-orange-300 leading-tight">
+                            DT {fmtHrs(dayData.dtHours)}h
+                          </span>
+                        </div>
+                      )}
+                      {dayData.mealHours > 0 && (
+                        <div className="flex items-center gap-1">
+                          <span className="inline-block w-1.5 h-1.5 rounded-full bg-purple-500 shrink-0" />
+                          <span className="text-[10px] tabular-nums text-purple-700 dark:text-purple-300 leading-tight">
+                            Meal {fmtHrs(dayData.mealHours)}h
+                          </span>
+                        </div>
+                      )}
+                      {hasPremium && (
+                        <div className="text-[10px] font-semibold tabular-nums text-foreground/80 mt-0.5 leading-tight">
+                          {formatCurrency(premiumDlrs(dayData))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+
+              // Wrap day cells with data in a tooltip
+              if (hasData && dayData) {
+                return (
+                  <Tooltip key={dateStr}>
+                    <TooltipTrigger asChild>
+                      {dayCellContent}
+                    </TooltipTrigger>
+                    <TooltipContent
+                      side="top"
+                      className="w-72 p-3"
+                      sideOffset={4}
+                    >
+                      <DayTooltipContent
+                        dateStr={dateStr}
+                        dayData={dayData}
+                        employees={employees}
+                        selectedEmployee={selectedEmployee}
+                      />
+                    </TooltipContent>
+                  </Tooltip>
+                );
+              }
+
+              return dayCellContent;
+            })}
+          </div>
+        </TooltipProvider>
 
         {/* Legend */}
         <div className="flex flex-wrap gap-4 mt-3 text-xs text-muted-foreground">
