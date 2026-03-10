@@ -14,6 +14,8 @@ import {
   INVESTING_ACCOUNT_TYPES,
   FINANCING_LIABILITY_TYPES,
   FINANCING_EQUITY_TYPES,
+  ROU_ASSET_NAME_PATTERNS,
+  ROU_LIABILITY_NAME_PATTERNS,
   OTHER_EXPENSE_NAME_PATTERNS,
   type StatementSectionConfig,
   type ComputedLineConfig,
@@ -1634,6 +1636,126 @@ function buildCashFlowStatement(
     });
   }
 
+  // --- ROU LEASE RECLASSIFICATION (ASC 842) ---
+  // ROU asset recognition and lease liability changes are non-cash at inception
+  // and should not appear in Investing / Financing.  Reclassify them into
+  // Operating so that:
+  //   • ROU asset amortisation (non-cash) is added back like D&A
+  //   • Lease liability reductions (cash payments) appear as operating outflows
+  const isRouAsset = (a: AccountInfo) => {
+    const n = a.name.toLowerCase();
+    return ROU_ASSET_NAME_PATTERNS.some((p) => n.includes(p));
+  };
+  const isRouLiability = (a: AccountInfo) => {
+    const n = a.name.toLowerCase();
+    return ROU_LIABILITY_NAME_PATTERNS.some((p) => n.includes(p));
+  };
+
+  const rouAssets = accounts.filter(
+    (a) => INVESTING_ACCOUNT_TYPES.includes(a.accountType) && isRouAsset(a)
+  );
+  const rouLiabilities = accounts.filter(
+    (a) => FINANCING_LIABILITY_TYPES.includes(a.accountType) && isRouLiability(a)
+  );
+
+  // Add ROU items to operating section if any exist
+  if (rouAssets.length > 0 || rouLiabilities.length > 0) {
+    operatingLines.push({
+      id: "cf-rou-header",
+      label: "Non-cash lease adjustments (ASC 842):",
+      amounts: {},
+      indent: 1,
+      isTotal: false,
+      isGrandTotal: false,
+      isHeader: true,
+      isSeparator: false,
+      showDollarSign: false,
+    });
+
+    // ROU asset changes — decrease = non-cash amortisation, treated like D&A add-back
+    for (const account of rouAssets) {
+      const bucketed = aggregated.get(account.id);
+      const pyBucketed = hasPY ? pyAggregated!.get(account.id) : undefined;
+      const amounts: Record<string, number> = {};
+      const pyAmounts: Record<string, number> | undefined = hasPY ? {} : undefined;
+      for (const bucket of buckets) {
+        const change =
+          (bucketed?.endingBalance[bucket.key] ?? 0) -
+          (bucketed?.beginningBalance[bucket.key] ?? 0);
+        // Debit-normal asset: increase = cash outflow (negative), decrease = add-back (positive)
+        amounts[bucket.key] = -change;
+        operatingTotal[bucket.key] += -change;
+
+        if (hasPY && pyAmounts) {
+          const pyChange =
+            (pyBucketed?.endingBalance[bucket.key] ?? 0) -
+            (pyBucketed?.beginningBalance[bucket.key] ?? 0);
+          pyAmounts[bucket.key] = -pyChange;
+          pyOperatingTotal[bucket.key] += -pyChange;
+        }
+      }
+      operatingLines.push({
+        id: `cf-rou-asset-${account.id}`,
+        label: account.name,
+        amounts,
+        priorYearAmounts: pyAmounts,
+        indent: 1,
+        isTotal: false,
+        isGrandTotal: false,
+        isHeader: false,
+        isSeparator: false,
+        showDollarSign: false,
+        drillDownMeta: {
+          type: "account",
+          masterAccountIds: [account.id],
+          statementType: "cash_flow",
+        },
+      });
+    }
+
+    // ROU liability changes — decrease = cash lease payments (operating outflow)
+    for (const account of rouLiabilities) {
+      const bucketed = aggregated.get(account.id);
+      const pyBucketed = hasPY ? pyAggregated!.get(account.id) : undefined;
+      const amounts: Record<string, number> = {};
+      const pyAmounts: Record<string, number> | undefined = hasPY ? {} : undefined;
+      for (const bucket of buckets) {
+        const change =
+          (bucketed?.endingBalance[bucket.key] ?? 0) -
+          (bucketed?.beginningBalance[bucket.key] ?? 0);
+        // Credit-normal liability: increase (more negative) = cash inflow,
+        // decrease (less negative) = cash outflow
+        amounts[bucket.key] = -change;
+        operatingTotal[bucket.key] += -change;
+
+        if (hasPY && pyAmounts) {
+          const pyChange =
+            (pyBucketed?.endingBalance[bucket.key] ?? 0) -
+            (pyBucketed?.beginningBalance[bucket.key] ?? 0);
+          pyAmounts[bucket.key] = -pyChange;
+          pyOperatingTotal[bucket.key] += -pyChange;
+        }
+      }
+      operatingLines.push({
+        id: `cf-rou-liab-${account.id}`,
+        label: account.name,
+        amounts,
+        priorYearAmounts: pyAmounts,
+        indent: 1,
+        isTotal: false,
+        isGrandTotal: false,
+        isHeader: false,
+        isSeparator: false,
+        showDollarSign: false,
+        drillDownMeta: {
+          type: "account",
+          masterAccountIds: [account.id],
+          statementType: "cash_flow",
+        },
+      });
+    }
+  }
+
   sections.push({
     id: "cf-operating",
     title: "CASH FLOWS FROM OPERATING ACTIVITIES",
@@ -1653,8 +1775,9 @@ function buildCashFlowStatement(
   });
 
   // --- INVESTING ACTIVITIES ---
-  const investingAccounts = accounts.filter((a) =>
-    INVESTING_ACCOUNT_TYPES.includes(a.accountType)
+  // Exclude ROU assets — their changes are reclassified to Operating above
+  const investingAccounts = accounts.filter(
+    (a) => INVESTING_ACCOUNT_TYPES.includes(a.accountType) && !isRouAsset(a)
   );
   const investingLines: LineItem[] = [];
   const investingTotal: Record<string, number> = {};
@@ -1684,9 +1807,12 @@ function buildCashFlowStatement(
         pyInvestingTotal[bucket.key] += -pyChange;
       }
     }
+    // Strip "(Net)" from labels — the D&A offset already isolates cash capex,
+    // so the balance-sheet "(Net)" qualifier is misleading on the cash flow.
+    const cfLabel = account.name.replace(/\s*\(Net\)\s*/i, "").trim();
     investingLines.push({
       id: `cf-inv-${account.id}`,
-      label: account.name,
+      label: cfLabel,
       amounts,
       priorYearAmounts: pyAmounts,
       indent: 1,
@@ -1704,9 +1830,10 @@ function buildCashFlowStatement(
   }
 
   // D&A offset: Master accounts like "Vehicles (Net)" consolidate gross cost
-  // and accumulated depreciation, so their balance changes include both cash
-  // capex and non-cash depreciation.  Since D&A is already added back in
-  // operating, we must subtract it here to avoid double-counting.
+  // and accumulated depreciation into a single balance, so their period-over-
+  // period change includes both cash capex AND non-cash depreciation.  The D&A
+  // is already added back in Operating Activities; we subtract it here so that
+  // Investing reflects only actual cash spent on / received from fixed assets.
   const daOffset: Record<string, number> = {};
   const pyDaOffset: Record<string, number> | undefined = hasPY ? {} : undefined;
   for (const bucket of buckets) {
@@ -1722,7 +1849,7 @@ function buildCashFlowStatement(
   }
   investingLines.push({
     id: "cf-inv-da-offset",
-    label: "Less: Depreciation and amortization",
+    label: "Less: Accumulated depreciation in net asset changes",
     amounts: daOffset,
     priorYearAmounts: pyDaOffset,
     indent: 1,
@@ -1753,8 +1880,9 @@ function buildCashFlowStatement(
   });
 
   // --- FINANCING ACTIVITIES ---
-  const financingLiabilities = accounts.filter((a) =>
-    FINANCING_LIABILITY_TYPES.includes(a.accountType)
+  // Exclude ROU lease liabilities — their changes are reclassified to Operating above
+  const financingLiabilities = accounts.filter(
+    (a) => FINANCING_LIABILITY_TYPES.includes(a.accountType) && !isRouLiability(a)
   );
   // Exclude equity accounts whose balance changes represent accumulated net
   // income (already captured in operating activities).  Distributions, owner's

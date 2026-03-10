@@ -210,6 +210,29 @@ export const FINANCING_LIABILITY_TYPES = ["Long Term Liability"];
 export const FINANCING_EQUITY_TYPES = ["Equity"];
 
 // ---------------------------------------------------------------------------
+// ROU LEASE — name patterns for reclassifying non-cash ASC 842 entries
+// ---------------------------------------------------------------------------
+// Under ASC 842 / GAAP, ROU asset recognition and lease liability recognition
+// are non-cash transactions. Their balance changes should NOT appear in
+// Investing or Financing respectively.  Instead, they are reclassified to
+// Operating so that:
+//   • ROU asset amortization (non-cash) is effectively added back like D&A
+//   • Lease liability reductions (cash payments) appear as operating outflows
+// Patterns are matched case-insensitively against master account names.
+// ---------------------------------------------------------------------------
+
+export const ROU_ASSET_NAME_PATTERNS = [
+  "right of use",
+  "rou lease asset",
+  "rou asset",
+];
+
+export const ROU_LIABILITY_NAME_PATTERNS = [
+  "right of use lease",
+  "rou lease liab",
+];
+
+// ---------------------------------------------------------------------------
 // ENTITY-LEVEL RECLASSIFICATION
 // ---------------------------------------------------------------------------
 // QBO classifies all expense accounts as "Expense", but the financial model
