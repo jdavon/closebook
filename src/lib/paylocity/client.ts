@@ -246,26 +246,55 @@ export class PaylocityClient {
     return res.json();
   }
 
-  private async wlFetch<T>(path: string, params?: Record<string, string>): Promise<T> {
-    const token = await this.getWlToken();
-    const url = `${this.config.wl.baseUrl}${path}`;
-    const fullUrl = new URL(url);
-    if (params) {
-      for (const [k, v] of Object.entries(params)) {
-        fullUrl.searchParams.set(k, v);
+  private async wlFetch<T>(
+    path: string,
+    params?: Record<string, string>,
+    opts?: { emptyOn404?: boolean; retries?: number }
+  ): Promise<T> {
+    const maxRetries = opts?.retries ?? 2;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      const token = await this.getWlToken();
+      const url = `${this.config.wl.baseUrl}${path}`;
+      const fullUrl = new URL(url);
+      if (params) {
+        for (const [k, v] of Object.entries(params)) {
+          fullUrl.searchParams.set(k, v);
+        }
       }
+
+      const res = await fetch(fullUrl.toString(), {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      // 404 = no data for this resource — return empty array if opted in
+      if (res.status === 404 && opts?.emptyOn404) {
+        return [] as unknown as T;
+      }
+
+      // 429 = rate limited — retry with exponential backoff
+      if (res.status === 429 && attempt < maxRetries) {
+        const retryAfter = res.headers.get("Retry-After");
+        const waitMs = retryAfter
+          ? parseInt(retryAfter, 10) * 1000
+          : 1000 * Math.pow(2, attempt); // 1s, 2s, 4s
+        console.warn(
+          `[Paylocity] Rate limited on ${path}, retrying in ${waitMs}ms (attempt ${attempt + 1}/${maxRetries})`
+        );
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
+        continue;
+      }
+
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`WebLink API ${path} failed (${res.status}): ${text}`);
+      }
+
+      return res.json();
     }
 
-    const res = await fetch(fullUrl.toString(), {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`WebLink API ${path} failed (${res.status}): ${text}`);
-    }
-
-    return res.json();
+    // Should never reach here, but TypeScript needs it
+    throw new Error(`WebLink API ${path} failed after ${maxRetries} retries`);
   }
 
   // ─── NextGen: Employee Demographics ──────────────────────────────
@@ -472,7 +501,7 @@ export class PaylocityClient {
         pagesize: String(pageSize),
         pagenumber: String(page),
         includetotalcount: "true",
-      });
+      }, { emptyOn404: true });
 
       all.push(...batch);
       if (batch.length < pageSize) break;
@@ -504,7 +533,7 @@ export class PaylocityClient {
         pagesize: String(pageSize),
         pagenumber: String(page),
         includetotalcount: "true",
-      });
+      }, { emptyOn404: true });
 
       all.push(...batch);
       if (batch.length < pageSize) break;
