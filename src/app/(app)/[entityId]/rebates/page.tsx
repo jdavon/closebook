@@ -48,6 +48,8 @@ import {
   Loader2,
   Trash2,
   Search,
+  FileText,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { getCurrentQuarter } from "@/lib/utils/rebate-calculations";
@@ -63,6 +65,7 @@ interface RebateCustomer {
   max_discount_percent: number | null;
   effective_date: string | null;
   use_global_exclusions: boolean;
+  contract_storage_path: string | null;
   notes: string | null;
 }
 
@@ -147,6 +150,8 @@ export default function RebateTrackerPage() {
   const [formEffectiveDate, setFormEffectiveDate] = useState("");
   const [formUseGlobalExcl, setFormUseGlobalExcl] = useState(true);
   const [formNotes, setFormNotes] = useState("");
+  const [formContractPath, setFormContractPath] = useState<string | null>(null);
+  const [uploadingPdf, setUploadingPdf] = useState(false);
   const [formTiers, setFormTiers] = useState<RebateTier[]>([]);
   const [saving, setSaving] = useState(false);
 
@@ -277,6 +282,68 @@ export default function RebateTrackerPage() {
     setRwSearchQuery("");
   };
 
+  const handlePdfUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.type !== "application/pdf") {
+      toast.error("Please upload a PDF file");
+      e.target.value = "";
+      return;
+    }
+    if (file.size > 25 * 1024 * 1024) {
+      toast.error("File too large. Maximum 25 MB.");
+      e.target.value = "";
+      return;
+    }
+
+    setUploadingPdf(true);
+    try {
+      const timestamp = Date.now();
+      const storagePath = `${entityId}/rebates/${timestamp}_${file.name}`;
+      const urlRes = await fetch("/api/storage/signed-upload-url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          bucket: "rebate-contracts",
+          path: storagePath,
+        }),
+      });
+
+      if (!urlRes.ok) {
+        const urlData = await urlRes.json().catch(() => ({}));
+        toast.error(urlData.error || "Failed to get upload URL");
+        e.target.value = "";
+        return;
+      }
+
+      const { signedUrl, token } = await urlRes.json();
+
+      const uploadRes = await fetch(signedUrl, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/pdf",
+          ...(token ? { "x-upsert": "false" } : {}),
+        },
+        body: file,
+      });
+
+      if (!uploadRes.ok) {
+        toast.error("Failed to upload PDF to storage");
+        e.target.value = "";
+        return;
+      }
+
+      setFormContractPath(storagePath);
+      toast.success("PDF uploaded successfully");
+    } catch {
+      toast.error("PDF upload failed");
+    } finally {
+      setUploadingPdf(false);
+      e.target.value = "";
+    }
+  };
+
   const openAddDialog = () => {
     setEditingCustomer(null);
     setFormName("");
@@ -288,6 +355,7 @@ export default function RebateTrackerPage() {
     setFormEffectiveDate("");
     setFormUseGlobalExcl(true);
     setFormNotes("");
+    setFormContractPath(null);
     setFormTiers([
       {
         ...EMPTY_TIER,
@@ -324,6 +392,7 @@ export default function RebateTrackerPage() {
     setFormEffectiveDate(c.effective_date || "");
     setFormUseGlobalExcl(c.use_global_exclusions);
     setFormNotes(c.notes || "");
+    setFormContractPath(c.contract_storage_path);
     setFormTiers(allTiers[c.id] || [{ ...EMPTY_TIER, label: "Default" }]);
     setDialogOpen(true);
   };
@@ -358,6 +427,7 @@ export default function RebateTrackerPage() {
               : null,
             effective_date: formEffectiveDate || null,
             use_global_exclusions: formUseGlobalExcl,
+            contract_storage_path: formContractPath,
             notes: formNotes || null,
           },
           tiers: formTiers,
@@ -611,7 +681,12 @@ export default function RebateTrackerPage() {
                     }
                   >
                     <TableCell className="font-medium">
-                      {c.customer_name}
+                      <div className="flex items-center gap-2">
+                        {c.contract_storage_path && (
+                          <FileText className="h-4 w-4 text-red-600 shrink-0" />
+                        )}
+                        {c.customer_name}
+                      </div>
                     </TableCell>
                     <TableCell className="text-muted-foreground">
                       {c.rw_customer_number || c.rw_customer_id}
@@ -822,6 +897,43 @@ export default function RebateTrackerPage() {
                 onChange={(e) => setFormNotes(e.target.value)}
                 rows={2}
               />
+            </div>
+
+            {/* Contract PDF Upload */}
+            <div className="space-y-2">
+              <Label>Exclusive Agreement PDF</Label>
+              {formContractPath ? (
+                <div className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm">
+                  <FileText className="h-4 w-4 text-red-600 shrink-0" />
+                  <span className="truncate flex-1">
+                    {formContractPath.split("/").pop()?.replace(/^\d+_/, "")}
+                  </span>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 w-6 p-0"
+                    onClick={() => setFormContractPath(null)}
+                  >
+                    <X className="h-3 w-3" />
+                  </Button>
+                </div>
+              ) : (
+                <div className="relative">
+                  <Input
+                    type="file"
+                    accept=".pdf"
+                    onChange={handlePdfUpload}
+                    disabled={uploadingPdf}
+                  />
+                  {uploadingPdf && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-background/80 rounded-md">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      <span className="ml-2 text-sm">Uploading...</span>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Tier Editor */}
