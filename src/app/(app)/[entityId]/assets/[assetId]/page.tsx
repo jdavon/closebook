@@ -96,6 +96,7 @@ interface FixedAssetData {
   disposed_book_gain_loss: number | null;
   disposed_tax_gain_loss: number | null;
   disposition_method: string | null;
+  disposed_buyer: string | null;
 }
 
 interface Account {
@@ -162,6 +163,7 @@ export default function AssetDetailPage() {
   const [disposedDate, setDisposedDate] = useState("");
   const [disposedSalePrice, setDisposedSalePrice] = useState("0");
   const [dispositionMethod, setDispositionMethod] = useState<DispositionMethod>("sale");
+  const [disposedBuyer, setDisposedBuyer] = useState("");
   const [disposing, setDisposing] = useState(false);
 
   const loadData = useCallback(async () => {
@@ -271,6 +273,7 @@ export default function AssetDetailPage() {
         disposed_book_gain_loss: bookGainLoss,
         disposed_tax_gain_loss: taxGainLoss,
         disposition_method: dispositionMethod,
+        disposed_buyer: disposedBuyer || null,
       })
       .eq("id", assetId);
 
@@ -417,6 +420,15 @@ export default function AssetDetailPage() {
                       </Select>
                     </div>
                     <div className="space-y-2">
+                      <Label htmlFor="disposedBuyer">Buyer</Label>
+                      <Input
+                        id="disposedBuyer"
+                        placeholder="Who purchased this vehicle?"
+                        value={disposedBuyer}
+                        onChange={(e) => setDisposedBuyer(e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-2">
                       <Label htmlFor="salePrice">Sale / Proceeds Amount</Label>
                       <Input
                         id="salePrice"
@@ -529,7 +541,7 @@ export default function AssetDetailPage() {
             <CardTitle className="text-lg">Disposition Details</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-5 gap-4 text-sm">
+            <div className="grid grid-cols-6 gap-4 text-sm">
               <div>
                 <span className="text-muted-foreground">Date</span>
                 <p className="font-medium">
@@ -540,6 +552,12 @@ export default function AssetDetailPage() {
                 <span className="text-muted-foreground">Method</span>
                 <p className="font-medium capitalize">
                   {asset.disposition_method?.replace("_", " ") ?? "---"}
+                </p>
+              </div>
+              <div>
+                <span className="text-muted-foreground">Buyer</span>
+                <p className="font-medium">
+                  {asset.disposed_buyer ?? "---"}
                 </p>
               </div>
               <div>

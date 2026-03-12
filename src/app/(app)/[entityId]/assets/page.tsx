@@ -38,8 +38,20 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Plus, ArrowRight, Car, Search, Upload, Trash2 } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Plus, ArrowRight, Car, Search, Upload, Trash2, DollarSign } from "lucide-react";
+import { toast } from "sonner";
 import { formatCurrency } from "@/lib/utils/dates";
+import { calculateDispositionGainLoss } from "@/lib/utils/depreciation";
 import {
   getVehicleClassification,
   getReportingGroup,
@@ -64,6 +76,16 @@ interface FixedAsset {
   book_net_value: number;
   tax_net_value: number;
   status: string;
+}
+
+interface FullAssetData {
+  id: string;
+  asset_name: string;
+  acquisition_cost: number;
+  book_accumulated_depreciation: number;
+  book_salvage_value: number;
+  tax_cost_basis: number | null;
+  tax_accumulated_depreciation: number;
 }
 
 const STATUS_LABELS: Record<string, string> = {
@@ -94,6 +116,16 @@ export default function AssetsPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [deleting, setDeleting] = useState(false);
+
+  // Sold Vehicle dialog state
+  const [soldOpen, setSoldOpen] = useState(false);
+  const [soldAssetId, setSoldAssetId] = useState("");
+  const [soldAssetData, setSoldAssetData] = useState<FullAssetData | null>(null);
+  const [soldBuyer, setSoldBuyer] = useState("");
+  const [soldDate, setSoldDate] = useState("");
+  const [soldPrice, setSoldPrice] = useState("0");
+  const [soldNotes, setSoldNotes] = useState("");
+  const [selling, setSelling] = useState(false);
 
   const loadAssets = useCallback(async () => {
     let query = supabase
@@ -192,6 +224,83 @@ export default function AssetsPage() {
     loadAssets();
   };
 
+  // When a vehicle is selected in the sold dialog, fetch its full data
+  const handleSoldAssetChange = async (assetId: string) => {
+    setSoldAssetId(assetId);
+    setSoldAssetData(null);
+    if (!assetId) return;
+    const { data } = await supabase
+      .from("fixed_assets")
+      .select("id, asset_name, acquisition_cost, book_accumulated_depreciation, book_salvage_value, tax_cost_basis, tax_accumulated_depreciation")
+      .eq("id", assetId)
+      .single();
+    if (data) setSoldAssetData(data as unknown as FullAssetData);
+  };
+
+  const handleSoldSubmit = async () => {
+    if (!soldAssetData || !soldDate) return;
+    setSelling(true);
+
+    const salePrice = parseFloat(soldPrice) || 0;
+    const taxBasis = soldAssetData.tax_cost_basis ?? soldAssetData.acquisition_cost;
+
+    const { bookGainLoss, taxGainLoss } = calculateDispositionGainLoss(
+      soldAssetData.acquisition_cost,
+      soldAssetData.book_accumulated_depreciation,
+      soldAssetData.book_salvage_value,
+      taxBasis,
+      soldAssetData.tax_accumulated_depreciation,
+      salePrice
+    );
+
+    const updateData: Record<string, unknown> = {
+      status: "disposed",
+      disposed_date: soldDate,
+      disposed_sale_price: salePrice,
+      disposed_book_gain_loss: bookGainLoss,
+      disposed_tax_gain_loss: taxGainLoss,
+      disposition_method: "sale",
+      disposed_buyer: soldBuyer || null,
+    };
+    if (soldNotes.trim()) {
+      updateData.vehicle_notes = soldNotes.trim();
+    }
+
+    const { error } = await supabase
+      .from("fixed_assets")
+      .update(updateData)
+      .eq("id", soldAssetData.id);
+
+    if (error) {
+      toast.error(error.message);
+    } else {
+      toast.success(`${soldAssetData.asset_name} marked as sold`);
+      setSoldOpen(false);
+      setSoldAssetId("");
+      setSoldAssetData(null);
+      setSoldBuyer("");
+      setSoldDate("");
+      setSoldPrice("0");
+      setSoldNotes("");
+      loadAssets();
+    }
+    setSelling(false);
+  };
+
+  // Gain/loss preview for sold vehicle dialog
+  const soldPreviewGainLoss = soldAssetData
+    ? calculateDispositionGainLoss(
+        soldAssetData.acquisition_cost,
+        soldAssetData.book_accumulated_depreciation,
+        soldAssetData.book_salvage_value,
+        soldAssetData.tax_cost_basis ?? soldAssetData.acquisition_cost,
+        soldAssetData.tax_accumulated_depreciation,
+        parseFloat(soldPrice) || 0
+      )
+    : null;
+
+  const activeAssets = assets.filter((a) => a.status === "active");
+
   const totalCost = filteredAssets.reduce((s, a) => s + a.acquisition_cost, 0);
   const totalBookNbv = filteredAssets.reduce((s, a) => s + a.book_net_value, 0);
   const totalTaxNbv = filteredAssets.reduce((s, a) => s + a.tax_net_value, 0);
@@ -221,6 +330,13 @@ export default function AssetsPage() {
               Import Wizard
             </Button>
           </Link>
+          <Button
+            className="bg-green-600 hover:bg-green-700 text-white"
+            onClick={() => setSoldOpen(true)}
+          >
+            <DollarSign className="mr-2 h-4 w-4" />
+            Sold Vehicle
+          </Button>
           <Link href={`/${entityId}/assets/new`}>
             <Button>
               <Plus className="mr-2 h-4 w-4" />
@@ -463,6 +579,142 @@ export default function AssetsPage() {
           <RollForwardTab entityId={entityId} />
         </TabsContent>
       </Tabs>
+
+      {/* Sold Vehicle Dialog */}
+      <Dialog open={soldOpen} onOpenChange={(open) => {
+        setSoldOpen(open);
+        if (!open) {
+          setSoldAssetId("");
+          setSoldAssetData(null);
+          setSoldBuyer("");
+          setSoldDate("");
+          setSoldPrice("0");
+          setSoldNotes("");
+        }
+      }}>
+        <DialogContent className="sm:max-w-[500px]">
+          <DialogHeader>
+            <DialogTitle>Record Vehicle Sale</DialogTitle>
+            <DialogDescription>
+              Select a vehicle and enter the sale details. This will mark the
+              asset as disposed and update the roll forward.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-2">
+              <Label htmlFor="soldVehicle">Vehicle</Label>
+              <Select value={soldAssetId} onValueChange={handleSoldAssetChange}>
+                <SelectTrigger id="soldVehicle">
+                  <SelectValue placeholder="Select a vehicle..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {activeAssets.map((a) => (
+                    <SelectItem key={a.id} value={a.id}>
+                      {a.asset_name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="soldBuyer">Buyer</Label>
+              <Input
+                id="soldBuyer"
+                placeholder="Who purchased this vehicle?"
+                value={soldBuyer}
+                onChange={(e) => setSoldBuyer(e.target.value)}
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="soldDate">Sale Date</Label>
+                <Input
+                  id="soldDate"
+                  type="date"
+                  value={soldDate}
+                  onChange={(e) => setSoldDate(e.target.value)}
+                  required
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="soldPrice">Sale Price</Label>
+                <Input
+                  id="soldPrice"
+                  type="number"
+                  step="0.01"
+                  value={soldPrice}
+                  onChange={(e) => setSoldPrice(e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="soldNotes">Notes</Label>
+              <Textarea
+                id="soldNotes"
+                placeholder="Additional details about the sale..."
+                value={soldNotes}
+                onChange={(e) => setSoldNotes(e.target.value)}
+                rows={2}
+              />
+            </div>
+
+            {/* Gain/Loss Preview */}
+            {soldAssetData && soldPreviewGainLoss && (
+              <div className="rounded-lg border p-4 space-y-2 bg-muted/40">
+                <p className="text-sm font-medium">Gain / (Loss) Preview</p>
+                <div className="grid grid-cols-2 gap-2 text-sm">
+                  <span className="text-muted-foreground">Book NBV:</span>
+                  <span className="tabular-nums text-right">
+                    {formatCurrency(
+                      soldAssetData.acquisition_cost -
+                        soldAssetData.book_accumulated_depreciation
+                    )}
+                  </span>
+                  <span className="text-muted-foreground">Book Gain/(Loss):</span>
+                  <span
+                    className={`tabular-nums text-right font-medium ${
+                      soldPreviewGainLoss.bookGainLoss >= 0
+                        ? "text-green-600"
+                        : "text-red-600"
+                    }`}
+                  >
+                    {formatCurrency(soldPreviewGainLoss.bookGainLoss)}
+                  </span>
+                  <span className="text-muted-foreground">Tax NBV:</span>
+                  <span className="tabular-nums text-right">
+                    {formatCurrency(
+                      (soldAssetData.tax_cost_basis ?? soldAssetData.acquisition_cost) -
+                        soldAssetData.tax_accumulated_depreciation
+                    )}
+                  </span>
+                  <span className="text-muted-foreground">Tax Gain/(Loss):</span>
+                  <span
+                    className={`tabular-nums text-right font-medium ${
+                      soldPreviewGainLoss.taxGainLoss >= 0
+                        ? "text-green-600"
+                        : "text-red-600"
+                    }`}
+                  >
+                    {formatCurrency(soldPreviewGainLoss.taxGainLoss)}
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSoldOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              className="bg-green-600 hover:bg-green-700 text-white"
+              onClick={handleSoldSubmit}
+              disabled={selling || !soldAssetId || !soldDate}
+            >
+              {selling ? "Processing..." : "Confirm Sale"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
         <AlertDialogContent>
