@@ -12,7 +12,6 @@ import {
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { ArrowLeft, Plus, Trash2, Loader2, Save } from "lucide-react";
 import {
   Table,
@@ -38,10 +37,10 @@ export default function RebateSettingsPage() {
   const [excludedAmounts, setExcludedAmounts] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [adding, setAdding] = useState(false);
 
   // Input for adding new I-code
   const [newICode, setNewICode] = useState("");
-  const [newDescription, setNewDescription] = useState("");
 
   const loadData = useCallback(async () => {
     try {
@@ -62,19 +61,39 @@ export default function RebateSettingsPage() {
     loadData();
   }, [loadData]);
 
-  const addICode = () => {
+  const addICode = async () => {
     const code = newICode.trim();
     if (!code) return;
     if (globalICodes.some((ic) => ic.i_code === code)) {
       toast.error("I-Code already in list");
       return;
     }
-    setGlobalICodes((prev) => [
-      ...prev,
-      { i_code: code, description: newDescription.trim() || null },
-    ]);
-    setNewICode("");
-    setNewDescription("");
+
+    setAdding(true);
+    try {
+      // Look up description from synced invoice items
+      const res = await fetch("/api/rebates", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "lookup_icode", entityId, iCode: code }),
+      });
+      const data = await res.json();
+      const description = data.description || null;
+
+      setGlobalICodes((prev) => [...prev, { i_code: code, description }]);
+      setNewICode("");
+      if (description) {
+        toast.success(`Found: ${description}`);
+      } else {
+        toast.info("I-Code added (no description found in synced data)");
+      }
+    } catch {
+      // Still add it even if lookup fails
+      setGlobalICodes((prev) => [...prev, { i_code: code, description: null }]);
+      setNewICode("");
+    } finally {
+      setAdding(false);
+    }
   };
 
   const removeICode = (iCode: string) => {
@@ -88,11 +107,22 @@ export default function RebateSettingsPage() {
       let icodesToSave = [...globalICodes];
       const pendingCode = newICode.trim();
       if (pendingCode && !icodesToSave.some((ic) => ic.i_code === pendingCode)) {
-        const newEntry = { i_code: pendingCode, description: newDescription.trim() || null };
-        icodesToSave = [...icodesToSave, newEntry];
-        setGlobalICodes(icodesToSave);
+        // Quick lookup for the pending code too
+        try {
+          const lookupRes = await fetch("/api/rebates", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "lookup_icode", entityId, iCode: pendingCode }),
+          });
+          const lookupData = await lookupRes.json();
+          const newEntry = { i_code: pendingCode, description: lookupData.description || null };
+          icodesToSave = [...icodesToSave, newEntry];
+          setGlobalICodes(icodesToSave);
+        } catch {
+          icodesToSave = [...icodesToSave, { i_code: pendingCode, description: null }];
+          setGlobalICodes(icodesToSave);
+        }
         setNewICode("");
-        setNewDescription("");
       }
 
       const res = await fetch("/api/rebates", {
@@ -109,7 +139,9 @@ export default function RebateSettingsPage() {
       });
       const data = await res.json();
       if (data.success) {
-        toast.success(`Saved ${data.savedCount || 0} excluded I-Code(s): ${(data.savedICodes || []).join(", ") || "none"}`);
+        toast.success(`Saved ${data.savedCount || 0} excluded I-Code(s)`);
+        // Reload to get fresh data including any auto-resolved descriptions
+        await loadData();
       } else {
         toast.error(data.error || "Save failed");
       }
@@ -127,6 +159,11 @@ export default function RebateSettingsPage() {
       </div>
     );
   }
+
+  const totalExcluded = globalICodes.reduce(
+    (sum, ic) => sum + (excludedAmounts[ic.i_code] || 0),
+    0
+  );
 
   return (
     <div className="space-y-6 p-6">
@@ -158,40 +195,31 @@ export default function RebateSettingsPage() {
         <CardContent className="space-y-4">
           {/* Add new I-code */}
           <div className="flex gap-2 items-end">
-            <div className="space-y-1">
-              <Label className="text-xs">I-Code</Label>
+            <div className="space-y-1 flex-1">
               <Input
                 value={newICode}
                 onChange={(e) => setNewICode(e.target.value)}
-                placeholder="e.g., 100305"
-                className="w-40 font-mono"
+                placeholder="Enter I-Code (e.g., 100305)"
+                className="font-mono"
                 onKeyDown={(e) => e.key === "Enter" && addICode()}
+                disabled={adding}
               />
             </div>
-            <div className="space-y-1 flex-1">
-              <Label className="text-xs">Description (optional)</Label>
-              <Input
-                value={newDescription}
-                onChange={(e) => setNewDescription(e.target.value)}
-                placeholder="What this I-Code is for..."
-                onKeyDown={(e) => e.key === "Enter" && addICode()}
-              />
-            </div>
-            <Button variant="outline" onClick={addICode}>
-              <Plus className="mr-1 h-4 w-4" />
+            <Button variant="outline" onClick={addICode} disabled={adding || !newICode.trim()}>
+              {adding ? (
+                <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+              ) : (
+                <Plus className="mr-1 h-4 w-4" />
+              )}
               Add
             </Button>
-          </div>
-
-          {/* Save button */}
-          <div>
             <Button onClick={handleSave} disabled={saving}>
               {saving ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               ) : (
                 <Save className="mr-2 h-4 w-4" />
               )}
-              Save Excluded I-Codes
+              Save
             </Button>
           </div>
 
@@ -219,8 +247,10 @@ export default function RebateSettingsPage() {
                         <TableCell className="font-mono font-medium">
                           {ic.i_code}
                         </TableCell>
-                        <TableCell className="text-muted-foreground">
-                          {ic.description || "—"}
+                        <TableCell>
+                          {ic.description || (
+                            <span className="text-muted-foreground italic">No description</span>
+                          )}
                         </TableCell>
                         <TableCell className="text-right font-mono">
                           {amt > 0 ? (
@@ -228,7 +258,7 @@ export default function RebateSettingsPage() {
                               ${amt.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                             </span>
                           ) : (
-                            <span className="text-muted-foreground">—</span>
+                            <span className="text-muted-foreground">$0.00</span>
                           )}
                         </TableCell>
                         <TableCell>
@@ -244,6 +274,25 @@ export default function RebateSettingsPage() {
                       </TableRow>
                     );
                   })}
+                  {/* Totals row */}
+                  {globalICodes.length > 1 && (
+                    <TableRow className="bg-muted/50 font-medium">
+                      <TableCell />
+                      <TableCell className="text-right text-sm text-muted-foreground">
+                        Total Excluded
+                      </TableCell>
+                      <TableCell className="text-right font-mono">
+                        {totalExcluded > 0 ? (
+                          <span className="text-red-600 font-medium">
+                            ${totalExcluded.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground">$0.00</span>
+                        )}
+                      </TableCell>
+                      <TableCell />
+                    </TableRow>
+                  )}
                 </TableBody>
               </Table>
             </div>
