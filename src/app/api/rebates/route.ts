@@ -156,12 +156,21 @@ export async function POST(request: Request) {
     case "upsert_excluded_icodes": {
       const { entityId, icodes } = body;
 
+      if (!entityId) {
+        return NextResponse.json({ error: "entityId is required" }, { status: 400 });
+      }
+
       // Replace global excluded I-codes
-      await admin
+      const { error: delError } = await admin
         .from("rebate_excluded_icodes")
         .delete()
         .eq("entity_id", entityId)
         .is("rebate_customer_id", null);
+
+      if (delError) {
+        console.error("Delete excluded icodes error:", delError);
+        return NextResponse.json({ error: `Delete failed: ${delError.message}` }, { status: 500 });
+      }
 
       if (icodes && icodes.length > 0) {
         const rows = icodes.map(
@@ -172,11 +181,26 @@ export async function POST(request: Request) {
             description: ic.description || null,
           }),
         );
-        const { error } = await admin.from("rebate_excluded_icodes").insert(rows);
-        if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+        console.log("Inserting excluded icodes:", JSON.stringify(rows));
+        const { error: insError } = await admin.from("rebate_excluded_icodes").insert(rows);
+        if (insError) {
+          console.error("Insert excluded icodes error:", insError);
+          return NextResponse.json({ error: `Insert failed: ${insError.message}` }, { status: 500 });
+        }
       }
 
-      return NextResponse.json({ success: true });
+      // Verify the save
+      const { data: verify } = await admin
+        .from("rebate_excluded_icodes")
+        .select("i_code")
+        .eq("entity_id", entityId)
+        .is("rebate_customer_id", null);
+
+      return NextResponse.json({
+        success: true,
+        savedCount: verify?.length || 0,
+        savedICodes: (verify || []).map((v) => v.i_code),
+      });
     }
 
     case "mark_quarter_paid": {

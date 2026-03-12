@@ -89,7 +89,7 @@ export default function RebateSettingsPage() {
       });
       const data = await res.json();
       if (data.success) {
-        toast.success("Global excluded I-Codes saved");
+        toast.success(`Saved ${data.savedCount || 0} excluded I-Code(s): ${(data.savedICodes || []).join(", ") || "none"}`);
       } else {
         toast.error(data.error || "Save failed");
       }
