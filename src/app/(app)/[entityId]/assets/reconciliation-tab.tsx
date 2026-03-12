@@ -92,12 +92,14 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
     setLoading(true);
 
     // 1. Look up the entity's organization_id
-    const { data: entityData } = await supabase
+    const { data: entityData, error: entityErr } = await supabase
       .from("entities")
       .select("organization_id")
       .eq("id", entityId)
       .single();
     const orgId = entityData?.organization_id;
+    if (entityErr) console.error("[Recon] Entity lookup error:", entityErr.message);
+    if (!orgId) console.warn("[Recon] No orgId found for entity", entityId);
 
     // 2. Fetch GL balances via master_accounts → master_account_mappings → gl_balances
     //    This is the same path the financial statements use.
@@ -107,28 +109,41 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
 
       if (!orgId) continue;
 
-      // Find the master account by account_number (e.g. "M1700")
-      const { data: masterAcct } = await supabase
+      // Find the master account by name (more reliable than account_number which
+      // may not have been set to the template value during initial setup).
+      const { data: masterAccts, error: maErr } = await supabase
         .from("master_accounts")
-        .select("id")
+        .select("id, account_number")
         .eq("organization_id", orgId)
-        .eq("account_number", group.masterAccountNumber)
-        .single();
+        .eq("name", group.displayName);
 
-      if (!masterAcct) continue;
+      if (maErr) console.error(`[Recon] Master account lookup error for "${group.displayName}":`, maErr.message);
+
+      const masterAcct = masterAccts?.[0];
+      if (!masterAcct) {
+        console.warn(`[Recon] No master account found for "${group.displayName}" (org: ${orgId})`);
+        continue;
+      }
+      console.log(`[Recon] Found master account "${group.displayName}": id=${masterAcct.id}, acctNum=${masterAcct.account_number}`);
 
       // Find all entity account IDs mapped to this master account
-      const { data: mappings } = await supabase
+      const { data: mappings, error: mapErr } = await supabase
         .from("master_account_mappings")
         .select("account_id")
         .eq("master_account_id", masterAcct.id)
         .eq("entity_id", entityId);
 
+      if (mapErr) console.error(`[Recon] Mapping lookup error:`, mapErr.message);
+
       const accountIds = (mappings ?? []).map((m) => m.account_id);
-      if (accountIds.length === 0) continue;
+      if (accountIds.length === 0) {
+        console.warn(`[Recon] No entity account mappings found for master "${group.displayName}" + entity ${entityId}`);
+        continue;
+      }
+      console.log(`[Recon] Found ${accountIds.length} mapped entity accounts for "${group.displayName}"`);
 
       // Sum GL balances for these mapped accounts in the selected period
-      const { data: glData } = await supabase
+      const { data: glData, error: glErr } = await supabase
         .from("gl_balances")
         .select("ending_balance")
         .eq("entity_id", entityId)
@@ -136,10 +151,14 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
         .eq("period_month", periodMonth)
         .in("account_id", accountIds);
 
-      balances[group.key] = (glData ?? []).reduce(
+      if (glErr) console.error(`[Recon] GL balances error:`, glErr.message);
+
+      const total = (glData ?? []).reduce(
         (sum, row) => sum + Number(row.ending_balance ?? 0),
         0
       );
+      console.log(`[Recon] GL balance for "${group.displayName}" (${periodMonth}/${periodYear}): ${total} from ${glData?.length ?? 0} rows`);
+      balances[group.key] = total;
     }
     setGlBalances(balances);
 
