@@ -110,6 +110,14 @@ interface TierData {
   threshold_min: number;
   threshold_max: number | null;
   sort_order: number;
+  rate_pro_supplies: number | null;
+  rate_vehicle: number | null;
+  rate_grip_lighting: number | null;
+  rate_studio: number | null;
+  max_disc_pro_supplies: number | null;
+  max_disc_vehicle: number | null;
+  max_disc_grip_lighting: number | null;
+  max_disc_studio: number | null;
 }
 
 // Category grouping for invoice line items
@@ -561,6 +569,60 @@ export default function CustomerDetailPage() {
                 ))}
               </div>
             </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Tier Rate Structure */}
+      {tiers.length > 0 && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium">
+              Rebate Structure
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="font-semibold">Spending Threshold</TableHead>
+                  <TableHead className="text-center">Pro Supply Rebate</TableHead>
+                  <TableHead className="text-center">Vehicle Rebate</TableHead>
+                  <TableHead className="text-center">Grip & Lighting Rebate</TableHead>
+                  <TableHead className="text-center">Studio Rebate</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {tiers.map((tier) => {
+                  const isCurrent = tier === currentTier;
+                  const thresholdLabel = tier.threshold_max
+                    ? `${formatCurrency(tier.threshold_min)} - ${formatCurrency(tier.threshold_max)}`
+                    : `${formatCurrency(tier.threshold_min)}+`;
+                  return (
+                    <TableRow
+                      key={tier.sort_order}
+                      className={isCurrent ? "bg-green-50 dark:bg-green-950/20 font-medium" : ""}
+                    >
+                      <TableCell className="font-semibold">
+                        {thresholdLabel}
+                      </TableCell>
+                      <TableCell className="text-center">
+                        {formatPct(tier.rate_pro_supplies)}
+                      </TableCell>
+                      <TableCell className="text-center">
+                        {formatPct(tier.rate_vehicle)}
+                      </TableCell>
+                      <TableCell className="text-center">
+                        {formatPct(tier.rate_grip_lighting)}
+                      </TableCell>
+                      <TableCell className="text-center">
+                        {formatPct(tier.rate_studio)}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
           </CardContent>
         </Card>
       )}
