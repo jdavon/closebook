@@ -214,8 +214,8 @@ export function calculateCommercialInvoice(params: {
   // Discount as percentage of before-discount base
   const discountPercent = beforeDiscount > 0 ? (discountAmount / beforeDiscount) * 100 : 0;
 
-  // Remaining rebate = combined allowed rate minus discount already given
-  const remainingRebatePct = Math.max(0, rebateRate + maxDiscRate - discountPercent);
+  // Remaining rebate = combined allowed rate minus discount already given, capped at rebate rate
+  const remainingRebatePct = Math.min(rebateRate, Math.max(0, rebateRate + maxDiscRate - discountPercent));
 
   // Net rebate on the before-discount base
   const netRebate = Math.max(0, beforeDiscount * (remainingRebatePct / 100));
