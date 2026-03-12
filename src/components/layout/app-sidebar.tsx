@@ -28,6 +28,7 @@ import {
   HandCoins,
   ArrowLeftRight,
   TrendingUp,
+  Shield,
   ChevronRight,
 } from "lucide-react";
 import {
@@ -108,6 +109,11 @@ export function AppSidebar({ user, entityId: entityIdProp }: AppSidebarProps) {
           title: "Rebate Tracker",
           url: `${entityPrefix}/rebates`,
           icon: HandCoins,
+        },
+        {
+          title: "Insurance",
+          url: `${entityPrefix}/insurance`,
+          icon: Shield,
         },
         {
           title: "Revenue Projection",

@@ -3417,6 +3417,634 @@ export type Database = {
         }
         Relationships: []
       }
+      insurance_carriers: {
+        Row: {
+          id: string
+          entity_id: string
+          name: string
+          am_best_rating: string | null
+          naic_number: string | null
+          contact_name: string | null
+          contact_email: string | null
+          contact_phone: string | null
+          notes: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          entity_id: string
+          name: string
+          am_best_rating?: string | null
+          naic_number?: string | null
+          contact_name?: string | null
+          contact_email?: string | null
+          contact_phone?: string | null
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          entity_id?: string
+          name?: string
+          am_best_rating?: string | null
+          naic_number?: string | null
+          contact_name?: string | null
+          contact_email?: string | null
+          contact_phone?: string | null
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      insurance_brokers: {
+        Row: {
+          id: string
+          entity_id: string
+          name: string
+          license_number: string | null
+          contact_name: string | null
+          contact_email: string | null
+          contact_phone: string | null
+          notes: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          entity_id: string
+          name: string
+          license_number?: string | null
+          contact_name?: string | null
+          contact_email?: string | null
+          contact_phone?: string | null
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          entity_id?: string
+          name?: string
+          license_number?: string | null
+          contact_name?: string | null
+          contact_email?: string | null
+          contact_phone?: string | null
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      insurance_policies: {
+        Row: {
+          id: string
+          entity_id: string
+          carrier_id: string | null
+          broker_id: string | null
+          policy_number: string | null
+          policy_type: string
+          line_of_business: string | null
+          named_insured: string | null
+          named_insured_entity: string | null
+          status: string
+          effective_date: string | null
+          expiration_date: string | null
+          annual_premium: number
+          prior_year_premium: number
+          premium_change_pct: number
+          payment_terms: string
+          installment_description: string | null
+          billing_company: string | null
+          deposit_held: number
+          is_auditable: boolean
+          coverage_territory: string | null
+          notes: string | null
+          renewal_notes: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          entity_id: string
+          carrier_id?: string | null
+          broker_id?: string | null
+          policy_number?: string | null
+          policy_type?: string
+          line_of_business?: string | null
+          named_insured?: string | null
+          named_insured_entity?: string | null
+          status?: string
+          effective_date?: string | null
+          expiration_date?: string | null
+          annual_premium?: number
+          prior_year_premium?: number
+          premium_change_pct?: number
+          payment_terms?: string
+          installment_description?: string | null
+          billing_company?: string | null
+          deposit_held?: number
+          is_auditable?: boolean
+          coverage_territory?: string | null
+          notes?: string | null
+          renewal_notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          entity_id?: string
+          carrier_id?: string | null
+          broker_id?: string | null
+          policy_number?: string | null
+          policy_type?: string
+          line_of_business?: string | null
+          named_insured?: string | null
+          named_insured_entity?: string | null
+          status?: string
+          effective_date?: string | null
+          expiration_date?: string | null
+          annual_premium?: number
+          prior_year_premium?: number
+          premium_change_pct?: number
+          payment_terms?: string
+          installment_description?: string | null
+          billing_company?: string | null
+          deposit_held?: number
+          is_auditable?: boolean
+          coverage_territory?: string | null
+          notes?: string | null
+          renewal_notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      insurance_coverages: {
+        Row: {
+          id: string
+          policy_id: string
+          coverage_name: string
+          coverage_form: string
+          limit_per_occurrence: number | null
+          limit_aggregate: number | null
+          limit_description: string | null
+          deductible: number | null
+          deductible_description: string | null
+          self_insured_retention: number | null
+          coinsurance_pct: number | null
+          sub_limit: number | null
+          sub_limit_description: string | null
+          is_included: boolean
+          prior_year_limit: number | null
+          prior_year_deductible: number | null
+          notes: string | null
+          sort_order: number
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          policy_id: string
+          coverage_name: string
+          coverage_form?: string
+          limit_per_occurrence?: number | null
+          limit_aggregate?: number | null
+          limit_description?: string | null
+          deductible?: number | null
+          deductible_description?: string | null
+          self_insured_retention?: number | null
+          coinsurance_pct?: number | null
+          sub_limit?: number | null
+          sub_limit_description?: string | null
+          is_included?: boolean
+          prior_year_limit?: number | null
+          prior_year_deductible?: number | null
+          notes?: string | null
+          sort_order?: number
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          policy_id?: string
+          coverage_name?: string
+          coverage_form?: string
+          limit_per_occurrence?: number | null
+          limit_aggregate?: number | null
+          limit_description?: string | null
+          deductible?: number | null
+          deductible_description?: string | null
+          self_insured_retention?: number | null
+          coinsurance_pct?: number | null
+          sub_limit?: number | null
+          sub_limit_description?: string | null
+          is_included?: boolean
+          prior_year_limit?: number | null
+          prior_year_deductible?: number | null
+          notes?: string | null
+          sort_order?: number
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      insurance_payment_schedules: {
+        Row: {
+          id: string
+          policy_id: string
+          period_month: number
+          period_year: number
+          due_date: string | null
+          amount_due: number
+          amount_paid: number
+          payment_date: string | null
+          payment_status: string
+          payment_method: string | null
+          reference_number: string | null
+          is_estimate: boolean
+          notes: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          policy_id: string
+          period_month: number
+          period_year: number
+          due_date?: string | null
+          amount_due?: number
+          amount_paid?: number
+          payment_date?: string | null
+          payment_status?: string
+          payment_method?: string | null
+          reference_number?: string | null
+          is_estimate?: boolean
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          policy_id?: string
+          period_month?: number
+          period_year?: number
+          due_date?: string | null
+          amount_due?: number
+          amount_paid?: number
+          payment_date?: string | null
+          payment_status?: string
+          payment_method?: string | null
+          reference_number?: string | null
+          is_estimate?: boolean
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      insurance_locations: {
+        Row: {
+          id: string
+          policy_id: string
+          location_code: string | null
+          address: string
+          city: string | null
+          state: string | null
+          zip_code: string | null
+          occupancy_description: string | null
+          building_value: number
+          bpp_value: number
+          business_income_value: number
+          rental_income_value: number
+          total_insured_value: number
+          is_active: boolean
+          location_type: string
+          class_code: string | null
+          class_description: string | null
+          notes: string | null
+          sort_order: number
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          policy_id: string
+          location_code?: string | null
+          address: string
+          city?: string | null
+          state?: string | null
+          zip_code?: string | null
+          occupancy_description?: string | null
+          building_value?: number
+          bpp_value?: number
+          business_income_value?: number
+          rental_income_value?: number
+          is_active?: boolean
+          location_type?: string
+          class_code?: string | null
+          class_description?: string | null
+          notes?: string | null
+          sort_order?: number
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          policy_id?: string
+          location_code?: string | null
+          address?: string
+          city?: string | null
+          state?: string | null
+          zip_code?: string | null
+          occupancy_description?: string | null
+          building_value?: number
+          bpp_value?: number
+          business_income_value?: number
+          rental_income_value?: number
+          is_active?: boolean
+          location_type?: string
+          class_code?: string | null
+          class_description?: string | null
+          notes?: string | null
+          sort_order?: number
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      insurance_exposures: {
+        Row: {
+          id: string
+          policy_id: string
+          period_month: number | null
+          period_year: number | null
+          exposure_type: string
+          exposure_value: number | null
+          rate: number | null
+          calculated_premium: number | null
+          is_reported: boolean
+          reported_date: string | null
+          notes: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          policy_id: string
+          period_month?: number | null
+          period_year?: number | null
+          exposure_type?: string
+          exposure_value?: number | null
+          rate?: number | null
+          calculated_premium?: number | null
+          is_reported?: boolean
+          reported_date?: string | null
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          policy_id?: string
+          period_month?: number | null
+          period_year?: number | null
+          exposure_type?: string
+          exposure_value?: number | null
+          rate?: number | null
+          calculated_premium?: number | null
+          is_reported?: boolean
+          reported_date?: string | null
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      insurance_allocations: {
+        Row: {
+          id: string
+          policy_id: string
+          target_entity_id: string
+          allocation_method: string
+          allocation_pct: number
+          allocated_amount: number
+          period_month: number | null
+          period_year: number | null
+          gl_account_id: string | null
+          notes: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          policy_id: string
+          target_entity_id: string
+          allocation_method?: string
+          allocation_pct?: number
+          allocated_amount?: number
+          period_month?: number | null
+          period_year?: number | null
+          gl_account_id?: string | null
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          policy_id?: string
+          target_entity_id?: string
+          allocation_method?: string
+          allocation_pct?: number
+          allocated_amount?: number
+          period_month?: number | null
+          period_year?: number | null
+          gl_account_id?: string | null
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      insurance_claims: {
+        Row: {
+          id: string
+          policy_id: string
+          entity_id: string
+          claim_number: string | null
+          date_of_loss: string | null
+          date_reported: string | null
+          claimant_name: string | null
+          description: string | null
+          status: string
+          amount_reserved: number
+          amount_paid: number
+          amount_recovered: number
+          adjuster_name: string | null
+          adjuster_contact: string | null
+          location_id: string | null
+          notes: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          policy_id: string
+          entity_id: string
+          claim_number?: string | null
+          date_of_loss?: string | null
+          date_reported?: string | null
+          claimant_name?: string | null
+          description?: string | null
+          status?: string
+          amount_reserved?: number
+          amount_paid?: number
+          amount_recovered?: number
+          adjuster_name?: string | null
+          adjuster_contact?: string | null
+          location_id?: string | null
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          policy_id?: string
+          entity_id?: string
+          claim_number?: string | null
+          date_of_loss?: string | null
+          date_reported?: string | null
+          claimant_name?: string | null
+          description?: string | null
+          status?: string
+          amount_reserved?: number
+          amount_paid?: number
+          amount_recovered?: number
+          adjuster_name?: string | null
+          adjuster_contact?: string | null
+          location_id?: string | null
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      insurance_documents: {
+        Row: {
+          id: string
+          policy_id: string | null
+          entity_id: string
+          document_type: string
+          file_name: string
+          file_path: string | null
+          storage_key: string | null
+          file_size_bytes: number | null
+          uploaded_by: string | null
+          notes: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          policy_id?: string | null
+          entity_id: string
+          document_type?: string
+          file_name: string
+          file_path?: string | null
+          storage_key?: string | null
+          file_size_bytes?: number | null
+          uploaded_by?: string | null
+          notes?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          policy_id?: string | null
+          entity_id?: string
+          document_type?: string
+          file_name?: string
+          file_path?: string | null
+          storage_key?: string | null
+          file_size_bytes?: number | null
+          uploaded_by?: string | null
+          notes?: string | null
+          created_at?: string
+        }
+        Relationships: []
+      }
+      insurance_exclusions: {
+        Row: {
+          id: string
+          policy_id: string
+          exclusion_name: string
+          is_excluded: boolean
+          exception_description: string | null
+          sort_order: number
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          policy_id: string
+          exclusion_name: string
+          is_excluded?: boolean
+          exception_description?: string | null
+          sort_order?: number
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          policy_id?: string
+          exclusion_name?: string
+          is_excluded?: boolean
+          exception_description?: string | null
+          sort_order?: number
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      insurance_subjectivities: {
+        Row: {
+          id: string
+          policy_id: string
+          description: string
+          due_date: string | null
+          status: string
+          completed_date: string | null
+          completed_by: string | null
+          notes: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          policy_id: string
+          description: string
+          due_date?: string | null
+          status?: string
+          completed_date?: string | null
+          completed_by?: string | null
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          policy_id?: string
+          description?: string
+          due_date?: string | null
+          status?: string
+          completed_date?: string | null
+          completed_by?: string | null
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
