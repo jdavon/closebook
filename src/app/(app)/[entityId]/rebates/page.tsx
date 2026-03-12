@@ -683,7 +683,32 @@ export default function RebateTrackerPage() {
                     <TableCell className="font-medium">
                       <div className="flex items-center gap-2">
                         {c.contract_storage_path && (
-                          <FileText className="h-4 w-4 text-red-600 shrink-0" />
+                          <button
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              try {
+                                const res = await fetch("/api/storage/signed-download-url", {
+                                  method: "POST",
+                                  headers: { "Content-Type": "application/json" },
+                                  body: JSON.stringify({
+                                    bucket: "rebate-contracts",
+                                    path: c.contract_storage_path,
+                                  }),
+                                });
+                                const data = await res.json();
+                                if (data.signedUrl) {
+                                  window.open(data.signedUrl, "_blank");
+                                } else {
+                                  toast.error(data.error || "Failed to open PDF");
+                                }
+                              } catch {
+                                toast.error("Failed to open PDF");
+                              }
+                            }}
+                            title="View contract PDF"
+                          >
+                            <FileText className="h-4 w-4 text-red-600 shrink-0 hover:text-red-800 transition-colors" />
+                          </button>
                         )}
                         {c.customer_name}
                       </div>
