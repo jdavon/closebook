@@ -75,13 +75,24 @@ export default function RebateSettingsPage() {
   const handleSave = async () => {
     setSaving(true);
     try {
+      // Auto-add any I-code typed in the input field before saving
+      let icodesToSave = [...globalICodes];
+      const pendingCode = newICode.trim();
+      if (pendingCode && !icodesToSave.some((ic) => ic.i_code === pendingCode)) {
+        const newEntry = { i_code: pendingCode, description: newDescription.trim() || null };
+        icodesToSave = [...icodesToSave, newEntry];
+        setGlobalICodes(icodesToSave);
+        setNewICode("");
+        setNewDescription("");
+      }
+
       const res = await fetch("/api/rebates", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "upsert_excluded_icodes",
           entityId,
-          icodes: globalICodes.map((ic) => ({
+          icodes: icodesToSave.map((ic) => ({
             i_code: ic.i_code,
             description: ic.description,
           })),
