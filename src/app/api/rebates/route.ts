@@ -197,35 +197,20 @@ export async function POST(request: Request) {
       }
 
       if (icodes && icodes.length > 0) {
-        // Auto-resolve descriptions from synced invoice items if not provided
+        // Auto-resolve descriptions from ALL synced invoice items if not provided
         const icodesWithoutDesc = icodes.filter((ic: { i_code: string; description?: string }) => !ic.description);
         let descMap: Record<string, string> = {};
         if (icodesWithoutDesc.length > 0) {
-          const { data: custList } = await admin
-            .from("rebate_customers")
-            .select("id")
-            .eq("entity_id", entityId);
-          const custIds = (custList || []).map((c: { id: string }) => c.id);
-          if (custIds.length > 0) {
-            const { data: invList } = await admin
-              .from("rebate_invoices")
-              .select("id")
-              .in("rebate_customer_id", custIds);
-            const invIds = (invList || []).map((i: { id: string }) => i.id);
-            if (invIds.length > 0) {
-              const codesToLookup = icodesWithoutDesc.map((ic: { i_code: string }) => ic.i_code.trim());
-              const { data: matchItems } = await admin
-                .from("rebate_invoice_items")
-                .select("i_code, description")
-                .in("rebate_invoice_id", invIds)
-                .in("i_code", codesToLookup)
-                .not("description", "is", null);
-              for (const item of matchItems || []) {
-                const code = (item.i_code || "").trim();
-                if (code && item.description && !descMap[code]) {
-                  descMap[code] = item.description;
-                }
-              }
+          const codesToLookup = icodesWithoutDesc.map((ic: { i_code: string }) => ic.i_code.trim());
+          const { data: matchItems } = await admin
+            .from("rebate_invoice_items")
+            .select("i_code, description")
+            .in("i_code", codesToLookup)
+            .not("description", "is", null);
+          for (const item of matchItems || []) {
+            const code = (item.i_code || "").trim();
+            if (code && item.description && !descMap[code]) {
+              descMap[code] = item.description;
             }
           }
         }
@@ -261,88 +246,24 @@ export async function POST(request: Request) {
     }
 
     case "lookup_icode": {
-      // Look up I-code description from synced invoice items
-      const { entityId: lookupEntityId, iCode } = body;
+      // Look up I-code description from synced invoice items (all items, not customer-scoped)
+      const { iCode } = body;
       if (!iCode) {
         return NextResponse.json({ error: "iCode is required" }, { status: 400 });
       }
 
-      // Get all customer IDs for this entity
-      const { data: custList } = await admin
-        .from("rebate_customers")
-        .select("id")
-        .eq("entity_id", lookupEntityId);
-      const custIds = (custList || []).map((c) => c.id);
+      const trimmedCode = iCode.trim();
 
-      if (custIds.length === 0) {
-        return NextResponse.json({ i_code: iCode.trim(), description: null });
-      }
-
-      // Find invoice IDs for these customers
-      const { data: invList } = await admin
-        .from("rebate_invoices")
-        .select("id")
-        .in("rebate_customer_id", custIds);
-      const invIds = (invList || []).map((i) => i.id);
-
-      if (invIds.length === 0) {
-        return NextResponse.json({ i_code: iCode.trim(), description: null });
-      }
-
-      // Find the first matching item with this I-code to get its description
+      // Search ALL synced invoice items for this I-code (not customer-scoped)
       const { data: matchingItems } = await admin
         .from("rebate_invoice_items")
         .select("i_code, description")
-        .in("rebate_invoice_id", invIds)
-        .eq("i_code", iCode.trim())
+        .eq("i_code", trimmedCode)
+        .not("description", "is", null)
         .limit(1);
 
       const desc = matchingItems?.[0]?.description || null;
-      return NextResponse.json({ i_code: iCode.trim(), description: desc });
-    }
-
-    case "lookup_icodes_bulk": {
-      // Bulk lookup I-code descriptions from synced invoice items
-      const { entityId: bulkEntityId } = body;
-
-      const { data: custList2 } = await admin
-        .from("rebate_customers")
-        .select("id")
-        .eq("entity_id", bulkEntityId);
-      const custIds2 = (custList2 || []).map((c) => c.id);
-
-      if (custIds2.length === 0) {
-        return NextResponse.json({ descriptions: {} });
-      }
-
-      const { data: invList2 } = await admin
-        .from("rebate_invoices")
-        .select("id")
-        .in("rebate_customer_id", custIds2);
-      const invIds2 = (invList2 || []).map((i) => i.id);
-
-      if (invIds2.length === 0) {
-        return NextResponse.json({ descriptions: {} });
-      }
-
-      // Get distinct I-codes with descriptions
-      const { data: allItems } = await admin
-        .from("rebate_invoice_items")
-        .select("i_code, description")
-        .in("rebate_invoice_id", invIds2)
-        .not("i_code", "is", null)
-        .not("description", "is", null);
-
-      // Build map of i_code → description (first non-null description wins)
-      const descriptions: Record<string, string> = {};
-      for (const item of allItems || []) {
-        const code = (item.i_code || "").trim();
-        if (code && item.description && !descriptions[code]) {
-          descriptions[code] = item.description;
-        }
-      }
-
-      return NextResponse.json({ descriptions });
+      return NextResponse.json({ i_code: trimmedCode, description: desc });
     }
 
     case "mark_quarter_paid": {
