@@ -4,7 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import Anthropic from "@anthropic-ai/sdk";
 
 // Allow up to 60 seconds for AI extraction (default is 10-15s on Vercel)
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 /**
  * POST /api/insurance/extract
@@ -185,7 +185,7 @@ export async function POST(request: NextRequest) {
     });
 
     const message = await anthropic.messages.create({
-      model: "claude-sonnet-4-5-20250929",
+      model: "claude-sonnet-4-6",
       max_tokens: 16384,
       messages: [
         {
