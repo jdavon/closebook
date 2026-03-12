@@ -165,7 +165,7 @@ export default function NewSchedulePage() {
                 <SelectContent>
                   <SelectItem value="prepaid">Prepaid Expense</SelectItem>
                   <SelectItem value="fixed_asset">
-                    Fixed Asset Roll-Forward
+                    Rental Asset Roll-Forward
                   </SelectItem>
                   <SelectItem value="debt">Debt Schedule</SelectItem>
                   <SelectItem value="accrual">Accrual Schedule</SelectItem>

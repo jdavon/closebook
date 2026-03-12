@@ -30,7 +30,7 @@ const routeLabels: Record<string, string> = {
   accounts: "Chart of Accounts",
   "trial-balance": "Trial Balance",
   schedules: "Schedules",
-  assets: "Fixed Assets",
+  assets: "Rental Assets",
   debt: "Debt Schedule",
   revenue: "Revenue Accruals",
   payroll: "Payroll Accruals",

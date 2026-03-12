@@ -38,7 +38,7 @@ interface Schedule {
 
 const TYPE_LABELS: Record<ScheduleType, string> = {
   prepaid: "Prepaid",
-  fixed_asset: "Fixed Asset",
+  fixed_asset: "Rental Asset",
   debt: "Debt",
   accrual: "Accrual",
   custom: "Custom",

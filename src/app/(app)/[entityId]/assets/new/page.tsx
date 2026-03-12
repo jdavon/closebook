@@ -676,7 +676,7 @@ export default function NewAssetPage() {
               </CardHeader>
               <CardContent className="space-y-4">
                 {renderAccountSelect(
-                  "Fixed Asset Cost Account",
+                  "Rental Asset Cost Account",
                   "costAccount",
                   costAccountId,
                   setCostAccountId,

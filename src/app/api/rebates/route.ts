@@ -49,11 +49,35 @@ export async function POST(request: Request) {
         .eq("entity_id", entityId)
         .not("rebate_customer_id", "is", null);
 
+      // Aggregate excluded amounts per I-code across all customers for this entity
+      let excludedAmountsByICode: Record<string, number> = {};
+      if (customerIds.length > 0) {
+        const { data: invoices } = await admin
+          .from("rebate_invoices")
+          .select("id")
+          .in("rebate_customer_id", customerIds);
+        const invoiceIds = (invoices || []).map((inv) => inv.id);
+        if (invoiceIds.length > 0) {
+          const { data: excludedItems } = await admin
+            .from("rebate_invoice_items")
+            .select("i_code, extended")
+            .in("rebate_invoice_id", invoiceIds)
+            .eq("is_excluded", true);
+          for (const item of excludedItems || []) {
+            const code = (item.i_code || "").trim();
+            if (code) {
+              excludedAmountsByICode[code] = (excludedAmountsByICode[code] || 0) + (item.extended || 0);
+            }
+          }
+        }
+      }
+
       return NextResponse.json({
         customers: customers || [],
         tiers,
         globalExcludedICodes: globalExcludedICodes || [],
         customerExcludedICodes: customerExcludedICodes || [],
+        excludedAmountsByICode,
       });
     }
 
@@ -173,12 +197,30 @@ export async function POST(request: Request) {
       }
 
       if (icodes && icodes.length > 0) {
+        // Auto-resolve descriptions from ALL synced invoice items if not provided
+        const icodesWithoutDesc = icodes.filter((ic: { i_code: string; description?: string }) => !ic.description);
+        let descMap: Record<string, string> = {};
+        if (icodesWithoutDesc.length > 0) {
+          const codesToLookup = icodesWithoutDesc.map((ic: { i_code: string }) => ic.i_code.trim());
+          const { data: matchItems } = await admin
+            .from("rebate_invoice_items")
+            .select("i_code, description")
+            .in("i_code", codesToLookup)
+            .not("description", "is", null);
+          for (const item of matchItems || []) {
+            const code = (item.i_code || "").trim();
+            if (code && item.description && !descMap[code]) {
+              descMap[code] = item.description;
+            }
+          }
+        }
+
         const rows = icodes.map(
           (ic: { i_code: string; description?: string }) => ({
             entity_id: entityId,
             rebate_customer_id: null,
             i_code: ic.i_code.trim(),
-            description: ic.description || null,
+            description: ic.description || descMap[ic.i_code.trim()] || null,
           }),
         );
         console.log("Inserting excluded icodes:", JSON.stringify(rows));
@@ -201,6 +243,27 @@ export async function POST(request: Request) {
         savedCount: verify?.length || 0,
         savedICodes: (verify || []).map((v) => v.i_code),
       });
+    }
+
+    case "lookup_icode": {
+      // Look up I-code description from synced invoice items (all items, not customer-scoped)
+      const { iCode } = body;
+      if (!iCode) {
+        return NextResponse.json({ error: "iCode is required" }, { status: 400 });
+      }
+
+      const trimmedCode = iCode.trim();
+
+      // Search ALL synced invoice items for this I-code (not customer-scoped)
+      const { data: matchingItems } = await admin
+        .from("rebate_invoice_items")
+        .select("i_code, description")
+        .eq("i_code", trimmedCode)
+        .not("description", "is", null)
+        .limit(1);
+
+      const desc = matchingItems?.[0]?.description || null;
+      return NextResponse.json({ i_code: trimmedCode, description: desc });
     }
 
     case "mark_quarter_paid": {
