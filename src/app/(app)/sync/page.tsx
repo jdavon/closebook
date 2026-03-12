@@ -33,6 +33,14 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { Progress } from "@/components/ui/progress";
 import {
@@ -45,6 +53,7 @@ import {
   TrendingDown,
   Building2,
   CalendarRange,
+  BookOpen,
 } from "lucide-react";
 import {
   formatCurrency,
@@ -96,6 +105,23 @@ interface MonthColumn {
   label: string;
 }
 
+interface GLSyncEntityResult {
+  entityId: string;
+  entityName: string;
+  entityCode: string;
+  success: boolean;
+  accountsBefore: number;
+  accountsAfter: number;
+  newAccounts: {
+    name: string;
+    accountNumber: string | null;
+    classification: string;
+    accountType: string;
+  }[];
+  syncedMonths: number[]; // encoded as year*100+month
+  error?: string;
+}
+
 const MONTH_NAMES = [
   "January", "February", "March", "April", "May", "June",
   "July", "August", "September", "October", "November", "December",
@@ -143,6 +169,14 @@ export default function SyncManagementPage() {
   const [yearSyncMonthStatuses, setYearSyncMonthStatuses] = useState<
     Record<number, { success: boolean; recordsSynced: number; error?: string }>
   >({});
+
+  // GL account sync state
+  const [syncingAccounts, setSyncingAccounts] = useState(false);
+  const [glSyncResults, setGlSyncResults] = useState<GLSyncEntityResult[] | null>(null);
+  const [showNewAccountsDialog, setShowNewAccountsDialog] = useState(false);
+  const [resyncingMonths, setResyncingMonths] = useState(false);
+  const [resyncProgress, setResyncProgress] = useState(0);
+  const [resyncCurrent, setResyncCurrent] = useState("");
 
   const loadEntities = useCallback(async () => {
     setLoading(true);
@@ -585,6 +619,136 @@ export default function SyncManagementPage() {
     setYearSyncing(false);
   }
 
+  async function handleSyncAccounts() {
+    setSyncingAccounts(true);
+    setGlSyncResults(null);
+
+    try {
+      const response = await fetch("/api/qbo/sync-accounts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        const results = (data.results ?? []) as GLSyncEntityResult[];
+        setGlSyncResults(results);
+
+        const hasNewAccounts = results.some((r) => r.newAccounts.length > 0);
+        if (hasNewAccounts) {
+          setShowNewAccountsDialog(true);
+        } else {
+          toast.success(
+            `GL accounts synced for ${data.entitiesSynced} entities — no new accounts found`
+          );
+        }
+      } else {
+        toast.error(data.error || "GL account sync failed");
+      }
+    } catch {
+      toast.error("GL account sync failed — network error");
+    }
+
+    setSyncingAccounts(false);
+  }
+
+  async function handleResyncAffectedMonths() {
+    if (!glSyncResults) return;
+
+    const affectedEntities = glSyncResults.filter(
+      (r) => r.newAccounts.length > 0 && r.syncedMonths.length > 0
+    );
+    if (affectedEntities.length === 0) {
+      setShowNewAccountsDialog(false);
+      return;
+    }
+
+    // Build list of all entity/month combos to re-sync
+    const periodsToSync: { entityId: string; entityCode: string; year: number; month: number }[] = [];
+    for (const entity of affectedEntities) {
+      for (const encoded of entity.syncedMonths) {
+        const year = Math.floor(encoded / 100);
+        const month = encoded % 100;
+        periodsToSync.push({
+          entityId: entity.entityId,
+          entityCode: entity.entityCode,
+          year,
+          month,
+        });
+      }
+    }
+
+    setResyncingMonths(true);
+    setResyncProgress(0);
+    setResyncCurrent("");
+
+    let completed = 0;
+    let successCount = 0;
+
+    for (const { entityId, entityCode, year, month } of periodsToSync) {
+      setResyncCurrent(
+        `${entityCode} — ${MONTH_NAMES[month - 1]} ${year}`
+      );
+      setResyncProgress(
+        Math.round((completed / periodsToSync.length) * 100)
+      );
+
+      try {
+        const syncResponse = await fetch("/api/qbo/sync", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            entityId,
+            syncType: "trial_balance",
+            periodYear: year,
+            periodMonth: month,
+          }),
+        });
+
+        // Read SSE stream to completion
+        if (syncResponse.body) {
+          const reader = syncResponse.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+          let lastEvent: Record<string, unknown> = {};
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n");
+            buffer = lines.pop() ?? "";
+            for (const line of lines) {
+              if (line.startsWith("data: ")) {
+                try {
+                  lastEvent = JSON.parse(line.slice(6));
+                } catch {
+                  /* skip */
+                }
+              }
+            }
+          }
+          if (!lastEvent.error) successCount++;
+        }
+      } catch {
+        // Continue on individual failures
+      }
+
+      completed++;
+    }
+
+    setResyncProgress(100);
+    setResyncCurrent("");
+    setResyncingMonths(false);
+    setShowNewAccountsDialog(false);
+    toast.success(
+      `Re-synced ${successCount}/${periodsToSync.length} periods across ${affectedEntities.length} entities`
+    );
+    loadEntities();
+    loadSyncedMonths();
+    loadFinancials();
+  }
+
   const connByEntity = new Map(
     connections.map((c) => [c.entity_id, c])
   );
@@ -652,7 +816,7 @@ export default function SyncManagementPage() {
             </Select>
             <Button
               onClick={handleSyncAll}
-              disabled={syncing || connectedCount === 0}
+              disabled={syncing || syncingAccounts || connectedCount === 0}
             >
               <RefreshCw
                 className={`mr-2 h-4 w-4 ${syncing ? "animate-spin" : ""}`}
@@ -660,6 +824,18 @@ export default function SyncManagementPage() {
               {syncing
                 ? "Syncing All..."
                 : `Sync All Entities (${connectedCount})`}
+            </Button>
+            <Button
+              variant="outline"
+              onClick={handleSyncAccounts}
+              disabled={syncingAccounts || syncing || connectedCount === 0}
+            >
+              <BookOpen
+                className={`mr-2 h-4 w-4 ${syncingAccounts ? "animate-spin" : ""}`}
+              />
+              {syncingAccounts
+                ? "Syncing GL Accounts..."
+                : "Sync GL Accounts"}
             </Button>
           </div>
 
@@ -1296,6 +1472,130 @@ export default function SyncManagementPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* New GL Accounts Dialog */}
+      <Dialog open={showNewAccountsDialog} onOpenChange={setShowNewAccountsDialog}>
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>New GL Accounts Detected</DialogTitle>
+            <DialogDescription>
+              The following new accounts were found in QuickBooks. Previously synced months may need to be re-synced to pick up balances for these accounts.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            {glSyncResults
+              ?.filter((r) => r.newAccounts.length > 0)
+              .map((entity) => {
+                const totalSyncedPeriods = entity.syncedMonths.length;
+                return (
+                  <div key={entity.entityId} className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <h4 className="font-medium text-sm">
+                        <Badge variant="outline" className="mr-2 text-xs">
+                          {entity.entityCode}
+                        </Badge>
+                        {entity.entityName}
+                      </h4>
+                      <span className="text-xs text-muted-foreground">
+                        {entity.accountsBefore} → {entity.accountsAfter} accounts
+                      </span>
+                    </div>
+
+                    <div className="rounded-md border">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead className="text-xs">Account</TableHead>
+                            <TableHead className="text-xs">Number</TableHead>
+                            <TableHead className="text-xs">Classification</TableHead>
+                            <TableHead className="text-xs">Type</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {entity.newAccounts.map((acct, i) => (
+                            <TableRow key={i}>
+                              <TableCell className="text-xs font-medium">
+                                {acct.name}
+                              </TableCell>
+                              <TableCell className="text-xs">
+                                {acct.accountNumber ?? "—"}
+                              </TableCell>
+                              <TableCell className="text-xs">
+                                {acct.classification}
+                              </TableCell>
+                              <TableCell className="text-xs">
+                                {acct.accountType}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+
+                    {totalSyncedPeriods > 0 && (
+                      <p className="text-xs text-muted-foreground">
+                        {totalSyncedPeriods} previously synced{" "}
+                        {totalSyncedPeriods === 1 ? "period" : "periods"} will be re-synced
+                      </p>
+                    )}
+                  </div>
+                );
+              })}
+          </div>
+
+          {resyncingMonths && (
+            <div className="space-y-2 pt-2">
+              <Progress value={resyncProgress} className="h-2" />
+              <p className="text-sm text-muted-foreground">
+                Re-syncing {resyncCurrent}...
+              </p>
+            </div>
+          )}
+
+          <DialogFooter className="gap-2 sm:gap-0">
+            {(() => {
+              const affectedEntities = glSyncResults?.filter(
+                (r) => r.newAccounts.length > 0 && r.syncedMonths.length > 0
+              ) ?? [];
+              const totalPeriods = affectedEntities.reduce(
+                (sum, r) => sum + r.syncedMonths.length,
+                0
+              );
+
+              return (
+                <>
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setShowNewAccountsDialog(false);
+                      toast.success(
+                        `GL accounts synced — ${glSyncResults?.reduce((s, r) => s + r.newAccounts.length, 0) ?? 0} new accounts added`
+                      );
+                    }}
+                    disabled={resyncingMonths}
+                  >
+                    {totalPeriods > 0 ? "Skip Re-sync" : "Done"}
+                  </Button>
+                  {totalPeriods > 0 && (
+                    <Button
+                      onClick={handleResyncAffectedMonths}
+                      disabled={resyncingMonths}
+                    >
+                      <RefreshCw
+                        className={`mr-2 h-4 w-4 ${resyncingMonths ? "animate-spin" : ""}`}
+                      />
+                      {resyncingMonths
+                        ? "Re-syncing..."
+                        : `Re-sync ${totalPeriods} Period${totalPeriods !== 1 ? "s" : ""}`}
+                    </Button>
+                  )}
+                </>
+              );
+            })()}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
