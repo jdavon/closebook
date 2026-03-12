@@ -35,6 +35,7 @@ import {
   ChevronRight,
   Ban,
   CheckCircle2,
+  ClipboardList,
 } from "lucide-react";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
@@ -83,6 +84,21 @@ interface InvoiceItem {
   extended: number | null;
   is_excluded: boolean;
   record_type: string | null;
+}
+
+interface ActiveOrder {
+  orderId: string;
+  orderNumber: string;
+  orderDate: string | null;
+  estimatedStartDate: string | null;
+  estimatedStopDate: string | null;
+  status: string;
+  deal: string | null;
+  description: string | null;
+  total: number;
+  rentalTotal: number;
+  purchaseOrderNumber: string | null;
+  equipmentType: string;
 }
 
 interface QuarterlySummary {
@@ -181,6 +197,9 @@ export default function CustomerDetailPage() {
   const [selectedQuarter, setSelectedQuarter] = useState("all");
   const [excludedICodes, setExcludedICodes] = useState<Set<string>>(new Set());
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set());
+  const [activeOrders, setActiveOrders] = useState<ActiveOrder[]>([]);
+  const [loadingOrders, setLoadingOrders] = useState(false);
+  const [ordersLoaded, setOrdersLoaded] = useState(false);
 
   const loadData = useCallback(async () => {
     try {
@@ -367,6 +386,31 @@ export default function CustomerDetailPage() {
       }
     } catch {
       toast.error("Failed to update payment status");
+    }
+  };
+
+  const loadActiveOrders = async () => {
+    setLoadingOrders(true);
+    try {
+      const res = await fetch("/api/rebates/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "fetch_active_orders",
+          customerId,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setActiveOrders(data.orders || []);
+        setOrdersLoaded(true);
+      } else {
+        toast.error(data.error || "Failed to load active orders");
+      }
+    } catch {
+      toast.error("Failed to load active orders");
+    } finally {
+      setLoadingOrders(false);
     }
   };
 
@@ -1069,6 +1113,142 @@ export default function CustomerDetailPage() {
                 ))}
               </TableBody>
             </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Active Orders */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <ClipboardList className="h-5 w-5 text-muted-foreground" />
+              <CardTitle>Active Orders</CardTitle>
+              {ordersLoaded && (
+                <Badge variant="outline" className="ml-2">
+                  {activeOrders.length}
+                </Badge>
+              )}
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={loadActiveOrders}
+              disabled={loadingOrders}
+            >
+              {loadingOrders ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <RefreshCw className="mr-2 h-4 w-4" />
+              )}
+              {ordersLoaded ? "Refresh" : "Load Orders"}
+            </Button>
+          </div>
+          <CardDescription>
+            Current open orders from RentalWorks with estimated rebate potential
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {!ordersLoaded ? (
+            <div className="text-center py-8 text-muted-foreground">
+              <p>Click &quot;Load Orders&quot; to fetch active orders from RentalWorks.</p>
+            </div>
+          ) : activeOrders.length === 0 ? (
+            <div className="text-center py-8 text-muted-foreground">
+              <p>No active orders found for this customer.</p>
+            </div>
+          ) : (
+            <>
+              {/* Active orders summary */}
+              <div className="grid gap-4 md:grid-cols-3 mb-4">
+                <div className="rounded-lg border p-3">
+                  <p className="text-sm text-muted-foreground">Active Orders</p>
+                  <p className="text-xl font-semibold">{activeOrders.length}</p>
+                </div>
+                <div className="rounded-lg border p-3">
+                  <p className="text-sm text-muted-foreground">Total Order Value</p>
+                  <p className="text-xl font-semibold">
+                    {formatCurrency(activeOrders.reduce((s, o) => s + o.total, 0))}
+                  </p>
+                </div>
+                <div className="rounded-lg border p-3">
+                  <p className="text-sm text-muted-foreground">Est. Potential Rebate</p>
+                  <p className="text-xl font-semibold text-green-600 dark:text-green-400">
+                    {formatCurrency(
+                      activeOrders.reduce((s, o) => {
+                        if (!currentTier) return s;
+                        const rateKey = `rate_${o.equipmentType}` as keyof TierData;
+                        const rate = (currentTier[rateKey] as number) || 0;
+                        return s + o.total * (rate / 100);
+                      }, 0),
+                    )}
+                  </p>
+                </div>
+              </div>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Order #</TableHead>
+                    <TableHead>Date</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Deal</TableHead>
+                    <TableHead>Description</TableHead>
+                    <TableHead>Type</TableHead>
+                    <TableHead className="text-right">Total</TableHead>
+                    <TableHead className="text-right">Est. Rebate</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {activeOrders.map((order) => {
+                    const rateKey = currentTier
+                      ? (`rate_${order.equipmentType}` as keyof TierData)
+                      : null;
+                    const rate = rateKey && currentTier
+                      ? ((currentTier[rateKey] as number) || 0)
+                      : 0;
+                    const estRebate = order.total * (rate / 100);
+                    return (
+                      <TableRow key={order.orderId}>
+                        <TableCell className="font-mono text-sm">
+                          {order.orderNumber}
+                        </TableCell>
+                        <TableCell>
+                          {order.estimatedStartDate || order.orderDate || "—"}
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant="secondary">{order.status}</Badge>
+                        </TableCell>
+                        <TableCell className="max-w-[150px] truncate">
+                          {order.deal || "—"}
+                        </TableCell>
+                        <TableCell className="max-w-[200px] truncate">
+                          {order.description || "—"}
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant="outline">
+                            {getEquipmentLabel(
+                              order.equipmentType as EquipmentType,
+                            )}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-right">
+                          {formatCurrency(order.total)}
+                        </TableCell>
+                        <TableCell className="text-right font-medium text-green-600 dark:text-green-400">
+                          {rate > 0 ? formatCurrency(estRebate) : "—"}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+              {currentTier && (
+                <p className="text-xs text-muted-foreground mt-3">
+                  Estimates based on current tier ({currentTier.label}) rates. Actual rebate
+                  will depend on final invoice amounts, exclusions, and discounts applied.
+                </p>
+              )}
+            </>
           )}
         </CardContent>
       </Card>

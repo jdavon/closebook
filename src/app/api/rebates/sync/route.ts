@@ -119,6 +119,83 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: true, results });
     }
 
+    case "fetch_active_orders": {
+      const { customerId } = body;
+
+      // Load customer config
+      const { data: customer, error: custErr } = await admin
+        .from("rebate_customers")
+        .select("*")
+        .eq("id", customerId)
+        .single();
+
+      if (custErr || !customer) {
+        return NextResponse.json(
+          { error: "Customer not found" },
+          { status: 404 },
+        );
+      }
+
+      try {
+        const { RentalWorksClient } = await import(
+          "@/lib/rentalworks/client"
+        );
+        const rw = new RentalWorksClient(process.env.RW_BASE_URL!);
+        await rw.ensureAuth(process.env.RW_USERNAME!, process.env.RW_PASSWORD!);
+
+        // Fetch orders for this customer
+        const orderResult = await rw.browse<{
+          OrderId: string;
+          OrderNumber: string;
+          OrderDate: string;
+          EstimatedStartDate: string;
+          EstimatedStopDate: string;
+          Status: string;
+          Customer: string;
+          Deal: string;
+          Description: string;
+          Total: string;
+          RentalTotal: string;
+          PurchaseOrderNumber: string;
+        }>("order", {
+          pagesize: 500,
+          searchfields: ["CustomerId"],
+          searchfieldoperators: ["="],
+          searchfieldvalues: [customer.rw_customer_id],
+          orderby: "OrderDate",
+          orderbydirection: "desc",
+        });
+
+        // Filter to active orders (OPEN, CONFIRMED, ACTIVE, etc. — exclude CLOSED, CANCELLED, COMPLETE)
+        const inactiveStatuses = new Set(["CLOSED", "CANCELLED", "COMPLETE", "SNAPSHOT", "VOID"]);
+        const activeOrders = orderResult.rows.filter((o) => {
+          const status = (o.Status || "").toUpperCase();
+          return !inactiveStatuses.has(status);
+        });
+
+        // Classify equipment type and estimate rebate for each order
+        const orders = activeOrders.map((o) => ({
+          orderId: o.OrderId,
+          orderNumber: o.OrderNumber,
+          orderDate: o.OrderDate || null,
+          estimatedStartDate: o.EstimatedStartDate || null,
+          estimatedStopDate: o.EstimatedStopDate || null,
+          status: o.Status,
+          deal: o.Deal || null,
+          description: o.Description || null,
+          total: Number(o.Total) || 0,
+          rentalTotal: Number(o.RentalTotal) || 0,
+          purchaseOrderNumber: o.PurchaseOrderNumber || null,
+          equipmentType: classifyEquipmentType(o.Description || ""),
+        }));
+
+        return NextResponse.json({ success: true, orders });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Failed to fetch orders";
+        return NextResponse.json({ error: msg }, { status: 500 });
+      }
+    }
+
     default:
       return NextResponse.json(
         { error: `Unknown action: ${action}` },
