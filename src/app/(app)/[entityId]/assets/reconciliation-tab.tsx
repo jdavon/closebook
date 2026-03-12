@@ -35,6 +35,7 @@ import {
 import { formatCurrency } from "@/lib/utils/dates";
 import {
   GL_ACCOUNT_GROUPS,
+  UNALLOCATED_KEY,
   getAssetGLGroup,
 } from "@/lib/utils/asset-gl-groups";
 
@@ -194,15 +195,15 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
       );
     }
 
-    // Group by GL account group
+    // Group by GL account group (+ catch-all for unallocated)
     const grouped: Record<string, { total: number; assets: AssetWithDepr[] }> = {};
     for (const group of GL_ACCOUNT_GROUPS) {
       grouped[group.key] = { total: 0, assets: [] };
     }
+    grouped[UNALLOCATED_KEY] = { total: 0, assets: [] };
 
     for (const asset of assets) {
-      const groupKey = getAssetGLGroup(asset.vehicle_class);
-      if (!groupKey || !grouped[groupKey]) continue;
+      const groupKey = getAssetGLGroup(asset.vehicle_class) ?? UNALLOCATED_KEY;
       const deprNbv = deprMap[asset.id] ?? null;
       // Use depreciation table value if available, otherwise fall back to current book_net_value
       const nbv = deprNbv ?? asset.book_net_value;
@@ -333,75 +334,213 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
       {loading ? (
         <p className="text-sm text-muted-foreground">Loading reconciliation data...</p>
       ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {GL_ACCOUNT_GROUPS.map((group) => {
-            const glBal = glBalances[group.key] ?? 0;
-            const subBal = subledgerBalances[group.key]?.total ?? 0;
-            const variance = glBal - subBal;
-            const recon = reconciliations[group.key];
-            const isReconciled = recon?.is_reconciled ?? false;
-            const assetList = subledgerBalances[group.key]?.assets ?? [];
-            const isExpanded = expandedGroups.has(group.key);
+        <div className="space-y-6">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {GL_ACCOUNT_GROUPS.map((group) => {
+              const glBal = glBalances[group.key] ?? 0;
+              const subBal = subledgerBalances[group.key]?.total ?? 0;
+              const variance = glBal - subBal;
+              const recon = reconciliations[group.key];
+              const isReconciled = recon?.is_reconciled ?? false;
+              const assetList = subledgerBalances[group.key]?.assets ?? [];
+              const isExpanded = expandedGroups.has(group.key);
+
+              return (
+                <Card key={group.key}>
+                  <CardHeader className="pb-3">
+                    <div className="flex items-center justify-between">
+                      <CardTitle className="text-lg">{group.displayName}</CardTitle>
+                      {isReconciled ? (
+                        <Badge className="bg-green-100 text-green-800 hover:bg-green-100">
+                          <CheckCircle2 className="mr-1 h-3.5 w-3.5" />
+                          Reconciled
+                        </Badge>
+                      ) : Math.abs(variance) > 0.01 ? (
+                        <Badge variant="destructive">
+                          <AlertTriangle className="mr-1 h-3.5 w-3.5" />
+                          Variance
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline">Pending</Badge>
+                      )}
+                    </div>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    {/* Summary */}
+                    <div className="grid grid-cols-3 gap-4">
+                      <div>
+                        <p className="text-xs text-muted-foreground uppercase tracking-wider">
+                          GL Balance
+                        </p>
+                        <p className="text-lg font-semibold tabular-nums">
+                          {formatCurrency(glBal)}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground uppercase tracking-wider">
+                          Subledger NBV
+                        </p>
+                        <p className="text-lg font-semibold tabular-nums">
+                          {formatCurrency(subBal)}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground uppercase tracking-wider">
+                          Variance
+                        </p>
+                        <p
+                          className={`text-lg font-semibold tabular-nums ${
+                            Math.abs(variance) > 0.01
+                              ? "text-red-600"
+                              : "text-green-600"
+                          }`}
+                        >
+                          {formatCurrency(variance)}
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Asset Detail Expandable */}
+                    <Collapsible
+                      open={isExpanded}
+                      onOpenChange={() => toggleGroup(group.key)}
+                    >
+                      <CollapsibleTrigger asChild>
+                        <Button variant="ghost" size="sm" className="w-full justify-start">
+                          {isExpanded ? (
+                            <ChevronDown className="mr-2 h-4 w-4" />
+                          ) : (
+                            <ChevronRight className="mr-2 h-4 w-4" />
+                          )}
+                          {assetList.length} asset{assetList.length !== 1 ? "s" : ""} in
+                          group
+                        </Button>
+                      </CollapsibleTrigger>
+                      <CollapsibleContent>
+                        <div className="mt-2 max-h-60 overflow-auto">
+                          <Table>
+                            <TableHeader>
+                              <TableRow>
+                                <TableHead>Asset</TableHead>
+                                <TableHead className="text-right">Cost</TableHead>
+                                <TableHead className="text-right">Book NBV</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {assetList.map((a) => (
+                                <TableRow key={a.id}>
+                                  <TableCell className="text-sm">
+                                    {a.asset_name}
+                                  </TableCell>
+                                  <TableCell className="text-right tabular-nums text-sm">
+                                    {formatCurrency(a.acquisition_cost)}
+                                  </TableCell>
+                                  <TableCell className="text-right tabular-nums text-sm">
+                                    {formatCurrency(
+                                      a.depr_book_net_value ?? a.book_net_value
+                                    )}
+                                  </TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
+                      </CollapsibleContent>
+                    </Collapsible>
+
+                    {/* Notes */}
+                    <Textarea
+                      placeholder="Reconciliation notes..."
+                      value={notes[group.key] ?? ""}
+                      onChange={(e) =>
+                        setNotes((prev) => ({ ...prev, [group.key]: e.target.value }))
+                      }
+                      className="text-sm"
+                      rows={2}
+                    />
+
+                    {/* Actions */}
+                    <div className="flex items-center justify-between">
+                      {recon?.reconciled_at && (
+                        <p className="text-xs text-muted-foreground">
+                          Reconciled{" "}
+                          {new Date(recon.reconciled_at).toLocaleDateString()}
+                        </p>
+                      )}
+                      <div className="ml-auto flex gap-2">
+                        {isReconciled ? (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleUnreconcile(group.key)}
+                            disabled={saving === group.key}
+                          >
+                            {saving === group.key ? "Saving..." : "Unreconcile"}
+                          </Button>
+                        ) : (
+                          <Button
+                            size="sm"
+                            onClick={() => handleReconcile(group.key)}
+                            disabled={saving === group.key}
+                          >
+                            {saving === group.key ? "Saving..." : "Mark Reconciled"}
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
+
+          {/* Unallocated Assets — always show if any exist */}
+          {(() => {
+            const unallocated = subledgerBalances[UNALLOCATED_KEY];
+            if (!unallocated || unallocated.assets.length === 0) return null;
+            const isExpanded = expandedGroups.has(UNALLOCATED_KEY);
 
             return (
-              <Card key={group.key}>
+              <Card className="border-amber-300 bg-amber-50/40">
                 <CardHeader className="pb-3">
                   <div className="flex items-center justify-between">
-                    <CardTitle className="text-lg">{group.displayName}</CardTitle>
-                    {isReconciled ? (
-                      <Badge className="bg-green-100 text-green-800 hover:bg-green-100">
-                        <CheckCircle2 className="mr-1 h-3.5 w-3.5" />
-                        Reconciled
-                      </Badge>
-                    ) : Math.abs(variance) > 0.01 ? (
-                      <Badge variant="destructive">
-                        <AlertTriangle className="mr-1 h-3.5 w-3.5" />
-                        Variance
-                      </Badge>
-                    ) : (
-                      <Badge variant="outline">Pending</Badge>
-                    )}
+                    <CardTitle className="text-lg">Unallocated Assets</CardTitle>
+                    <Badge variant="outline" className="border-amber-500 text-amber-700 bg-amber-100">
+                      <AlertTriangle className="mr-1 h-3.5 w-3.5" />
+                      Needs Classification
+                    </Badge>
                   </div>
+                  <p className="text-sm text-muted-foreground">
+                    These assets have no vehicle class or an unrecognized class and are not
+                    included in any GL reconciliation group. Assign a vehicle class to each
+                    asset so it maps to the correct GL account.
+                  </p>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  {/* Summary */}
-                  <div className="grid grid-cols-3 gap-4">
+                  <div className="grid grid-cols-2 gap-4">
                     <div>
                       <p className="text-xs text-muted-foreground uppercase tracking-wider">
-                        GL Balance
+                        Total Cost
                       </p>
                       <p className="text-lg font-semibold tabular-nums">
-                        {formatCurrency(glBal)}
+                        {formatCurrency(
+                          unallocated.assets.reduce((s, a) => s + a.acquisition_cost, 0)
+                        )}
                       </p>
                     </div>
                     <div>
                       <p className="text-xs text-muted-foreground uppercase tracking-wider">
-                        Subledger NBV
+                        Total NBV
                       </p>
                       <p className="text-lg font-semibold tabular-nums">
-                        {formatCurrency(subBal)}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-muted-foreground uppercase tracking-wider">
-                        Variance
-                      </p>
-                      <p
-                        className={`text-lg font-semibold tabular-nums ${
-                          Math.abs(variance) > 0.01
-                            ? "text-red-600"
-                            : "text-green-600"
-                        }`}
-                      >
-                        {formatCurrency(variance)}
+                        {formatCurrency(unallocated.total)}
                       </p>
                     </div>
                   </div>
 
-                  {/* Asset Detail Expandable */}
                   <Collapsible
                     open={isExpanded}
-                    onOpenChange={() => toggleGroup(group.key)}
+                    onOpenChange={() => toggleGroup(UNALLOCATED_KEY)}
                   >
                     <CollapsibleTrigger asChild>
                       <Button variant="ghost" size="sm" className="w-full justify-start">
@@ -410,25 +549,29 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
                         ) : (
                           <ChevronRight className="mr-2 h-4 w-4" />
                         )}
-                        {assetList.length} asset{assetList.length !== 1 ? "s" : ""} in
-                        group
+                        {unallocated.assets.length} unallocated asset
+                        {unallocated.assets.length !== 1 ? "s" : ""}
                       </Button>
                     </CollapsibleTrigger>
                     <CollapsibleContent>
-                      <div className="mt-2 max-h-60 overflow-auto">
+                      <div className="mt-2 max-h-80 overflow-auto">
                         <Table>
                           <TableHeader>
                             <TableRow>
                               <TableHead>Asset</TableHead>
+                              <TableHead>Vehicle Class</TableHead>
                               <TableHead className="text-right">Cost</TableHead>
                               <TableHead className="text-right">Book NBV</TableHead>
                             </TableRow>
                           </TableHeader>
                           <TableBody>
-                            {assetList.map((a) => (
+                            {unallocated.assets.map((a) => (
                               <TableRow key={a.id}>
                                 <TableCell className="text-sm">
                                   {a.asset_name}
+                                </TableCell>
+                                <TableCell className="text-sm text-muted-foreground">
+                                  {a.vehicle_class ?? "—"}
                                 </TableCell>
                                 <TableCell className="text-right tabular-nums text-sm">
                                   {formatCurrency(a.acquisition_cost)}
@@ -445,51 +588,10 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
                       </div>
                     </CollapsibleContent>
                   </Collapsible>
-
-                  {/* Notes */}
-                  <Textarea
-                    placeholder="Reconciliation notes..."
-                    value={notes[group.key] ?? ""}
-                    onChange={(e) =>
-                      setNotes((prev) => ({ ...prev, [group.key]: e.target.value }))
-                    }
-                    className="text-sm"
-                    rows={2}
-                  />
-
-                  {/* Actions */}
-                  <div className="flex items-center justify-between">
-                    {recon?.reconciled_at && (
-                      <p className="text-xs text-muted-foreground">
-                        Reconciled{" "}
-                        {new Date(recon.reconciled_at).toLocaleDateString()}
-                      </p>
-                    )}
-                    <div className="ml-auto flex gap-2">
-                      {isReconciled ? (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleUnreconcile(group.key)}
-                          disabled={saving === group.key}
-                        >
-                          {saving === group.key ? "Saving..." : "Unreoncile"}
-                        </Button>
-                      ) : (
-                        <Button
-                          size="sm"
-                          onClick={() => handleReconcile(group.key)}
-                          disabled={saving === group.key}
-                        >
-                          {saving === group.key ? "Saving..." : "Mark Reconciled"}
-                        </Button>
-                      )}
-                    </div>
-                  </div>
                 </CardContent>
               </Card>
             );
-          })}
+          })()}
         </div>
       )}
     </div>

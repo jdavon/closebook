@@ -23,6 +23,9 @@ export const GL_ACCOUNT_GROUPS: GLAccountGroup[] = [
   },
 ];
 
+/** Key used for assets that have no vehicle_class or an unrecognised class */
+export const UNALLOCATED_KEY = "unallocated";
+
 /**
  * Get the GL account group key for an asset based on its vehicle class.
  * Returns "vehicles_net" for Vehicle master type, "trailers_net" for Trailer.
