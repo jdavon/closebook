@@ -311,6 +311,8 @@ export async function POST(request: Request) {
         await rw.ensureAuth(process.env.RW_USERNAME!, process.env.RW_PASSWORD!);
 
         // Fetch orders for this customer
+        // Note: order browse doesn't support CustomerId as searchfield,
+        // so we search by Customer name instead
         const orderResult = await rw.browse<{
           OrderId: string;
           OrderNumber: string;
@@ -326,9 +328,9 @@ export async function POST(request: Request) {
           PurchaseOrderNumber: string;
         }>("order", {
           pagesize: 500,
-          searchfields: ["CustomerId"],
+          searchfields: ["Customer"],
           searchfieldoperators: ["="],
-          searchfieldvalues: [customer.rw_customer_id],
+          searchfieldvalues: [customer.customer_name],
           orderby: "OrderDate",
           orderbydirection: "desc",
         });

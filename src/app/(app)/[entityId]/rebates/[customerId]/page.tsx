@@ -282,6 +282,14 @@ export default function CustomerDetailPage() {
     loadData();
   }, [loadData]);
 
+  // Auto-load active orders once customer data is available (commercial only)
+  useEffect(() => {
+    if (!loading && customer && customer.agreement_type !== "freelancer" && !ordersLoaded) {
+      loadActiveOrders();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, customer]);
+
   const handleSync = async () => {
     setSyncing(true);
     try {
@@ -1264,9 +1272,9 @@ export default function CustomerDetailPage() {
                 Freelancer agreements are not linked to a specific RentalWorks customer.
               </p>
             </div>
-          ) : !ordersLoaded ? (
-            <div className="text-center py-8 text-muted-foreground">
-              <p>Click &quot;Load Orders&quot; to fetch active orders from RentalWorks.</p>
+          ) : loadingOrders && !ordersLoaded ? (
+            <div className="flex justify-center py-8">
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
             </div>
           ) : activeOrders.length === 0 ? (
             <div className="text-center py-8 text-muted-foreground">
