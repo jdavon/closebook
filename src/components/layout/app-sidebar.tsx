@@ -111,6 +111,11 @@ export function AppSidebar({ user, entityId: entityIdProp }: AppSidebarProps) {
           icon: HandCoins,
         },
         {
+          title: "Insurance",
+          url: `${entityPrefix}/insurance`,
+          icon: Shield,
+        },
+        {
           title: "Revenue Projection",
           url: `${entityPrefix}/revenue-projection`,
           icon: TrendingUp,
