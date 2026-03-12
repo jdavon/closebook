@@ -36,7 +36,6 @@ import { formatCurrency } from "@/lib/utils/dates";
 import {
   GL_ACCOUNT_GROUPS,
   getAssetGLGroup,
-  getGLAccountIdsForGroup,
 } from "@/lib/utils/asset-gl-groups";
 
 interface ReconciliationTabProps {
@@ -79,9 +78,6 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
   const [notes, setNotes] = useState<Record<string, string>>({});
 
   // Data
-  const [accounts, setAccounts] = useState<
-    { id: string; account_number: string | null }[]
-  >([]);
   const [glBalances, setGlBalances] = useState<
     Record<string, number>
   >({});
@@ -95,34 +91,55 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
   const loadData = useCallback(async () => {
     setLoading(true);
 
-    // 1. Fetch entity accounts (Fixed Asset type)
-    const { data: acctData } = await supabase
-      .from("accounts")
-      .select("id, account_number")
-      .eq("entity_id", entityId)
-      .eq("classification", "Asset");
-    const accts = (acctData ?? []) as { id: string; account_number: string | null }[];
-    setAccounts(accts);
+    // 1. Look up the entity's organization_id
+    const { data: entityData } = await supabase
+      .from("entities")
+      .select("organization_id")
+      .eq("id", entityId)
+      .single();
+    const orgId = entityData?.organization_id;
 
-    // 2. Fetch GL balances for each group
+    // 2. Fetch GL balances via master_accounts → master_account_mappings → gl_balances
+    //    This is the same path the financial statements use.
     const balances: Record<string, number> = {};
     for (const group of GL_ACCOUNT_GROUPS) {
-      const accountIds = getGLAccountIdsForGroup(accts, group.key);
-      if (accountIds.length > 0) {
-        const { data: glData } = await supabase
-          .from("gl_balances")
-          .select("ending_balance")
-          .eq("entity_id", entityId)
-          .eq("period_year", periodYear)
-          .eq("period_month", periodMonth)
-          .in("account_id", accountIds);
-        balances[group.key] = (glData ?? []).reduce(
-          (sum, row) => sum + Number(row.ending_balance ?? 0),
-          0
-        );
-      } else {
-        balances[group.key] = 0;
-      }
+      balances[group.key] = 0;
+
+      if (!orgId) continue;
+
+      // Find the master account by account_number (e.g. "M1700")
+      const { data: masterAcct } = await supabase
+        .from("master_accounts")
+        .select("id")
+        .eq("organization_id", orgId)
+        .eq("account_number", group.masterAccountNumber)
+        .single();
+
+      if (!masterAcct) continue;
+
+      // Find all entity account IDs mapped to this master account
+      const { data: mappings } = await supabase
+        .from("master_account_mappings")
+        .select("account_id")
+        .eq("master_account_id", masterAcct.id)
+        .eq("entity_id", entityId);
+
+      const accountIds = (mappings ?? []).map((m) => m.account_id);
+      if (accountIds.length === 0) continue;
+
+      // Sum GL balances for these mapped accounts in the selected period
+      const { data: glData } = await supabase
+        .from("gl_balances")
+        .select("ending_balance")
+        .eq("entity_id", entityId)
+        .eq("period_year", periodYear)
+        .eq("period_month", periodMonth)
+        .in("account_id", accountIds);
+
+      balances[group.key] = (glData ?? []).reduce(
+        (sum, row) => sum + Number(row.ending_balance ?? 0),
+        0
+      );
     }
     setGlBalances(balances);
 
