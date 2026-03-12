@@ -49,11 +49,35 @@ export async function POST(request: Request) {
         .eq("entity_id", entityId)
         .not("rebate_customer_id", "is", null);
 
+      // Aggregate excluded amounts per I-code across all customers for this entity
+      let excludedAmountsByICode: Record<string, number> = {};
+      if (customerIds.length > 0) {
+        const { data: invoices } = await admin
+          .from("rebate_invoices")
+          .select("id")
+          .in("rebate_customer_id", customerIds);
+        const invoiceIds = (invoices || []).map((inv) => inv.id);
+        if (invoiceIds.length > 0) {
+          const { data: excludedItems } = await admin
+            .from("rebate_invoice_items")
+            .select("i_code, extended")
+            .in("rebate_invoice_id", invoiceIds)
+            .eq("is_excluded", true);
+          for (const item of excludedItems || []) {
+            const code = (item.i_code || "").trim();
+            if (code) {
+              excludedAmountsByICode[code] = (excludedAmountsByICode[code] || 0) + (item.extended || 0);
+            }
+          }
+        }
+      }
+
       return NextResponse.json({
         customers: customers || [],
         tiers,
         globalExcludedICodes: globalExcludedICodes || [],
         customerExcludedICodes: customerExcludedICodes || [],
+        excludedAmountsByICode,
       });
     }
 

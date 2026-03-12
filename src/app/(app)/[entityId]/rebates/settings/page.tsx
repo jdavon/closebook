@@ -35,6 +35,7 @@ export default function RebateSettingsPage() {
   const entityId = params.entityId as string;
 
   const [globalICodes, setGlobalICodes] = useState<ExcludedICode[]>([]);
+  const [excludedAmounts, setExcludedAmounts] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -51,6 +52,7 @@ export default function RebateSettingsPage() {
       });
       const data = await res.json();
       setGlobalICodes(data.globalExcludedICodes || []);
+      setExcludedAmounts(data.excludedAmountsByICode || {});
     } finally {
       setLoading(false);
     }
@@ -203,32 +205,45 @@ export default function RebateSettingsPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="w-[100px]">I-Code</TableHead>
+                    <TableHead className="w-[120px]">I-Code</TableHead>
                     <TableHead>Description</TableHead>
+                    <TableHead className="w-[150px] text-right">Excluded Amount</TableHead>
                     <TableHead className="w-[60px]" />
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {globalICodes.map((ic) => (
-                    <TableRow key={ic.i_code}>
-                      <TableCell className="font-mono font-medium">
-                        {ic.i_code}
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {ic.description || "—"}
-                      </TableCell>
-                      <TableCell>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                          onClick={() => removeICode(ic.i_code)}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                  {globalICodes.map((ic) => {
+                    const amt = excludedAmounts[ic.i_code] || 0;
+                    return (
+                      <TableRow key={ic.i_code}>
+                        <TableCell className="font-mono font-medium">
+                          {ic.i_code}
+                        </TableCell>
+                        <TableCell className="text-muted-foreground">
+                          {ic.description || "—"}
+                        </TableCell>
+                        <TableCell className="text-right font-mono">
+                          {amt > 0 ? (
+                            <span className="text-red-600 font-medium">
+                              ${amt.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </span>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                            onClick={() => removeICode(ic.i_code)}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
                 </TableBody>
               </Table>
             </div>
