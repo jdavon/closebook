@@ -1125,6 +1125,7 @@ export type Database = {
           disposed_book_gain_loss: number | null
           disposed_tax_gain_loss: number | null
           disposition_method: string | null
+          disposed_buyer: string | null
           created_by: string | null
           created_at: string
           updated_at: string
@@ -1168,6 +1169,7 @@ export type Database = {
           disposed_book_gain_loss?: number | null
           disposed_tax_gain_loss?: number | null
           disposition_method?: string | null
+          disposed_buyer?: string | null
           created_by?: string | null
           created_at?: string
           updated_at?: string
@@ -1211,6 +1213,7 @@ export type Database = {
           disposed_book_gain_loss?: number | null
           disposed_tax_gain_loss?: number | null
           disposition_method?: string | null
+          disposed_buyer?: string | null
           created_by?: string | null
           created_at?: string
           updated_at?: string
@@ -4043,6 +4046,57 @@ export type Database = {
           status?: string
           completed_date?: string | null
           completed_by?: string | null
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      asset_reconciliations: {
+        Row: {
+          id: string
+          entity_id: string
+          period_year: number
+          period_month: number
+          gl_account_group: string
+          gl_balance: number | null
+          subledger_balance: number | null
+          variance: number | null
+          is_reconciled: boolean
+          reconciled_by: string | null
+          reconciled_at: string | null
+          notes: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          entity_id: string
+          period_year: number
+          period_month: number
+          gl_account_group: string
+          gl_balance?: number | null
+          subledger_balance?: number | null
+          variance?: number | null
+          is_reconciled?: boolean
+          reconciled_by?: string | null
+          reconciled_at?: string | null
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          entity_id?: string
+          period_year?: number
+          period_month?: number
+          gl_account_group?: string
+          gl_balance?: number | null
+          subledger_balance?: number | null
+          variance?: number | null
+          is_reconciled?: boolean
+          reconciled_by?: string | null
+          reconciled_at?: string | null
           notes?: string | null
           created_at?: string
           updated_at?: string
