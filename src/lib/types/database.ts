@@ -191,3 +191,101 @@ export type AgreementType = "commercial" | "freelancer";
 export type RebateCustomerStatus = "active" | "inactive";
 
 export type EquipmentType = "pro_supplies" | "vehicle" | "grip_lighting" | "studio";
+
+// -- Insurance Module --
+
+export type InsurancePolicyType =
+  | "auto_liability"
+  | "auto_physical_damage"
+  | "general_liability"
+  | "property"
+  | "excess_liability"
+  | "pollution"
+  | "management_liability"
+  | "workers_comp"
+  | "umbrella"
+  | "inland_marine"
+  | "cyber"
+  | "epli"
+  | "crime"
+  | "fiduciary"
+  | "side_a_dic"
+  | "renters_liability"
+  | "garagekeepers"
+  | "hired_non_owned_auto"
+  | "package"
+  | "other";
+
+export type InsurancePolicyStatus =
+  | "active"
+  | "expired"
+  | "cancelled"
+  | "non_renewed"
+  | "pending_renewal"
+  | "draft";
+
+export type InsurancePaymentTerms =
+  | "annual"
+  | "monthly_reporting"
+  | "installment"
+  | "daily_rate"
+  | "other";
+
+export type InsuranceCoverageForm = "occurrence" | "claims_made" | "other";
+
+export type InsurancePaymentStatus =
+  | "scheduled"
+  | "paid"
+  | "overdue"
+  | "partial"
+  | "waived";
+
+export type InsuranceLocationType =
+  | "operating"
+  | "subleased"
+  | "parking"
+  | "storage"
+  | "other";
+
+export type InsuranceExposureType =
+  | "vehicle_count"
+  | "square_footage"
+  | "payroll"
+  | "revenue"
+  | "daily_rate"
+  | "headcount"
+  | "other";
+
+export type InsuranceAllocationMethod =
+  | "fixed_amount"
+  | "percentage"
+  | "pro_rata_revenue"
+  | "pro_rata_headcount"
+  | "pro_rata_sqft"
+  | "manual";
+
+export type InsuranceClaimStatus =
+  | "open"
+  | "closed"
+  | "reopened"
+  | "denied"
+  | "reserved"
+  | "subrogation";
+
+export type InsuranceDocumentType =
+  | "proposal"
+  | "policy"
+  | "endorsement"
+  | "certificate"
+  | "invoice"
+  | "claim"
+  | "renewal"
+  | "binder"
+  | "dec_page"
+  | "other";
+
+export type InsuranceSubjectivityStatus =
+  | "pending"
+  | "completed"
+  | "waived"
+  | "overdue";

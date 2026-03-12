@@ -315,7 +315,7 @@ export function calculateCustomerRebates(
     const excludedItems: ExcludedItemDetail[] = [];
     const items = invoiceItemsMap.get(inv.id) || [];
     for (const item of items) {
-      if (item.i_code && excludedICodes.has(item.i_code)) {
+      if (item.i_code && excludedICodes.has(item.i_code.trim())) {
         const amt = Number(item.extended) || 0;
         excludedTotal += amt;
         excludedItems.push({

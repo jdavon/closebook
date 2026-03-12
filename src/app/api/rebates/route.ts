@@ -133,7 +133,7 @@ export async function POST(request: Request) {
           (ic: { i_code: string; description?: string }) => ({
             entity_id: entityId,
             rebate_customer_id: customerId,
-            i_code: ic.i_code,
+            i_code: ic.i_code.trim(),
             description: ic.description || null,
           }),
         );
@@ -168,7 +168,7 @@ export async function POST(request: Request) {
           (ic: { i_code: string; description?: string }) => ({
             entity_id: entityId,
             rebate_customer_id: null,
-            i_code: ic.i_code,
+            i_code: ic.i_code.trim(),
             description: ic.description || null,
           }),
         );

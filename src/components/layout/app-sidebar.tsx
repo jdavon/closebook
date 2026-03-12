@@ -28,6 +28,7 @@ import {
   HandCoins,
   ArrowLeftRight,
   TrendingUp,
+  Shield,
   ChevronRight,
 } from "lucide-react";
 import {
@@ -113,6 +114,11 @@ export function AppSidebar({ user, entityId: entityIdProp }: AppSidebarProps) {
           title: "Revenue Projection",
           url: `${entityPrefix}/revenue-projection`,
           icon: TrendingUp,
+        },
+        {
+          title: "Insurance",
+          url: `${entityPrefix}/insurance`,
+          icon: Shield,
         },
       ]
     : [];

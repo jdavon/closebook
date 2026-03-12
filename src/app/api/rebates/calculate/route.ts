@@ -143,7 +143,7 @@ async function calculateForCustomer(
       .eq("entity_id", entityId)
       .is("rebate_customer_id", null);
     for (const ic of globalCodes || []) {
-      excludedICodes.add(ic.i_code);
+      excludedICodes.add(ic.i_code.trim());
     }
   }
 
@@ -153,8 +153,14 @@ async function calculateForCustomer(
     .select("i_code")
     .eq("rebate_customer_id", customerId);
   for (const ic of customerCodes || []) {
-    excludedICodes.add(ic.i_code);
+    excludedICodes.add(ic.i_code.trim());
   }
+
+  // Reset all item exclusion flags before recalculating
+  await admin
+    .from("rebate_invoice_items")
+    .update({ is_excluded: false })
+    .in("rebate_invoice_id", invoiceIds);
 
   // Build config
   const config: RebateCustomerConfig = {

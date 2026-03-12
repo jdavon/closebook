@@ -145,6 +145,7 @@ export default function CustomerDetailPage() {
     Record<string, InvoiceItem[]>
   >({});
   const [selectedQuarter, setSelectedQuarter] = useState("all");
+  const [excludedICodes, setExcludedICodes] = useState<Set<string>>(new Set());
 
   const loadData = useCallback(async () => {
     try {
@@ -179,6 +180,27 @@ export default function CustomerDetailPage() {
         .eq("rebate_customer_id", customerId)
         .order("year", { ascending: true });
       setQuarterlySummaries(qtrData || []);
+
+      // Load excluded I-codes (global + customer-specific) for client-side highlighting
+      const codes = new Set<string>();
+      if (cust?.use_global_exclusions) {
+        const { data: globalCodes } = await supabase
+          .from("rebate_excluded_icodes")
+          .select("i_code")
+          .eq("entity_id", entityId)
+          .is("rebate_customer_id", null);
+        for (const ic of globalCodes || []) {
+          codes.add(ic.i_code.trim());
+        }
+      }
+      const { data: customerCodes } = await supabase
+        .from("rebate_excluded_icodes")
+        .select("i_code")
+        .eq("rebate_customer_id", customerId);
+      for (const ic of customerCodes || []) {
+        codes.add(ic.i_code.trim());
+      }
+      setExcludedICodes(codes);
     } finally {
       setLoading(false);
     }
@@ -757,39 +779,46 @@ export default function CustomerDetailPage() {
                                           </TableRow>
                                         </TableHeader>
                                         <TableBody>
-                                          {invoiceItems[inv.id].map((item) => (
-                                            <TableRow
-                                              key={item.id}
-                                              className={
-                                                item.is_excluded
-                                                  ? "bg-red-50 dark:bg-red-950/20"
-                                                  : ""
-                                              }
-                                            >
-                                              <TableCell className="font-mono text-xs">
-                                                {item.i_code || "—"}
-                                              </TableCell>
-                                              <TableCell className="text-sm">
-                                                {item.description || "—"}
-                                              </TableCell>
-                                              <TableCell className="text-right">
-                                                {item.quantity}
-                                              </TableCell>
-                                              <TableCell className="text-right">
-                                                {formatCurrency(item.extended)}
-                                              </TableCell>
-                                              <TableCell>
-                                                {item.is_excluded && (
-                                                  <Badge
-                                                    variant="destructive"
-                                                    className="text-xs"
-                                                  >
-                                                    Excluded
-                                                  </Badge>
-                                                )}
-                                              </TableCell>
-                                            </TableRow>
-                                          ))}
+                                          {invoiceItems[inv.id].map((item) => {
+                                            const isExcludedByICode =
+                                              item.i_code != null &&
+                                              excludedICodes.has(item.i_code.trim());
+                                            const isExcluded =
+                                              item.is_excluded || isExcludedByICode;
+                                            return (
+                                              <TableRow
+                                                key={item.id}
+                                                className={
+                                                  isExcluded
+                                                    ? "bg-red-50 dark:bg-red-950/20"
+                                                    : ""
+                                                }
+                                              >
+                                                <TableCell className="font-mono text-xs">
+                                                  {item.i_code || "—"}
+                                                </TableCell>
+                                                <TableCell className="text-sm">
+                                                  {item.description || "—"}
+                                                </TableCell>
+                                                <TableCell className="text-right">
+                                                  {item.quantity}
+                                                </TableCell>
+                                                <TableCell className="text-right">
+                                                  {formatCurrency(item.extended)}
+                                                </TableCell>
+                                                <TableCell>
+                                                  {isExcluded && (
+                                                    <Badge
+                                                      variant="destructive"
+                                                      className="text-xs"
+                                                    >
+                                                      Excluded
+                                                    </Badge>
+                                                  )}
+                                                </TableCell>
+                                              </TableRow>
+                                            );
+                                          })}
                                         </TableBody>
                                       </Table>
                                     </div>
