@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -27,6 +27,7 @@ import {
   XCircle,
   AlertCircle,
   Clock,
+  Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -202,10 +203,12 @@ const subjectivityStatusColors: Record<string, string> = {
 
 export default function InsurancePolicyDetailPage() {
   const params = useParams();
+  const router = useRouter();
   const entityId = params.entityId as string;
   const policyId = params.policyId as string;
 
   const [loading, setLoading] = useState(true);
+  const [deleting, setDeleting] = useState(false);
   const [policy, setPolicy] = useState<PolicyData | null>(null);
   const [coverages, setCoverages] = useState<Coverage[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
@@ -259,6 +262,29 @@ export default function InsurancePolicyDetailPage() {
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  const handleDeletePolicy = async () => {
+    if (!confirm("Are you sure you want to delete this policy? This cannot be undone.")) return;
+    setDeleting(true);
+    try {
+      const res = await fetch("/api/insurance", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "delete_policy", policyId }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        toast.error(data.error || "Failed to delete policy");
+        return;
+      }
+      toast.success("Policy deleted");
+      router.push(`/${entityId}/insurance`);
+    } catch {
+      toast.error("Failed to delete policy");
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   // ─── Loading / Not Found ────────────────────────────────────────────────
 
@@ -864,6 +890,20 @@ export default function InsurancePolicyDetailPage() {
           <Button variant="outline" size="sm" onClick={() => loadData()}>
             <RefreshCw className="mr-2 h-4 w-4" />
             Refresh
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="text-red-600 hover:text-red-700 hover:bg-red-50"
+            onClick={handleDeletePolicy}
+            disabled={deleting}
+          >
+            {deleting ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <Trash2 className="mr-2 h-4 w-4" />
+            )}
+            Delete
           </Button>
         </div>
       </div>
