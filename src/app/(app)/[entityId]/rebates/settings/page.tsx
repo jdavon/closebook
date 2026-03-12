@@ -11,10 +11,17 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { ArrowLeft, Plus, X, Loader2, Save } from "lucide-react";
+import { ArrowLeft, Plus, Trash2, Loader2, Save } from "lucide-react";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { toast } from "sonner";
 
 interface ExcludedICode {
@@ -147,36 +154,6 @@ export default function RebateSettingsPage() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          {/* Current I-codes as tags */}
-          <div className="flex flex-wrap gap-2">
-            {globalICodes.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                No excluded I-Codes configured.
-              </p>
-            ) : (
-              globalICodes.map((ic) => (
-                <Badge
-                  key={ic.i_code}
-                  variant="secondary"
-                  className="px-3 py-1 text-sm"
-                >
-                  <span className="font-mono">{ic.i_code}</span>
-                  {ic.description && (
-                    <span className="text-muted-foreground ml-1">
-                      ({ic.description})
-                    </span>
-                  )}
-                  <button
-                    className="ml-2 hover:text-destructive"
-                    onClick={() => removeICode(ic.i_code)}
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                </Badge>
-              ))
-            )}
-          </div>
-
           {/* Add new I-code */}
           <div className="flex gap-2 items-end">
             <div className="space-y-1">
@@ -185,7 +162,7 @@ export default function RebateSettingsPage() {
                 value={newICode}
                 onChange={(e) => setNewICode(e.target.value)}
                 placeholder="e.g., 100305"
-                className="w-32"
+                className="w-40 font-mono"
                 onKeyDown={(e) => e.key === "Enter" && addICode()}
               />
             </div>
@@ -205,7 +182,7 @@ export default function RebateSettingsPage() {
           </div>
 
           {/* Save button */}
-          <div className="pt-2">
+          <div>
             <Button onClick={handleSave} disabled={saving}>
               {saving ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -215,6 +192,47 @@ export default function RebateSettingsPage() {
               Save Excluded I-Codes
             </Button>
           </div>
+
+          {/* I-Codes table */}
+          {globalICodes.length === 0 ? (
+            <p className="text-sm text-muted-foreground pt-2">
+              No excluded I-Codes configured. Add one above to get started.
+            </p>
+          ) : (
+            <div className="border rounded-md">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-[100px]">I-Code</TableHead>
+                    <TableHead>Description</TableHead>
+                    <TableHead className="w-[60px]" />
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {globalICodes.map((ic) => (
+                    <TableRow key={ic.i_code}>
+                      <TableCell className="font-mono font-medium">
+                        {ic.i_code}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {ic.description || "—"}
+                      </TableCell>
+                      <TableCell>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                          onClick={() => removeICode(ic.i_code)}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>
