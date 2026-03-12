@@ -4,7 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import Anthropic from "@anthropic-ai/sdk";
 
 // Allow up to 60 seconds for AI extraction (default is 10-15s on Vercel)
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 /**
  * POST /api/insurance/extract
