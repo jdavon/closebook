@@ -69,6 +69,14 @@ export async function POST(request: Request) {
         );
       }
 
+      // Freelancer customers don't have an RW customer ID to sync
+      if (customer.agreement_type === "freelancer") {
+        return NextResponse.json(
+          { error: "Freelancer agreements use manual invoice entry, not sync" },
+          { status: 400 },
+        );
+      }
+
       try {
         const stats = await syncCustomerInvoices(admin, entityId, customer);
         return NextResponse.json({ success: true, ...stats });
@@ -81,11 +89,13 @@ export async function POST(request: Request) {
     case "sync_all": {
       const { entityId } = body;
 
+      // Only sync commercial customers (freelancers add invoices manually)
       const { data: customers } = await admin
         .from("rebate_customers")
         .select("*")
         .eq("entity_id", entityId)
-        .eq("status", "active");
+        .eq("status", "active")
+        .eq("agreement_type", "commercial");
 
       if (!customers || customers.length === 0) {
         return NextResponse.json({
@@ -119,6 +129,159 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: true, results });
     }
 
+    case "add_invoice": {
+      // Manually add a single invoice by invoice number (for freelancer agreements)
+      const { entityId, customerId, invoiceNumber } = body;
+
+      if (!entityId || !customerId || !invoiceNumber) {
+        return NextResponse.json(
+          { error: "entityId, customerId, and invoiceNumber are required" },
+          { status: 400 },
+        );
+      }
+
+      // Load customer
+      const { data: addCust, error: addCustErr } = await admin
+        .from("rebate_customers")
+        .select("*")
+        .eq("id", customerId)
+        .single();
+
+      if (addCustErr || !addCust) {
+        return NextResponse.json({ error: "Customer not found" }, { status: 404 });
+      }
+
+      try {
+        const { RentalWorksClient } = await import("@/lib/rentalworks/client");
+        const rw = new RentalWorksClient(process.env.RW_BASE_URL!);
+        await rw.ensureAuth(process.env.RW_USERNAME!, process.env.RW_PASSWORD!);
+
+        // Search for the invoice by number
+        const invoiceResult = await rw.browse<RWInvoice>("invoice", {
+          pagesize: 10,
+          searchfields: ["InvoiceNumber"],
+          searchfieldoperators: ["="],
+          searchfieldvalues: [invoiceNumber.trim()],
+        });
+
+        if (invoiceResult.rows.length === 0) {
+          return NextResponse.json(
+            { error: `Invoice "${invoiceNumber}" not found in RentalWorks` },
+            { status: 404 },
+          );
+        }
+
+        const inv = invoiceResult.rows[0];
+
+        if ((inv.Status || "").toUpperCase() !== "CLOSED") {
+          return NextResponse.json(
+            { error: `Invoice "${invoiceNumber}" is not CLOSED (status: ${inv.Status})` },
+            { status: 400 },
+          );
+        }
+
+        // Check if invoice already exists for this customer
+        const { data: existing } = await admin
+          .from("rebate_invoices")
+          .select("id")
+          .eq("rebate_customer_id", customerId)
+          .eq("rw_invoice_id", inv.InvoiceId);
+
+        if (existing && existing.length > 0) {
+          return NextResponse.json(
+            { error: `Invoice "${invoiceNumber}" has already been added` },
+            { status: 400 },
+          );
+        }
+
+        const equipType = classifyEquipmentType(
+          inv.OrderDescription || inv.InvoiceDescription || "",
+        );
+        const quarter = getQuarter(inv.BillingEndDate || inv.InvoiceDate);
+
+        const invoiceRow = {
+          entity_id: entityId,
+          rebate_customer_id: customerId,
+          rw_invoice_id: inv.InvoiceId,
+          invoice_number: inv.InvoiceNumber,
+          invoice_date: inv.InvoiceDate || null,
+          billing_start_date: inv.BillingStartDate || null,
+          billing_end_date: inv.BillingEndDate || null,
+          status: inv.Status,
+          customer_name: inv.Customer,
+          deal: inv.Deal || null,
+          order_number: inv.OrderNumber || null,
+          order_description: inv.OrderDescription || inv.InvoiceDescription || null,
+          purchase_order_number: inv.PurchaseOrderNumber || null,
+          list_total: Number(inv.InvoiceListTotal) || 0,
+          gross_total: Number(inv.InvoiceGrossTotal) || 0,
+          sub_total: Number(inv.InvoiceSubTotal) || 0,
+          tax_amount: Number(inv.InvoiceTax) || 0,
+          discount_amount: Number(inv.InvoiceDiscountTotal) || 0,
+          equipment_type: equipType,
+          quarter,
+          synced_at: new Date().toISOString(),
+        };
+
+        const { data: upserted, error: upsertErr } = await admin
+          .from("rebate_invoices")
+          .insert(invoiceRow)
+          .select("id")
+          .single();
+
+        if (upsertErr || !upserted) {
+          return NextResponse.json(
+            { error: upsertErr?.message || "Failed to save invoice" },
+            { status: 500 },
+          );
+        }
+
+        // Fetch and store invoice items
+        let itemsSynced = 0;
+        try {
+          const itemResult = await rw.browse<RWInvoiceItem>("invoiceitem", {
+            pagesize: 500,
+            uniqueids: { InvoiceId: inv.InvoiceId },
+          });
+
+          if (itemResult.rows.length > 0) {
+            const itemRows = itemResult.rows.map((item) => ({
+              rebate_invoice_id: upserted.id,
+              rw_item_id: item.InvoiceItemId || null,
+              i_code: item.ICode || null,
+              description: item.Description || null,
+              quantity: Number(item.Quantity) || 0,
+              extended: Number(item.Extended) || 0,
+              is_excluded: false,
+              record_type: item.AvailableFor || item.RecType || null,
+            }));
+
+            await admin.from("rebate_invoice_items").insert(itemRows);
+            itemsSynced = itemRows.length;
+          }
+        } catch {
+          // Continue even if item fetch fails
+        }
+
+        return NextResponse.json({
+          success: true,
+          invoice: {
+            id: upserted.id,
+            invoice_number: inv.InvoiceNumber,
+            invoice_date: inv.InvoiceDate,
+            customer_name: inv.Customer,
+            list_total: Number(inv.InvoiceListTotal) || 0,
+            sub_total: Number(inv.InvoiceSubTotal) || 0,
+            equipment_type: equipType,
+          },
+          itemsSynced,
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Failed to add invoice";
+        return NextResponse.json({ error: msg }, { status: 500 });
+      }
+    }
+
     case "fetch_active_orders": {
       const { customerId } = body;
 
@@ -134,6 +297,10 @@ export async function POST(request: Request) {
           { error: "Customer not found" },
           { status: 404 },
         );
+      }
+
+      if (!customer.rw_customer_id) {
+        return NextResponse.json({ success: true, orders: [] });
       }
 
       try {
@@ -209,10 +376,14 @@ async function syncCustomerInvoices(
   entityId: string,
   customer: {
     id: string;
-    rw_customer_id: string;
+    rw_customer_id: string | null;
     customer_name: string;
   },
 ) {
+  if (!customer.rw_customer_id) {
+    throw new Error("Cannot sync invoices for a customer without an RW Customer ID");
+  }
+
   // Import RentalWorks client
   const { RentalWorksClient } = await import(
     "@/lib/rentalworks/client"

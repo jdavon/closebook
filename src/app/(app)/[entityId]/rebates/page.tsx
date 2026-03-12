@@ -57,7 +57,7 @@ import { getCurrentQuarter } from "@/lib/utils/rebate-calculations";
 interface RebateCustomer {
   id: string;
   customer_name: string;
-  rw_customer_id: string;
+  rw_customer_id: string | null;
   rw_customer_number: string | null;
   agreement_type: string;
   status: string;
@@ -384,7 +384,7 @@ export default function RebateTrackerPage() {
   const openEditDialog = (c: RebateCustomer) => {
     setEditingCustomer(c);
     setFormName(c.customer_name);
-    setFormRwId(c.rw_customer_id);
+    setFormRwId(c.rw_customer_id || "");
     setFormRwNumber(c.rw_customer_number || "");
     setFormType(c.agreement_type);
     setFormTaxRate(String(c.tax_rate));
@@ -398,8 +398,12 @@ export default function RebateTrackerPage() {
   };
 
   const handleSaveCustomer = async () => {
-    if (!formName || !formRwId) {
-      toast.error("Customer name and RW Customer ID are required");
+    if (!formName) {
+      toast.error("Customer name is required");
+      return;
+    }
+    if (formType !== "freelancer" && !formRwId) {
+      toast.error("RW Customer ID is required for commercial agreements");
       return;
     }
     if (formTiers.length === 0) {
@@ -418,8 +422,8 @@ export default function RebateTrackerPage() {
           customer: {
             id: editingCustomer?.id,
             customer_name: formName,
-            rw_customer_id: formRwId,
-            rw_customer_number: formRwNumber || null,
+            rw_customer_id: formType === "freelancer" ? null : formRwId,
+            rw_customer_number: formType === "freelancer" ? null : (formRwNumber || null),
             agreement_type: formType,
             tax_rate: parseFloat(formTaxRate) || 9.75,
             max_discount_percent: formMaxDiscount
@@ -442,8 +446,8 @@ export default function RebateTrackerPage() {
         setDialogOpen(false);
         loadData();
 
-        // Auto-trigger sync for new customers
-        if (!editingCustomer && data.customerId) {
+        // Auto-trigger sync for new commercial customers (freelancers add invoices manually)
+        if (!editingCustomer && data.customerId && formType !== "freelancer") {
           toast.info("Starting initial invoice sync...");
           fetch("/api/rebates/sync", {
             method: "POST",
@@ -714,7 +718,9 @@ export default function RebateTrackerPage() {
                       </div>
                     </TableCell>
                     <TableCell className="text-muted-foreground">
-                      {c.rw_customer_number || c.rw_customer_id}
+                      {c.agreement_type === "freelancer"
+                        ? "N/A"
+                        : c.rw_customer_number || c.rw_customer_id}
                     </TableCell>
                     <TableCell>
                       <Badge
@@ -795,8 +801,8 @@ export default function RebateTrackerPage() {
           </DialogHeader>
 
           <div className="space-y-6">
-            {/* RW Customer Search (only for new) */}
-            {!editingCustomer && (
+            {/* RW Customer Search (only for new commercial customers) */}
+            {!editingCustomer && formType !== "freelancer" && (
               <div className="space-y-2">
                 <Label>Search RentalWorks Customer</Label>
                 <div className="flex gap-2">
@@ -848,25 +854,36 @@ export default function RebateTrackerPage() {
                 <Input
                   value={formName}
                   onChange={(e) => setFormName(e.target.value)}
+                  placeholder={formType === "freelancer" ? "Enter customer name" : ""}
                 />
               </div>
-              <div className="space-y-2">
-                <Label>RW Customer ID</Label>
-                <Input
-                  value={formRwId}
-                  onChange={(e) => setFormRwId(e.target.value)}
-                  placeholder="Auto-filled from search"
-                  readOnly={!!formRwNumber}
-                />
-                {formRwNumber && (
-                  <p className="text-xs text-muted-foreground">
-                    Account #: {formRwNumber}
-                  </p>
-                )}
-              </div>
+              {formType !== "freelancer" && (
+                <div className="space-y-2">
+                  <Label>RW Customer ID</Label>
+                  <Input
+                    value={formRwId}
+                    onChange={(e) => setFormRwId(e.target.value)}
+                    placeholder="Auto-filled from search"
+                    readOnly={!!formRwNumber}
+                  />
+                  {formRwNumber && (
+                    <p className="text-xs text-muted-foreground">
+                      Account #: {formRwNumber}
+                    </p>
+                  )}
+                </div>
+              )}
               <div className="space-y-2">
                 <Label>Agreement Type</Label>
-                <Select value={formType} onValueChange={setFormType}>
+                <Select value={formType} onValueChange={(v) => {
+                  setFormType(v);
+                  if (v === "freelancer") {
+                    setFormRwId("");
+                    setFormRwNumber("");
+                    setRwSearchQuery("");
+                    setRwSearchResults([]);
+                  }
+                }}>
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>

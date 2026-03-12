@@ -88,7 +88,7 @@ export async function POST(request: Request) {
       const customerPayload = {
         entity_id: entityId,
         customer_name: customer.customer_name,
-        rw_customer_id: customer.rw_customer_id,
+        rw_customer_id: customer.rw_customer_id || null,
         rw_customer_number: customer.rw_customer_number || null,
         agreement_type: customer.agreement_type,
         status: customer.status || "active",
@@ -290,6 +290,18 @@ export async function POST(request: Request) {
         })
         .eq("id", invoiceId);
       if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+      return NextResponse.json({ success: true });
+    }
+
+    case "delete_invoice": {
+      const { invoiceId } = body;
+      if (!invoiceId) {
+        return NextResponse.json({ error: "invoiceId is required" }, { status: 400 });
+      }
+      // Delete invoice items first (cascade should handle this, but be explicit)
+      await admin.from("rebate_invoice_items").delete().eq("rebate_invoice_id", invoiceId);
+      const { error: delErr } = await admin.from("rebate_invoices").delete().eq("id", invoiceId);
+      if (delErr) return NextResponse.json({ error: delErr.message }, { status: 500 });
       return NextResponse.json({ success: true });
     }
 

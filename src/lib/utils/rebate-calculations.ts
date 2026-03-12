@@ -21,7 +21,7 @@ export interface RebateTier {
 export interface RebateCustomerConfig {
   id: string;
   customer_name: string;
-  rw_customer_id: string;
+  rw_customer_id: string | null;
   agreement_type: "commercial" | "freelancer";
   tax_rate: number;
   max_discount_percent: number | null;

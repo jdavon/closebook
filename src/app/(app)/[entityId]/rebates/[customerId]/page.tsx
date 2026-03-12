@@ -27,6 +27,16 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
   ArrowLeft,
   RefreshCw,
   Calculator,
@@ -36,6 +46,9 @@ import {
   Ban,
   CheckCircle2,
   ClipboardList,
+  Plus,
+  Search,
+  Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
@@ -114,7 +127,7 @@ interface QuarterlySummary {
 interface CustomerData {
   id: string;
   customer_name: string;
-  rw_customer_id: string;
+  rw_customer_id: string | null;
   rw_customer_number: string | null;
   agreement_type: string;
   status: string;
@@ -200,6 +213,11 @@ export default function CustomerDetailPage() {
   const [activeOrders, setActiveOrders] = useState<ActiveOrder[]>([]);
   const [loadingOrders, setLoadingOrders] = useState(false);
   const [ordersLoaded, setOrdersLoaded] = useState(false);
+
+  // Add Invoice dialog (freelancer)
+  const [addInvoiceOpen, setAddInvoiceOpen] = useState(false);
+  const [addInvoiceNumber, setAddInvoiceNumber] = useState("");
+  const [addingInvoice, setAddingInvoice] = useState(false);
 
   const loadData = useCallback(async () => {
     try {
@@ -414,6 +432,64 @@ export default function CustomerDetailPage() {
     }
   };
 
+  const handleAddInvoice = async () => {
+    if (!addInvoiceNumber.trim()) {
+      toast.error("Enter an invoice number");
+      return;
+    }
+    setAddingInvoice(true);
+    try {
+      const res = await fetch("/api/rebates/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "add_invoice",
+          entityId,
+          customerId,
+          invoiceNumber: addInvoiceNumber.trim(),
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success(
+          `Added invoice ${data.invoice.invoice_number} (${data.itemsSynced} items)`,
+        );
+        setAddInvoiceOpen(false);
+        setAddInvoiceNumber("");
+        loadData();
+      } else {
+        toast.error(data.error || "Failed to add invoice");
+      }
+    } catch {
+      toast.error("Failed to add invoice");
+    } finally {
+      setAddingInvoice(false);
+    }
+  };
+
+  const handleDeleteInvoice = async (invoiceId: string, invoiceNumber: string) => {
+    if (!confirm(`Remove invoice ${invoiceNumber} from this agreement?`)) return;
+    try {
+      const res = await fetch("/api/rebates", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "delete_invoice",
+          invoiceId,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success(`Invoice ${invoiceNumber} removed`);
+        loadData();
+      } else {
+        toast.error(data.error || "Failed to delete invoice");
+      }
+    } catch {
+      toast.error("Failed to delete invoice");
+    }
+  };
+
   // Filter invoices by selected quarter
   const filteredInvoices =
     selectedQuarter === "all"
@@ -489,28 +565,38 @@ export default function CustomerDetailPage() {
               >
                 {customer.agreement_type}
               </Badge>
-              <Badge variant="outline" className="text-muted-foreground">
-                {customer.rw_customer_number
-                  ? `#${customer.rw_customer_number}`
-                  : customer.rw_customer_id}
-              </Badge>
+              {customer.rw_customer_number && (
+                <Badge variant="outline" className="text-muted-foreground">
+                  #{customer.rw_customer_number}
+                </Badge>
+              )}
             </div>
           </div>
         </div>
         <div className="flex gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleSync}
-            disabled={syncing}
-          >
-            {syncing ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            ) : (
-              <RefreshCw className="mr-2 h-4 w-4" />
-            )}
-            Sync
-          </Button>
+          {customer.agreement_type === "freelancer" ? (
+            <Button
+              size="sm"
+              onClick={() => setAddInvoiceOpen(true)}
+            >
+              <Plus className="mr-2 h-4 w-4" />
+              Add Invoice
+            </Button>
+          ) : (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleSync}
+              disabled={syncing}
+            >
+              {syncing ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <RefreshCw className="mr-2 h-4 w-4" />
+              )}
+              Sync
+            </Button>
+          )}
           <Button
             variant="outline"
             size="sm"
@@ -785,7 +871,9 @@ export default function CustomerDetailPage() {
             <div className="text-center py-8 text-muted-foreground">
               <p>No invoices found.</p>
               <p className="text-sm mt-1">
-                Click &quot;Sync&quot; to pull invoices from RentalWorks.
+                {customer.agreement_type === "freelancer"
+                  ? 'Click "Add Invoice" to add invoices by invoice number.'
+                  : 'Click "Sync" to pull invoices from RentalWorks.'}
               </p>
             </div>
           ) : (
@@ -861,26 +949,42 @@ export default function CustomerDetailPage() {
                             {formatCurrency(inv.net_rebate)}
                           </TableCell>
                           <TableCell>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-6 w-6 p-0"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleToggleExclusion(inv);
-                              }}
-                              title={
-                                inv.is_manually_excluded
-                                  ? "Include invoice"
-                                  : "Exclude invoice"
-                              }
-                            >
-                              {inv.is_manually_excluded ? (
-                                <CheckCircle2 className="h-4 w-4 text-green-600" />
-                              ) : (
-                                <Ban className="h-4 w-4 text-muted-foreground" />
+                            <div className="flex items-center gap-1">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-6 w-6 p-0"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleToggleExclusion(inv);
+                                }}
+                                title={
+                                  inv.is_manually_excluded
+                                    ? "Include invoice"
+                                    : "Exclude invoice"
+                                }
+                              >
+                                {inv.is_manually_excluded ? (
+                                  <CheckCircle2 className="h-4 w-4 text-green-600" />
+                                ) : (
+                                  <Ban className="h-4 w-4 text-muted-foreground" />
+                                )}
+                              </Button>
+                              {customer.agreement_type === "freelancer" && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-6 w-6 p-0"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleDeleteInvoice(inv.id, inv.invoice_number);
+                                  }}
+                                  title="Remove invoice"
+                                >
+                                  <Trash2 className="h-4 w-4 text-destructive" />
+                                </Button>
                               )}
-                            </Button>
+                            </div>
                           </TableCell>
                         </TableRow>
                       </CollapsibleTrigger>
@@ -1124,32 +1228,43 @@ export default function CustomerDetailPage() {
             <div className="flex items-center gap-2">
               <ClipboardList className="h-5 w-5 text-muted-foreground" />
               <CardTitle>Active Orders</CardTitle>
-              {ordersLoaded && (
+              {ordersLoaded && customer.agreement_type !== "freelancer" && (
                 <Badge variant="outline" className="ml-2">
                   {activeOrders.length}
                 </Badge>
               )}
             </div>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={loadActiveOrders}
-              disabled={loadingOrders}
-            >
-              {loadingOrders ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <RefreshCw className="mr-2 h-4 w-4" />
-              )}
-              {ordersLoaded ? "Refresh" : "Load Orders"}
-            </Button>
+            {customer.agreement_type !== "freelancer" && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={loadActiveOrders}
+                disabled={loadingOrders}
+              >
+                {loadingOrders ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                )}
+                {ordersLoaded ? "Refresh" : "Load Orders"}
+              </Button>
+            )}
           </div>
           <CardDescription>
-            Current open orders from RentalWorks with estimated rebate potential
+            {customer.agreement_type === "freelancer"
+              ? "Active orders are not available for freelancer agreements"
+              : "Current open orders from RentalWorks with estimated rebate potential"}
           </CardDescription>
         </CardHeader>
         <CardContent>
-          {!ordersLoaded ? (
+          {customer.agreement_type === "freelancer" ? (
+            <div className="text-center py-8 text-muted-foreground">
+              <p>Active orders are not available for freelancer agreements.</p>
+              <p className="text-sm mt-1">
+                Freelancer agreements are not linked to a specific RentalWorks customer.
+              </p>
+            </div>
+          ) : !ordersLoaded ? (
             <div className="text-center py-8 text-muted-foreground">
               <p>Click &quot;Load Orders&quot; to fetch active orders from RentalWorks.</p>
             </div>
@@ -1252,6 +1367,56 @@ export default function CustomerDetailPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Add Invoice Dialog (freelancer) */}
+      <Dialog open={addInvoiceOpen} onOpenChange={setAddInvoiceOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Add Invoice</DialogTitle>
+            <DialogDescription>
+              Enter a RentalWorks invoice number to add it to this agreement.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label>Invoice Number</Label>
+              <div className="flex gap-2">
+                <Input
+                  placeholder="e.g. INV-00123"
+                  value={addInvoiceNumber}
+                  onChange={(e) => setAddInvoiceNumber(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleAddInvoice();
+                  }}
+                  disabled={addingInvoice}
+                />
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setAddInvoiceOpen(false);
+                setAddInvoiceNumber("");
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleAddInvoice}
+              disabled={addingInvoice || !addInvoiceNumber.trim()}
+            >
+              {addingInvoice ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Search className="mr-2 h-4 w-4" />
+              )}
+              Find & Add
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
