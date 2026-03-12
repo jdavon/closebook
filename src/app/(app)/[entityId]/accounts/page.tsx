@@ -66,7 +66,7 @@ const CLASSIFICATION_COLORS: Record<AccountClassification, string> = {
 const SCHEDULE_TYPES = [
   { value: "none", label: "None" },
   { value: "prepaid", label: "Prepaid / Amortization" },
-  { value: "fixed_asset", label: "Fixed Asset / Depreciation" },
+  { value: "fixed_asset", label: "Rental Asset / Depreciation" },
   { value: "debt", label: "Debt Schedule" },
   { value: "accrual", label: "Accrual Schedule" },
   { value: "custom", label: "Custom Schedule" },

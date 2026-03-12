@@ -655,8 +655,8 @@ export default function AssetImportWizardPage() {
     const ws = XLSX.utils.aoa_to_sheet([headers, ...dataRows]);
     ws["!cols"] = COLUMNS.map((c) => ({ wch: Math.max(c.label.length + 2, Math.round(c.width / 8)) }));
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Fixed Assets");
-    XLSX.writeFile(wb, "fixed_assets_import_template.xlsx");
+    XLSX.utils.book_append_sheet(wb, ws, "Rental Assets");
+    XLSX.writeFile(wb, "rental_assets_import_template.xlsx");
   }
 
   // ---- Start Blank ----
@@ -878,7 +878,7 @@ export default function AssetImportWizardPage() {
           {step === 2 ? "Back" : "Assets"}
         </Button>
         <div className="flex-1">
-          <h1 className="text-2xl font-semibold tracking-tight">Import Fixed Assets</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Import Rental Assets</h1>
           <p className="text-muted-foreground">
             {step === 1 && "Upload a spreadsheet or start with a blank grid"}
             {step === 2 && "Review and edit your data, then import"}

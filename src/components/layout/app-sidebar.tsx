@@ -156,7 +156,7 @@ export function AppSidebar({ user, entityId: entityIdProp }: AppSidebarProps) {
           icon: TableProperties,
         },
         {
-          title: "Fixed Assets",
+          title: "Rental Assets",
           url: `${entityPrefix}/assets`,
           icon: Car,
         },

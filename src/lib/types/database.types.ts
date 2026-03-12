@@ -4049,6 +4049,57 @@ export type Database = {
         }
         Relationships: []
       }
+      asset_reconciliations: {
+        Row: {
+          id: string
+          entity_id: string
+          period_year: number
+          period_month: number
+          gl_account_group: string
+          gl_balance: number | null
+          subledger_balance: number | null
+          variance: number | null
+          is_reconciled: boolean
+          reconciled_by: string | null
+          reconciled_at: string | null
+          notes: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          entity_id: string
+          period_year: number
+          period_month: number
+          gl_account_group: string
+          gl_balance?: number | null
+          subledger_balance?: number | null
+          variance?: number | null
+          is_reconciled?: boolean
+          reconciled_by?: string | null
+          reconciled_at?: string | null
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          entity_id?: string
+          period_year?: number
+          period_month?: number
+          gl_account_group?: string
+          gl_balance?: number | null
+          subledger_balance?: number | null
+          variance?: number | null
+          is_reconciled?: boolean
+          reconciled_by?: string | null
+          reconciled_at?: string | null
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never

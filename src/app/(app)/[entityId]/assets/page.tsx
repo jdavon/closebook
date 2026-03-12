@@ -37,6 +37,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Plus, ArrowRight, Car, Search, Upload, Trash2 } from "lucide-react";
 import { formatCurrency } from "@/lib/utils/dates";
 import {
@@ -46,6 +47,8 @@ import {
   REPORTING_GROUPS,
 } from "@/lib/utils/vehicle-classification";
 import type { VehicleClass } from "@/lib/types/database";
+import { ReconciliationTab } from "./reconciliation-tab";
+import { RollForwardTab } from "./roll-forward-tab";
 
 interface FixedAsset {
   id: string;
@@ -197,7 +200,7 @@ export default function AssetsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Fixed Assets</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Rental Assets</h1>
           <p className="text-muted-foreground">
             Vehicle asset register with book and tax basis tracking
           </p>
@@ -226,6 +229,15 @@ export default function AssetsPage() {
           </Link>
         </div>
       </div>
+
+      <Tabs defaultValue="register" className="space-y-6">
+        <TabsList>
+          <TabsTrigger value="register">Register</TabsTrigger>
+          <TabsTrigger value="reconciliation">Reconciliation</TabsTrigger>
+          <TabsTrigger value="roll-forward">Roll-Forward</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="register" className="space-y-6">
 
       {/* Summary Cards */}
       <div className="grid grid-cols-4 gap-4">
@@ -326,7 +338,7 @@ export default function AssetsPage() {
                 masterTypeFilter !== "all" ||
                 reportingGroupFilter !== "all"
                   ? "No assets match your current filters."
-                  : "Add your first vehicle to start tracking fixed assets."}
+                  : "Add your first vehicle to start tracking rental assets."}
               </p>
               {!searchQuery &&
                 statusFilter === "active" &&
@@ -440,6 +452,17 @@ export default function AssetsPage() {
           )}
         </CardContent>
       </Card>
+
+        </TabsContent>
+
+        <TabsContent value="reconciliation">
+          <ReconciliationTab entityId={entityId} />
+        </TabsContent>
+
+        <TabsContent value="roll-forward">
+          <RollForwardTab entityId={entityId} />
+        </TabsContent>
+      </Tabs>
 
       <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
         <AlertDialogContent>
