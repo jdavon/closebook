@@ -34,6 +34,7 @@ interface RWInvoiceItem {
   Description: string;
   Quantity: string;
   Extended: string;
+  RecType: string;
 }
 
 export async function POST(request: Request) {
@@ -228,6 +229,7 @@ async function syncCustomerInvoices(
           quantity: Number(item.Quantity) || 0,
           extended: Number(item.Extended) || 0,
           is_excluded: false,
+          record_type: item.RecType || null,
         }));
 
         await admin.from("rebate_invoice_items").insert(itemRows);

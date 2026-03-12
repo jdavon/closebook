@@ -3271,6 +3271,7 @@ export type Database = {
           quantity: number | null
           extended: number | null
           is_excluded: boolean
+          record_type: string | null
           created_at: string
         }
         Insert: {
@@ -3282,6 +3283,7 @@ export type Database = {
           quantity?: number | null
           extended?: number | null
           is_excluded?: boolean
+          record_type?: string | null
           created_at?: string
         }
         Update: {
@@ -3293,6 +3295,7 @@ export type Database = {
           quantity?: number | null
           extended?: number | null
           is_excluded?: boolean
+          record_type?: string | null
           created_at?: string
         }
         Relationships: [
