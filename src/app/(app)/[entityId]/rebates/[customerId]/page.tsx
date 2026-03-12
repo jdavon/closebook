@@ -60,6 +60,7 @@ interface RebateInvoice {
   tax_amount: number;
   discount_amount: number;
   excluded_total: number | null;
+  taxable_sales: number | null;
   before_discount: number | null;
   discount_percent: number | null;
   final_amount: number | null;
@@ -753,178 +754,221 @@ export default function CustomerDetailPage() {
                         {expandedInvoices.has(inv.id) ? (
                           <TableRow className="bg-muted/30">
                             <TableCell colSpan={12}>
-                              <div className="p-3 space-y-3">
-                                {/* Invoice details */}
-                                <div className="grid grid-cols-4 gap-4 text-sm">
-                                  <div>
-                                    <span className="text-muted-foreground">
-                                      Tier:{" "}
-                                    </span>
-                                    {inv.tier_label || "N/A"}
+                              <div className="p-3 space-y-4">
+                                {/* Calculation Breakdown + Meta */}
+                                <div className="flex gap-6">
+                                  {/* Calculation Breakdown Table */}
+                                  <div className="w-80 shrink-0">
+                                    <h4 className="text-sm font-medium mb-2">Calculation Breakdown</h4>
+                                    <div className="border rounded-md overflow-hidden text-sm">
+                                      {(() => {
+                                        const isCommercial = customer.agreement_type === "commercial";
+                                        const rows: { label: string; value: string; highlight?: "red" | "yellow" | "green" }[] = isCommercial
+                                          ? [
+                                              { label: "Gross Invoice Total", value: formatCurrency(inv.list_total) },
+                                              { label: "Excluded", value: formatCurrency(inv.excluded_total), highlight: "red" },
+                                              { label: "Tax", value: formatCurrency(inv.tax_amount) },
+                                              { label: "Taxable Sales", value: formatCurrency(inv.taxable_sales) },
+                                              { label: "Before Discount", value: formatCurrency(inv.before_discount), highlight: "yellow" },
+                                              { label: "Discount", value: formatCurrency(inv.discount_amount) },
+                                              { label: "Discount %", value: formatPct(inv.discount_percent) },
+                                              { label: "Final Amount", value: formatCurrency(inv.final_amount) },
+                                              { label: "Remaining Rebate", value: formatPct(inv.remaining_rebate_pct) },
+                                              { label: "Net Rebate", value: formatCurrency(inv.net_rebate), highlight: "green" },
+                                            ]
+                                          : [
+                                              { label: "List Total", value: formatCurrency(inv.list_total) },
+                                              { label: "Excluded", value: formatCurrency(inv.excluded_total), highlight: "red" },
+                                              { label: "Sub Total", value: formatCurrency(inv.sub_total) },
+                                              { label: "Before Discount", value: formatCurrency(inv.before_discount), highlight: "yellow" },
+                                              { label: "Discount", value: formatCurrency(inv.discount_amount) },
+                                              { label: "Discount %", value: formatPct(inv.discount_percent) },
+                                              { label: "Final Amount", value: formatCurrency(inv.final_amount) },
+                                              { label: "Remaining Rebate", value: formatPct(inv.remaining_rebate_pct) },
+                                              { label: "Net Rebate", value: formatCurrency(inv.net_rebate), highlight: "green" },
+                                            ];
+
+                                        return rows.map((row, idx) => (
+                                          <div
+                                            key={idx}
+                                            className={`flex items-center justify-between px-3 py-1.5 border-b last:border-b-0 ${
+                                              row.highlight === "red"
+                                                ? "bg-red-100 dark:bg-red-950/30 text-red-900 dark:text-red-200"
+                                                : row.highlight === "yellow"
+                                                  ? "bg-yellow-100 dark:bg-yellow-950/30 text-yellow-900 dark:text-yellow-200"
+                                                  : row.highlight === "green"
+                                                    ? "bg-green-100 dark:bg-green-950/30 text-green-900 dark:text-green-200 font-semibold"
+                                                    : ""
+                                            }`}
+                                          >
+                                            <span>{row.label}</span>
+                                            <span className="font-mono tabular-nums">{row.value}</span>
+                                          </div>
+                                        ));
+                                      })()}
+                                    </div>
                                   </div>
-                                  <div>
-                                    <span className="text-muted-foreground">
-                                      Rebate Rate:{" "}
-                                    </span>
-                                    {formatPct(inv.rebate_rate)}
-                                  </div>
-                                  <div>
-                                    <span className="text-muted-foreground">
-                                      Excluded Total:{" "}
-                                    </span>
-                                    {formatCurrency(inv.excluded_total)}
-                                  </div>
-                                  <div>
-                                    <span className="text-muted-foreground">
-                                      Cumulative:{" "}
-                                    </span>
-                                    Rev {formatCurrency(inv.cumulative_revenue)} / Reb{" "}
-                                    {formatCurrency(inv.cumulative_rebate)}
+
+                                  {/* Invoice Meta */}
+                                  <div className="flex-1 space-y-3 text-sm">
+                                    <div className="grid grid-cols-2 gap-x-8 gap-y-1">
+                                      <div>
+                                        <span className="text-muted-foreground">Tier: </span>
+                                        {inv.tier_label || "N/A"}
+                                      </div>
+                                      <div>
+                                        <span className="text-muted-foreground">Rebate Rate: </span>
+                                        {formatPct(inv.rebate_rate)}
+                                      </div>
+                                      <div>
+                                        <span className="text-muted-foreground">Cumulative Revenue: </span>
+                                        {formatCurrency(inv.cumulative_revenue)}
+                                      </div>
+                                      <div>
+                                        <span className="text-muted-foreground">Cumulative Rebate: </span>
+                                        {formatCurrency(inv.cumulative_rebate)}
+                                      </div>
+                                    </div>
+
+                                    {/* Line Items by Category */}
+                                    {invoiceItems[inv.id] &&
+                                      invoiceItems[inv.id].length > 0 && (() => {
+                                        const grouped = groupItemsByCategory(invoiceItems[inv.id]);
+                                        const orderedKeys = [
+                                          ...RECORD_TYPE_CATEGORIES.map((c) => c.key).filter((k) => grouped[k]),
+                                          ...Object.keys(grouped).filter(
+                                            (k) => !RECORD_TYPE_CATEGORIES.some((c) => c.key === k),
+                                          ),
+                                        ];
+
+                                        return (
+                                          <div className="space-y-1">
+                                            <h4 className="text-sm font-medium mb-2">Line Items</h4>
+                                            {orderedKeys.map((catKey) => {
+                                              const items = grouped[catKey];
+                                              const catConfig = RECORD_TYPE_CATEGORIES.find((c) => c.key === catKey);
+                                              const label = catConfig?.label || "Other";
+                                              const colorClass = catConfig?.color || "text-muted-foreground";
+                                              const expandKey = `${inv.id}:${catKey}`;
+                                              const isExpanded = expandedCategories.has(expandKey);
+
+                                              const catTotal = items.reduce((s, it) => s + (it.extended || 0), 0);
+                                              const excludedItems = items.filter((it) => {
+                                                const byICode = it.i_code != null && excludedICodes.has(it.i_code.trim());
+                                                return it.is_excluded || byICode;
+                                              });
+                                              const excludedTotal = excludedItems.reduce(
+                                                (s, it) => s + (it.extended || 0),
+                                                0,
+                                              );
+
+                                              return (
+                                                <div key={catKey} className="border rounded-md">
+                                                  <button
+                                                    type="button"
+                                                    className="flex items-center justify-between w-full px-3 py-2 text-sm hover:bg-muted/50 transition-colors"
+                                                    onClick={() => {
+                                                      setExpandedCategories((prev) => {
+                                                        const next = new Set(prev);
+                                                        if (next.has(expandKey)) next.delete(expandKey);
+                                                        else next.add(expandKey);
+                                                        return next;
+                                                      });
+                                                    }}
+                                                  >
+                                                    <div className="flex items-center gap-2">
+                                                      {isExpanded ? (
+                                                        <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+                                                      ) : (
+                                                        <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+                                                      )}
+                                                      <span className={`font-medium ${colorClass}`}>
+                                                        {label}
+                                                      </span>
+                                                      <span className="text-muted-foreground">
+                                                        ({items.length} item{items.length !== 1 ? "s" : ""})
+                                                      </span>
+                                                    </div>
+                                                    <div className="flex items-center gap-4 text-xs">
+                                                      {excludedTotal > 0 && (
+                                                        <span className="text-red-600 dark:text-red-400 font-medium">
+                                                          Excluded: {formatCurrency(excludedTotal)}
+                                                        </span>
+                                                      )}
+                                                      <span className="font-medium">
+                                                        {formatCurrency(catTotal)}
+                                                      </span>
+                                                    </div>
+                                                  </button>
+
+                                                  {isExpanded && (
+                                                    <div className="border-t">
+                                                      <Table>
+                                                        <TableHeader>
+                                                          <TableRow>
+                                                            <TableHead>I-Code</TableHead>
+                                                            <TableHead>Description</TableHead>
+                                                            <TableHead className="text-right">Qty</TableHead>
+                                                            <TableHead className="text-right">Extended</TableHead>
+                                                            <TableHead>Status</TableHead>
+                                                          </TableRow>
+                                                        </TableHeader>
+                                                        <TableBody>
+                                                          {[...excludedItems, ...items.filter((it) => {
+                                                            const byICode = it.i_code != null && excludedICodes.has(it.i_code.trim());
+                                                            return !(it.is_excluded || byICode);
+                                                          })].map((item) => {
+                                                            const isExcludedByICode =
+                                                              item.i_code != null &&
+                                                              excludedICodes.has(item.i_code.trim());
+                                                            const isExcluded =
+                                                              item.is_excluded || isExcludedByICode;
+                                                            return (
+                                                              <TableRow
+                                                                key={item.id}
+                                                                className={
+                                                                  isExcluded
+                                                                    ? "bg-red-50 dark:bg-red-950/20"
+                                                                    : ""
+                                                                }
+                                                              >
+                                                                <TableCell className="font-mono text-xs">
+                                                                  {item.i_code || "—"}
+                                                                </TableCell>
+                                                                <TableCell className="text-sm">
+                                                                  {item.description || "—"}
+                                                                </TableCell>
+                                                                <TableCell className="text-right">
+                                                                  {item.quantity}
+                                                                </TableCell>
+                                                                <TableCell className="text-right">
+                                                                  {formatCurrency(item.extended)}
+                                                                </TableCell>
+                                                                <TableCell>
+                                                                  {isExcluded && (
+                                                                    <Badge
+                                                                      variant="destructive"
+                                                                      className="text-xs"
+                                                                    >
+                                                                      Excluded
+                                                                    </Badge>
+                                                                  )}
+                                                                </TableCell>
+                                                              </TableRow>
+                                                            );
+                                                          })}
+                                                        </TableBody>
+                                                      </Table>
+                                                    </div>
+                                                  )}
+                                                </div>
+                                              );
+                                            })}
+                                          </div>
+                                        );
+                                      })()}
                                   </div>
                                 </div>
-
-                                {/* Line Items by Category */}
-                                {invoiceItems[inv.id] &&
-                                  invoiceItems[inv.id].length > 0 && (() => {
-                                    const grouped = groupItemsByCategory(invoiceItems[inv.id]);
-                                    // Order: R, S, L, M, then any others
-                                    const orderedKeys = [
-                                      ...RECORD_TYPE_CATEGORIES.map((c) => c.key).filter((k) => grouped[k]),
-                                      ...Object.keys(grouped).filter(
-                                        (k) => !RECORD_TYPE_CATEGORIES.some((c) => c.key === k),
-                                      ),
-                                    ];
-
-                                    return (
-                                      <div className="space-y-1">
-                                        <h4 className="text-sm font-medium mb-2">
-                                          Line Items
-                                        </h4>
-                                        {orderedKeys.map((catKey) => {
-                                          const items = grouped[catKey];
-                                          const catConfig = RECORD_TYPE_CATEGORIES.find((c) => c.key === catKey);
-                                          const label = catConfig?.label || "Other";
-                                          const colorClass = catConfig?.color || "text-muted-foreground";
-                                          const expandKey = `${inv.id}:${catKey}`;
-                                          const isExpanded = expandedCategories.has(expandKey);
-
-                                          // Calculate totals for this category
-                                          const catTotal = items.reduce((s, it) => s + (it.extended || 0), 0);
-                                          const excludedItems = items.filter((it) => {
-                                            const byICode = it.i_code != null && excludedICodes.has(it.i_code.trim());
-                                            return it.is_excluded || byICode;
-                                          });
-                                          const excludedTotal = excludedItems.reduce(
-                                            (s, it) => s + (it.extended || 0),
-                                            0,
-                                          );
-
-                                          return (
-                                            <div key={catKey} className="border rounded-md">
-                                              <button
-                                                type="button"
-                                                className="flex items-center justify-between w-full px-3 py-2 text-sm hover:bg-muted/50 transition-colors"
-                                                onClick={() => {
-                                                  setExpandedCategories((prev) => {
-                                                    const next = new Set(prev);
-                                                    if (next.has(expandKey)) next.delete(expandKey);
-                                                    else next.add(expandKey);
-                                                    return next;
-                                                  });
-                                                }}
-                                              >
-                                                <div className="flex items-center gap-2">
-                                                  {isExpanded ? (
-                                                    <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
-                                                  ) : (
-                                                    <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
-                                                  )}
-                                                  <span className={`font-medium ${colorClass}`}>
-                                                    {label}
-                                                  </span>
-                                                  <span className="text-muted-foreground">
-                                                    ({items.length} item{items.length !== 1 ? "s" : ""})
-                                                  </span>
-                                                </div>
-                                                <div className="flex items-center gap-4 text-xs">
-                                                  {excludedTotal > 0 && (
-                                                    <span className="text-red-600 dark:text-red-400 font-medium">
-                                                      Excluded: {formatCurrency(excludedTotal)}
-                                                    </span>
-                                                  )}
-                                                  <span className="font-medium">
-                                                    {formatCurrency(catTotal)}
-                                                  </span>
-                                                </div>
-                                              </button>
-
-                                              {isExpanded && (
-                                                <div className="border-t">
-                                                  <Table>
-                                                    <TableHeader>
-                                                      <TableRow>
-                                                        <TableHead>I-Code</TableHead>
-                                                        <TableHead>Description</TableHead>
-                                                        <TableHead className="text-right">Qty</TableHead>
-                                                        <TableHead className="text-right">Extended</TableHead>
-                                                        <TableHead>Status</TableHead>
-                                                      </TableRow>
-                                                    </TableHeader>
-                                                    <TableBody>
-                                                      {/* Excluded items first, highlighted */}
-                                                      {[...excludedItems, ...items.filter((it) => {
-                                                        const byICode = it.i_code != null && excludedICodes.has(it.i_code.trim());
-                                                        return !(it.is_excluded || byICode);
-                                                      })].map((item) => {
-                                                        const isExcludedByICode =
-                                                          item.i_code != null &&
-                                                          excludedICodes.has(item.i_code.trim());
-                                                        const isExcluded =
-                                                          item.is_excluded || isExcludedByICode;
-                                                        return (
-                                                          <TableRow
-                                                            key={item.id}
-                                                            className={
-                                                              isExcluded
-                                                                ? "bg-red-50 dark:bg-red-950/20"
-                                                                : ""
-                                                            }
-                                                          >
-                                                            <TableCell className="font-mono text-xs">
-                                                              {item.i_code || "—"}
-                                                            </TableCell>
-                                                            <TableCell className="text-sm">
-                                                              {item.description || "—"}
-                                                            </TableCell>
-                                                            <TableCell className="text-right">
-                                                              {item.quantity}
-                                                            </TableCell>
-                                                            <TableCell className="text-right">
-                                                              {formatCurrency(item.extended)}
-                                                            </TableCell>
-                                                            <TableCell>
-                                                              {isExcluded && (
-                                                                <Badge
-                                                                  variant="destructive"
-                                                                  className="text-xs"
-                                                                >
-                                                                  Excluded
-                                                                </Badge>
-                                                              )}
-                                                            </TableCell>
-                                                          </TableRow>
-                                                        );
-                                                      })}
-                                                    </TableBody>
-                                                  </Table>
-                                                </div>
-                                              )}
-                                            </div>
-                                          );
-                                        })}
-                                      </div>
-                                    );
-                                  })()}
                               </div>
                             </TableCell>
                           </TableRow>
