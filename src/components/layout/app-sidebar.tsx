@@ -303,7 +303,8 @@ export function AppSidebar({ user, entityId: entityIdProp, entities = [] }: AppS
                     <img
                       src={entityLogo.src}
                       alt={entityLogo.alt}
-                      className="h-8 w-auto max-w-[200px] object-contain dark:invert"
+                      className="h-10 w-auto max-w-[200px] object-contain"
+                      style={{ background: "transparent" }}
                     />
                   </div>
                 ) : (
