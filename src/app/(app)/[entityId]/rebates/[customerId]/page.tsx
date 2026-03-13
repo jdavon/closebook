@@ -575,18 +575,22 @@ export default function CustomerDetailPage() {
         [`Generated: ${new Date().toLocaleDateString()}`],
         [],
         ["Invoice Summary"],
-        ["Invoice #", "Date", "Quarter", "Deal / Order", "Type", "List Total", "Discount", "Before Disc", "Rebate %", "Net Rebate"],
+        ["Invoice #", "Date", "Quarter", "Deal / Order", "Type", "List Total", "Excluded", "Before Disc", "Discount", "Final Amount", "Rebate %", "Net Rebate"],
       ];
 
       let grandTotalListTotal = 0;
-      let grandTotalDiscount = 0;
+      let grandTotalExcluded = 0;
       let grandTotalBeforeDisc = 0;
+      let grandTotalDiscount = 0;
+      let grandTotalFinalAmount = 0;
       let grandTotalNetRebate = 0;
 
       for (const inv of exportInvoices) {
         grandTotalListTotal += inv.list_total || 0;
-        grandTotalDiscount += inv.discount_amount || 0;
+        grandTotalExcluded += inv.excluded_total || 0;
         grandTotalBeforeDisc += (inv.before_discount || 0);
+        grandTotalDiscount += inv.discount_amount || 0;
+        grandTotalFinalAmount += inv.final_amount || 0;
         grandTotalNetRebate += (inv.net_rebate || 0);
 
         summaryData.push([
@@ -596,8 +600,10 @@ export default function CustomerDetailPage() {
           inv.deal || inv.order_description || "",
           getEquipmentLabel(inv.equipment_type as EquipmentType),
           inv.list_total,
-          inv.discount_amount,
+          inv.excluded_total || 0,
           inv.before_discount,
+          inv.discount_amount,
+          inv.final_amount,
           inv.remaining_rebate_pct != null ? inv.remaining_rebate_pct / 100 : null,
           inv.net_rebate,
         ]);
@@ -606,8 +612,10 @@ export default function CustomerDetailPage() {
       summaryData.push([
         "TOTALS", "", "", "", "",
         grandTotalListTotal,
-        grandTotalDiscount,
+        grandTotalExcluded,
         grandTotalBeforeDisc,
+        grandTotalDiscount,
+        grandTotalFinalAmount,
         null,
         grandTotalNetRebate,
       ]);
@@ -617,19 +625,19 @@ export default function CustomerDetailPage() {
       // Column widths
       summarySheet["!cols"] = [
         { wch: 14 }, { wch: 12 }, { wch: 10 }, { wch: 35 }, { wch: 14 },
-        { wch: 14 }, { wch: 12 }, { wch: 14 }, { wch: 10 }, { wch: 14 },
+        { wch: 14 }, { wch: 12 }, { wch: 14 }, { wch: 12 }, { wch: 14 }, { wch: 10 }, { wch: 14 },
       ];
 
-      // Format currency columns (F, G, H, J = cols 5, 6, 7, 9) and percent (I = col 8)
+      // Format currency columns (F-J,L = cols 5,6,7,8,9,11) and percent (K = col 10)
       const dataStartRow = 9; // 1-indexed, row 9 is first data row (after headers at row 8)
       for (let r = dataStartRow; r <= dataStartRow + exportInvoices.length; r++) {
-        for (const col of [5, 6, 7, 9]) {
+        for (const col of [5, 6, 7, 8, 9, 11]) {
           const cellRef = XLSX.utils.encode_cell({ r: r - 1, c: col });
           if (summarySheet[cellRef] && typeof summarySheet[cellRef].v === "number") {
             summarySheet[cellRef].z = '$#,##0.00';
           }
         }
-        const pctRef = XLSX.utils.encode_cell({ r: r - 1, c: 8 });
+        const pctRef = XLSX.utils.encode_cell({ r: r - 1, c: 10 });
         if (summarySheet[pctRef] && typeof summarySheet[pctRef].v === "number") {
           summarySheet[pctRef].z = '0.00%';
         }
@@ -776,29 +784,35 @@ export default function CustomerDetailPage() {
       doc.setTextColor(0);
 
       // --- Summary table ---
-      const summaryHead = [["Invoice #", "Date", "Quarter", "Deal / Order", "Type", "List Total", "Discount", "Before Disc", "Rebate %", "Net Rebate"]];
+      const summaryHead = [["Invoice #", "Date", "Quarter", "Deal / Order", "Type", "List Total", "Excluded", "Before Disc", "Discount", "Final Amount", "Rebate %", "Net Rebate"]];
       const summaryBody: (string | number)[][] = [];
 
       let grandTotalList = 0;
-      let grandTotalDisc = 0;
+      let grandTotalExcl = 0;
       let grandTotalBefore = 0;
+      let grandTotalDisc = 0;
+      let grandTotalFinal = 0;
       let grandTotalRebate = 0;
 
       for (const inv of exportInvoices) {
         grandTotalList += inv.list_total || 0;
-        grandTotalDisc += inv.discount_amount || 0;
+        grandTotalExcl += inv.excluded_total || 0;
         grandTotalBefore += inv.before_discount || 0;
+        grandTotalDisc += inv.discount_amount || 0;
+        grandTotalFinal += inv.final_amount || 0;
         grandTotalRebate += inv.net_rebate || 0;
 
         summaryBody.push([
           inv.invoice_number,
           inv.billing_end_date || inv.invoice_date || "",
           inv.quarter || "",
-          (inv.deal || inv.order_description || "").slice(0, 40),
+          (inv.deal || inv.order_description || "").slice(0, 35),
           getEquipmentLabel(inv.equipment_type as EquipmentType),
           formatCurrency(inv.list_total),
-          formatCurrency(inv.discount_amount),
+          formatCurrency(inv.excluded_total),
           formatCurrency(inv.before_discount),
+          formatCurrency(inv.discount_amount),
+          formatCurrency(inv.final_amount),
           formatPct(inv.remaining_rebate_pct),
           formatCurrency(inv.net_rebate),
         ]);
@@ -807,8 +821,10 @@ export default function CustomerDetailPage() {
       summaryBody.push([
         "TOTALS", "", "", "", "",
         formatCurrency(grandTotalList),
-        formatCurrency(grandTotalDisc),
+        formatCurrency(grandTotalExcl),
         formatCurrency(grandTotalBefore),
+        formatCurrency(grandTotalDisc),
+        formatCurrency(grandTotalFinal),
         "",
         formatCurrency(grandTotalRebate),
       ]);
@@ -818,16 +834,18 @@ export default function CustomerDetailPage() {
         head: summaryHead,
         body: summaryBody,
         theme: "grid",
-        headStyles: { fillColor: [41, 41, 41], fontSize: 8 },
-        bodyStyles: { fontSize: 7.5 },
+        headStyles: { fillColor: [41, 41, 41], fontSize: 7.5 },
+        bodyStyles: { fontSize: 7 },
         columnStyles: {
-          0: { cellWidth: 65 },
-          3: { cellWidth: 120 },
+          0: { cellWidth: 58 },
+          3: { cellWidth: 100 },
           5: { halign: "right" },
           6: { halign: "right" },
           7: { halign: "right" },
           8: { halign: "right" },
-          9: { halign: "right", fontStyle: "bold" },
+          9: { halign: "right" },
+          10: { halign: "right" },
+          11: { halign: "right", fontStyle: "bold" },
         },
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         didParseCell: (data: any) => {
@@ -1488,8 +1506,10 @@ export default function CustomerDetailPage() {
                   <TableHead>Deal / Order</TableHead>
                   <TableHead>Type</TableHead>
                   <TableHead className="text-right">List Total</TableHead>
-                  <TableHead className="text-right">Discount</TableHead>
+                  <TableHead className="text-right">Excluded</TableHead>
                   <TableHead className="text-right">Before Disc</TableHead>
+                  <TableHead className="text-right">Discount</TableHead>
+                  <TableHead className="text-right">Final Amount</TableHead>
                   <TableHead className="text-right">Rebate %</TableHead>
                   <TableHead className="text-right">Net Rebate</TableHead>
                   <TableHead className="w-8"></TableHead>
@@ -1538,10 +1558,16 @@ export default function CustomerDetailPage() {
                             {formatCurrency(inv.list_total)}
                           </TableCell>
                           <TableCell className="text-right">
-                            {formatCurrency(inv.discount_amount)}
+                            {formatCurrency(inv.excluded_total)}
                           </TableCell>
                           <TableCell className="text-right">
                             {formatCurrency(inv.before_discount)}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {formatCurrency(inv.discount_amount)}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {formatCurrency(inv.final_amount)}
                           </TableCell>
                           <TableCell className="text-right">
                             {formatPct(inv.remaining_rebate_pct)}
