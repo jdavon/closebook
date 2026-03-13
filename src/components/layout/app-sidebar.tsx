@@ -1,6 +1,5 @@
 "use client";
 
-import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -80,12 +79,10 @@ interface AppSidebarProps {
   entities?: Entity[];
 }
 
-const ENTITY_LOGOS: Record<string, { src: string; alt: string; width: number; height: number }> = {
+const ENTITY_LOGOS: Record<string, { src: string; alt: string }> = {
   "Versatile Studios": {
     src: "/logos/versatile-studios.svg",
     alt: "Versatile Studios",
-    width: 160,
-    height: 24,
   },
 };
 
@@ -298,12 +295,11 @@ export function AppSidebar({ user, entityId: entityIdProp, entities = [] }: AppS
               <Link href={entityId ? `/${entityId}/dashboard` : "/dashboard"}>
                 {entityLogo ? (
                   <div className="flex items-center py-1">
-                    <Image
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
                       src={entityLogo.src}
                       alt={entityLogo.alt}
-                      width={entityLogo.width}
-                      height={entityLogo.height}
-                      className="dark:invert"
+                      className="h-5 w-auto dark:invert"
                     />
                   </div>
                 ) : (
