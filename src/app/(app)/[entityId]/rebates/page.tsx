@@ -588,6 +588,11 @@ export default function RebateTrackerPage() {
     return qtr?.total_rebate || 0;
   };
 
+  const getCustomerTotalRevenue = (customerId: string) => {
+    const sums = quarterlySummaries[customerId] || [];
+    return sums.reduce((total, s) => total + (s.total_revenue || 0), 0);
+  };
+
   const totalYTDRevenue = customers.reduce(
     (s, c) => s + getCustomerYTDRevenue(c.id),
     0,
@@ -742,7 +747,7 @@ export default function RebateTrackerPage() {
                 <TableRow>
                   <TableHead>Customer</TableHead>
                   <TableHead>Account #</TableHead>
-                  <TableHead>Status</TableHead>
+                  <TableHead className="text-right">Total Revenue</TableHead>
                   <TableHead className="text-right">Active Orders</TableHead>
                   <TableHead className="text-right">{selectedYear} Revenue</TableHead>
                   <TableHead className="text-right">{selectedYear} Rebate</TableHead>
@@ -818,19 +823,8 @@ export default function RebateTrackerPage() {
                         ? "N/A"
                         : c.rw_customer_number || c.rw_customer_id}
                     </TableCell>
-                    <TableCell>
-                      <Badge
-                        variant={
-                          c.status === "active" ? "default" : "outline"
-                        }
-                        className={
-                          c.status === "active"
-                            ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200"
-                            : ""
-                        }
-                      >
-                        {c.status}
-                      </Badge>
+                    <TableCell className="text-right">
+                      {formatCurrency(getCustomerTotalRevenue(c.id))}
                     </TableCell>
                     <TableCell className="text-right">
                       {loadingOrders ? (
@@ -897,7 +891,7 @@ export default function RebateTrackerPage() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Customer</TableHead>
-                  <TableHead>Status</TableHead>
+                  <TableHead className="text-right">Total Revenue</TableHead>
                   <TableHead className="text-right">{selectedYear} Revenue</TableHead>
                   <TableHead className="text-right">{selectedYear} Rebate</TableHead>
                   <TableHead className="text-right">
@@ -967,19 +961,8 @@ export default function RebateTrackerPage() {
                         {c.customer_name}
                       </div>
                     </TableCell>
-                    <TableCell>
-                      <Badge
-                        variant={
-                          c.status === "active" ? "default" : "outline"
-                        }
-                        className={
-                          c.status === "active"
-                            ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200"
-                            : ""
-                        }
-                      >
-                        {c.status}
-                      </Badge>
+                    <TableCell className="text-right">
+                      {formatCurrency(getCustomerTotalRevenue(c.id))}
                     </TableCell>
                     <TableCell className="text-right">
                       {formatCurrency(getCustomerYTDRevenue(c.id))}
