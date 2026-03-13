@@ -770,7 +770,7 @@ export default function CustomerDetailPage() {
       doc.setFontSize(11);
       doc.setTextColor(100);
       doc.text(`Customer: ${customer!.customer_name}`, margin, 70);
-      doc.text(`Agreement Type: ${customer!.agreement_type}`, margin, 85);
+      doc.text(`Agreement Type: ${customer!.agreement_type.charAt(0).toUpperCase() + customer!.agreement_type.slice(1)}`, margin, 85);
       doc.text(`Quarter: ${quarter === "all" ? "All Quarters" : quarter}`, margin, 100);
       doc.text(`Generated: ${new Date().toLocaleDateString()}`, margin, 115);
       doc.setTextColor(0);
@@ -838,6 +838,64 @@ export default function CustomerDetailPage() {
         },
         margin: { left: margin, right: margin },
       });
+
+      // --- Tier rate grids ---
+      if (tiers.length > 0) {
+        let tierY = (doc as any).lastAutoTable.finalY + 25;
+        const categories = ["pro_supplies", "vehicle", "grip_lighting", "studio"] as const;
+        const catLabels: Record<string, string> = { pro_supplies: "Pro Supplies", vehicle: "Vehicle", grip_lighting: "Grip & Lighting", studio: "Studio" };
+
+        // Rebate Rates grid
+        doc.setFontSize(10);
+        doc.setFont("helvetica", "bold");
+        doc.text("Rebate Rates", margin, tierY);
+        doc.setFont("helvetica", "normal");
+        tierY += 5;
+
+        const rateHead = [["Tier", "Revenue Range", ...categories.map(c => catLabels[c])]];
+        const rateBody = tiers.map(t => [
+          t.label,
+          t.threshold_max ? `${formatCurrency(t.threshold_min)} – ${formatCurrency(t.threshold_max)}` : `${formatCurrency(t.threshold_min)}+`,
+          ...categories.map(c => t[`rate_${c}` as keyof TierData] != null ? formatPct(t[`rate_${c}` as keyof TierData] as number) : "—"),
+        ]);
+
+        autoTable(doc, {
+          startY: tierY,
+          head: rateHead,
+          body: rateBody,
+          theme: "grid",
+          headStyles: { fillColor: [41, 41, 41], fontSize: 7.5 },
+          bodyStyles: { fontSize: 7 },
+          margin: { left: margin, right: margin + (pageWidth - 2 * margin) / 2 + 10 },
+          tableWidth: (pageWidth - 2 * margin) / 2 - 10,
+        });
+
+        const rateTableEndY = (doc as any).lastAutoTable.finalY;
+
+        // Max Discount Allowed grid
+        const discHead = [["Tier", "Revenue Range", ...categories.map(c => catLabels[c])]];
+        const discBody = tiers.map(t => [
+          t.label,
+          t.threshold_max ? `${formatCurrency(t.threshold_min)} – ${formatCurrency(t.threshold_max)}` : `${formatCurrency(t.threshold_min)}+`,
+          ...categories.map(c => t[`max_disc_${c}` as keyof TierData] != null ? formatPct(t[`max_disc_${c}` as keyof TierData] as number) : "—"),
+        ]);
+
+        doc.setFontSize(10);
+        doc.setFont("helvetica", "bold");
+        doc.text("Max Discount Allowed", margin + (pageWidth - 2 * margin) / 2 + 10, tierY - 5);
+        doc.setFont("helvetica", "normal");
+
+        autoTable(doc, {
+          startY: tierY,
+          head: discHead,
+          body: discBody,
+          theme: "grid",
+          headStyles: { fillColor: [41, 41, 41], fontSize: 7.5 },
+          bodyStyles: { fontSize: 7 },
+          margin: { left: margin + (pageWidth - 2 * margin) / 2 + 10, right: margin },
+          tableWidth: (pageWidth - 2 * margin) / 2 - 10,
+        });
+      }
 
       // --- Individual invoice detail pages ---
       for (const inv of exportInvoices) {
