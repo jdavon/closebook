@@ -546,9 +546,10 @@ export default function CustomerDetailPage() {
   };
 
   const getExportInvoices = (quarter: string) => {
-    return quarter === "all"
+    const base = quarter === "all"
       ? invoices
       : invoices.filter((inv) => inv.quarter === quarter);
+    return base.filter((inv) => !inv.is_manually_excluded);
   };
 
   const handleExport = async (quarter: string) => {
