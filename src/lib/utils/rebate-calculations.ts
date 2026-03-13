@@ -299,10 +299,10 @@ export function calculateCustomerRebates(
     return da.localeCompare(db);
   });
 
-  // Filter to rebatable invoices (CLOSED status only)
+  // Filter to rebatable invoices (CLOSED or PROCESSED status)
   const filtered = sorted.filter((inv) => {
     const status = (inv.status || "").toUpperCase();
-    return status === "CLOSED";
+    return status === "CLOSED" || status === "PROCESSED";
   });
 
   let cumulativeRevenue = 0;
