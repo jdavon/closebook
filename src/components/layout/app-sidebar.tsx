@@ -84,6 +84,10 @@ const ENTITY_LOGOS: Record<string, { src: string; alt: string }> = {
     src: "/logos/versatile-studios.svg",
     alt: "Versatile Studios",
   },
+  "Silverco Enterprises": {
+    src: "/logos/silverco.svg",
+    alt: "Silverco Enterprises",
+  },
 };
 
 export function AppSidebar({ user, entityId: entityIdProp, entities = [] }: AppSidebarProps) {
