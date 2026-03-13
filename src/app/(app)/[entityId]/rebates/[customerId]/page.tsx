@@ -587,7 +587,7 @@ export default function CustomerDetailPage() {
 
       for (const inv of exportInvoices) {
         grandTotalListTotal += inv.list_total || 0;
-        grandTotalExcluded += inv.excluded_total || 0;
+        grandTotalExcluded += (inv.list_total || 0) - (inv.before_discount || 0);
         grandTotalBeforeDisc += (inv.before_discount || 0);
         grandTotalDiscount += inv.discount_amount || 0;
         grandTotalFinalAmount += inv.final_amount || 0;
@@ -600,7 +600,7 @@ export default function CustomerDetailPage() {
           inv.deal || inv.order_description || "",
           getEquipmentLabel(inv.equipment_type as EquipmentType),
           inv.list_total,
-          inv.excluded_total || 0,
+          (inv.list_total || 0) - (inv.before_discount || 0),
           inv.before_discount,
           inv.discount_amount,
           inv.final_amount,
@@ -796,7 +796,7 @@ export default function CustomerDetailPage() {
 
       for (const inv of exportInvoices) {
         grandTotalList += inv.list_total || 0;
-        grandTotalExcl += inv.excluded_total || 0;
+        grandTotalExcl += (inv.list_total || 0) - (inv.before_discount || 0);
         grandTotalBefore += inv.before_discount || 0;
         grandTotalDisc += inv.discount_amount || 0;
         grandTotalFinal += inv.final_amount || 0;
@@ -809,7 +809,7 @@ export default function CustomerDetailPage() {
           (inv.deal || inv.order_description || "").slice(0, 35),
           getEquipmentLabel(inv.equipment_type as EquipmentType),
           formatCurrency(inv.list_total),
-          formatCurrency(inv.excluded_total),
+          formatCurrency((inv.list_total || 0) - (inv.before_discount || 0)),
           formatCurrency(inv.before_discount),
           formatCurrency(inv.discount_amount),
           formatCurrency(inv.final_amount),
@@ -1558,7 +1558,7 @@ export default function CustomerDetailPage() {
                             {formatCurrency(inv.list_total)}
                           </TableCell>
                           <TableCell className="text-right">
-                            {formatCurrency(inv.excluded_total)}
+                            {formatCurrency((inv.list_total || 0) - (inv.before_discount || 0))}
                           </TableCell>
                           <TableCell className="text-right">
                             {formatCurrency(inv.before_discount)}
