@@ -173,10 +173,10 @@ export async function POST(request: Request) {
 
         const inv = invoiceResult.rows[0];
 
-        const allowedStatuses = new Set(["CLOSED", "PROCESSED"]);
+        const allowedStatuses = new Set(["CLOSED", "PROCESSED", "APPROVED"]);
         if (!allowedStatuses.has((inv.Status || "").toUpperCase())) {
           return NextResponse.json(
-            { error: `Invoice "${invoiceNumber}" must be CLOSED or PROCESSED (status: ${inv.Status})` },
+            { error: `Invoice "${invoiceNumber}" must be CLOSED, PROCESSED, or APPROVED (status: ${inv.Status})` },
             { status: 400 },
           );
         }
@@ -406,10 +406,10 @@ async function syncCustomerInvoices(
 
   const invoices = invoiceResult.rows;
 
-  // Filter to CLOSED or PROCESSED, non-zero invoices
+  // Filter to CLOSED, PROCESSED, or APPROVED non-zero invoices
   const closedInvoices = invoices.filter((inv) => {
     const status = (inv.Status || "").toUpperCase();
-    if (status !== "CLOSED" && status !== "PROCESSED") return false;
+    if (status !== "CLOSED" && status !== "PROCESSED" && status !== "APPROVED") return false;
     if (inv.IsNoCharge === "true" || inv.IsNonBillable === "true") return false;
     return true;
   });
