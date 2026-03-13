@@ -1018,24 +1018,11 @@ export default function CustomerDetailPage() {
                                     <h4 className="text-sm font-medium mb-2">Calculation Breakdown</h4>
                                     <div className="border rounded-md overflow-hidden text-sm">
                                       {(() => {
-                                        const isCommercial = customer.agreement_type === "commercial";
-                                        const rows: { label: string; value: string; highlight?: "red" | "yellow" | "green" }[] = isCommercial
-                                          ? [
+                                        const rows: { label: string; value: string; highlight?: "red" | "yellow" | "green" }[] = [
                                               { label: "Gross Invoice Total", value: formatCurrency(inv.list_total) },
                                               { label: "Excluded", value: formatCurrency(inv.excluded_total), highlight: "red" },
                                               { label: "Tax", value: formatCurrency(inv.tax_amount) },
                                               { label: "Taxable Sales", value: formatCurrency(inv.taxable_sales) },
-                                              { label: "Before Discount", value: formatCurrency(inv.before_discount), highlight: "yellow" },
-                                              { label: "Discount", value: formatCurrency(inv.discount_amount) },
-                                              { label: "Discount %", value: formatPct(inv.discount_percent) },
-                                              { label: "Final Amount", value: formatCurrency(inv.final_amount) },
-                                              { label: "Remaining Rebate", value: formatPct(inv.remaining_rebate_pct) },
-                                              { label: "Net Rebate", value: formatCurrency(inv.net_rebate), highlight: "green" },
-                                            ]
-                                          : [
-                                              { label: "List Total", value: formatCurrency(inv.list_total) },
-                                              { label: "Excluded", value: formatCurrency(inv.excluded_total), highlight: "red" },
-                                              { label: "Sub Total", value: formatCurrency(inv.sub_total) },
                                               { label: "Before Discount", value: formatCurrency(inv.before_discount), highlight: "yellow" },
                                               { label: "Discount", value: formatCurrency(inv.discount_amount) },
                                               { label: "Discount %", value: formatPct(inv.discount_percent) },

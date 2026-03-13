@@ -384,14 +384,16 @@ export function calculateCustomerRebates(
         manual_exclusion_reason: inv.manual_exclusion_reason,
       };
     } else {
-      // Freelancer
-      const calc = calculateFreelancerInvoice({
+      // Freelancer — use same commercial formula
+      const maxDiscRate = getTierMaxDisc(tier, equipType);
+      const calc = calculateCommercialInvoice({
         listTotal: inv.list_total,
-        subTotal: inv.sub_total,
+        taxAmount: inv.tax_amount,
         discountAmount: inv.discount_amount,
         excludedTotal,
+        taxRate: customer.tax_rate,
         rebateRate,
-        maxDiscountPercent: customer.max_discount_percent,
+        maxDiscRate,
       });
 
       result = {
@@ -411,7 +413,7 @@ export function calculateCustomerRebates(
         sub_total: inv.sub_total,
         tax_amount: inv.tax_amount,
         discount_amount: inv.discount_amount,
-        taxable_sales: 0,
+        taxable_sales: calc.taxableSales,
         before_discount: calc.beforeDiscount,
         discount_percent: calc.discountPercent,
         excluded_total: excludedTotal,
