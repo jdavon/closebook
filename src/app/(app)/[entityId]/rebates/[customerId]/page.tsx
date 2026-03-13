@@ -153,6 +153,7 @@ interface TierData {
 const RECORD_TYPE_CATEGORIES = [
   { key: "R", label: "Rental", color: "text-blue-700 dark:text-blue-400" },
   { key: "S", label: "Sales", color: "text-green-700 dark:text-green-400" },
+  { key: "F", label: "Loss & Damage", color: "text-orange-700 dark:text-orange-400" },
   { key: "L", label: "Loss & Damage", color: "text-orange-700 dark:text-orange-400" },
   { key: "M", label: "Miscellaneous", color: "text-purple-700 dark:text-purple-400" },
 ] as const;
@@ -1098,7 +1099,7 @@ export default function CustomerDetailPage() {
                                               const catTotal = items.reduce((s, it) => s + (it.extended || 0), 0);
                                               const excludedItems = items.filter((it) => {
                                                 const byICode = it.i_code != null && excludedICodes.has(it.i_code.trim());
-                                                const byLossAndDamage = it.record_type === "L";
+                                                const byLossAndDamage = it.record_type === "F" || it.record_type === "L";
                                                 return it.is_excluded || byICode || byLossAndDamage;
                                               });
                                               const excludedTotal = excludedItems.reduce(
@@ -1160,13 +1161,13 @@ export default function CustomerDetailPage() {
                                                         <TableBody>
                                                           {[...excludedItems, ...items.filter((it) => {
                                                             const byICode = it.i_code != null && excludedICodes.has(it.i_code.trim());
-                                                            const byLossAndDamage = it.record_type === "L";
+                                                            const byLossAndDamage = it.record_type === "F" || it.record_type === "L";
                                                             return !(it.is_excluded || byICode || byLossAndDamage);
                                                           })].map((item) => {
                                                             const isExcludedByICode =
                                                               item.i_code != null &&
                                                               excludedICodes.has(item.i_code.trim());
-                                                            const isLossAndDamage = item.record_type === "L";
+                                                            const isLossAndDamage = item.record_type === "F" || item.record_type === "L";
                                                             const isExcluded =
                                                               item.is_excluded || isExcludedByICode || isLossAndDamage;
                                                             return (

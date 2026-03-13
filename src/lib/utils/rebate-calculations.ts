@@ -319,8 +319,8 @@ export function calculateCustomerRebates(
     for (const item of items) {
       const amt = Number(item.extended) || 0;
 
-      // Exclude loss & damage items (record_type "L")
-      if (item.record_type === "L") {
+      // Exclude loss & damage items (record_type "F" = forfeited/L&D, or "L" legacy)
+      if (item.record_type === "F" || item.record_type === "L") {
         excludedTotal += amt;
         excludedItems.push({
           iCode: item.i_code || "L&D",
