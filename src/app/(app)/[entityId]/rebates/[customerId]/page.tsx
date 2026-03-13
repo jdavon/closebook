@@ -920,7 +920,7 @@ export default function CustomerDetailPage() {
 
           doc.setFontSize(10);
           doc.text("Line Items", margin, yPos);
-          yPos += 5;
+          yPos += 18;
 
           for (const catKey of orderedKeys) {
             const catItems = grouped[catKey];
@@ -938,7 +938,7 @@ export default function CustomerDetailPage() {
             doc.setTextColor(80);
             doc.text(`${label} (${catItems.length} items) — ${formatCurrency(catTotal)}`, margin, yPos);
             doc.setTextColor(0);
-            yPos += 3;
+            yPos += 8;
 
             const itemHead = [["I-Code", "Description", "Qty", "Extended", "Status"]];
             const itemBody: (string | number)[][] = [];
@@ -983,7 +983,7 @@ export default function CustomerDetailPage() {
             });
 
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            yPos = (doc as any).lastAutoTable.finalY + 10;
+            yPos = (doc as any).lastAutoTable.finalY + 18;
           }
         }
       }
