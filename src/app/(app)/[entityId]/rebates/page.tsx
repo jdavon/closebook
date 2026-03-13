@@ -1055,11 +1055,9 @@ export default function RebateTrackerPage() {
                           <TableHead className="text-xs font-medium text-center h-9">
                             Rebate %
                           </TableHead>
-                          {formType === "commercial" && (
-                            <TableHead className="text-xs font-medium text-center h-9">
-                              Max Disc %
-                            </TableHead>
-                          )}
+                          <TableHead className="text-xs font-medium text-center h-9">
+                            Max Disc %
+                          </TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
@@ -1088,23 +1086,21 @@ export default function RebateTrackerPage() {
                                 className="h-8 text-sm text-center w-24 mx-auto"
                               />
                             </TableCell>
-                            {formType === "commercial" && (
-                              <TableCell className="py-1.5">
-                                <Input
-                                  type="number"
-                                  step="0.01"
-                                  value={tier[eq.discKey]}
-                                  onChange={(e) =>
-                                    updateTier(
-                                      idx,
-                                      eq.discKey,
-                                      parseFloat(e.target.value) || 0,
-                                    )
-                                  }
-                                  className="h-8 text-sm text-center w-24 mx-auto"
-                                />
-                              </TableCell>
-                            )}
+                            <TableCell className="py-1.5">
+                              <Input
+                                type="number"
+                                step="0.01"
+                                value={tier[eq.discKey]}
+                                onChange={(e) =>
+                                  updateTier(
+                                    idx,
+                                    eq.discKey,
+                                    parseFloat(e.target.value) || 0,
+                                  )
+                                }
+                                className="h-8 text-sm text-center w-24 mx-auto"
+                              />
+                            </TableCell>
                           </TableRow>
                         ))}
                       </TableBody>
