@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -63,6 +64,12 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { createClient } from "@/lib/supabase/client";
 import { useRouter } from "next/navigation";
 
+interface Entity {
+  id: string;
+  name: string;
+  code: string;
+}
+
 interface AppSidebarProps {
   user: {
     id: string;
@@ -70,9 +77,19 @@ interface AppSidebarProps {
     fullName: string;
   };
   entityId?: string;
+  entities?: Entity[];
 }
 
-export function AppSidebar({ user, entityId: entityIdProp }: AppSidebarProps) {
+const ENTITY_LOGOS: Record<string, { src: string; alt: string; width: number; height: number }> = {
+  "Versatile Studios": {
+    src: "/logos/versatile-studios.svg",
+    alt: "Versatile Studios",
+    width: 160,
+    height: 24,
+  },
+};
+
+export function AppSidebar({ user, entityId: entityIdProp, entities = [] }: AppSidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
   const supabase = createClient();
@@ -92,6 +109,9 @@ export function AppSidebar({ user, entityId: entityIdProp }: AppSidebarProps) {
 
   const entityId = detectedEntityId;
   const entityPrefix = entityId ? `/${entityId}` : "";
+
+  const currentEntity = entities.find((e) => e.id === entityId);
+  const entityLogo = currentEntity ? ENTITY_LOGOS[currentEntity.name] : null;
 
   const toolsItems = entityId
     ? [
@@ -275,16 +295,30 @@ export function AppSidebar({ user, entityId: entityIdProp }: AppSidebarProps) {
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton size="lg" asChild>
-              <Link href="/dashboard">
-                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary">
-                  <BookOpen className="h-4 w-4 text-primary-foreground" />
-                </div>
-                <div className="flex flex-col gap-0.5 leading-none">
-                  <span className="font-semibold">CloseBook</span>
-                  <span className="text-xs text-muted-foreground">
-                    Close Management
-                  </span>
-                </div>
+              <Link href={entityId ? `/${entityId}/dashboard` : "/dashboard"}>
+                {entityLogo ? (
+                  <div className="flex items-center py-1">
+                    <Image
+                      src={entityLogo.src}
+                      alt={entityLogo.alt}
+                      width={entityLogo.width}
+                      height={entityLogo.height}
+                      className="dark:invert"
+                    />
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary">
+                      <BookOpen className="h-4 w-4 text-primary-foreground" />
+                    </div>
+                    <div className="flex flex-col gap-0.5 leading-none">
+                      <span className="font-semibold">CloseBook</span>
+                      <span className="text-xs text-muted-foreground">
+                        Close Management
+                      </span>
+                    </div>
+                  </>
+                )}
               </Link>
             </SidebarMenuButton>
           </SidebarMenuItem>

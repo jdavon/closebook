@@ -25,6 +25,7 @@ export default async function AppLayout({
           email: profile.email,
           fullName: profile.full_name,
         }}
+        entities={entities}
       />
       <SidebarInset>
         <Header entities={entities} />
