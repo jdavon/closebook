@@ -50,6 +50,8 @@ import {
   Search,
   FileText,
   X,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import { toast } from "sonner";
 import { getCurrentQuarter } from "@/lib/utils/rebate-calculations";
@@ -132,6 +134,8 @@ export default function RebateTrackerPage() {
   const [quarterlySummaries, setQuarterlySummaries] = useState<
     Record<string, QuarterlySummary[]>
   >({});
+  const [orderTotals, setOrderTotals] = useState<Record<string, number>>({});
+  const [loadingOrders, setLoadingOrders] = useState(false);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [calculating, setCalculating] = useState(false);
@@ -190,6 +194,41 @@ export default function RebateTrackerPage() {
         summaryMap[cid].push(s);
       }
       setQuarterlySummaries(summaryMap);
+
+      // Fetch active orders for commercial customers in parallel (non-blocking)
+      const commercialCustomers = (config.customers || []).filter(
+        (c: RebateCustomer) => c.agreement_type === "commercial" && c.rw_customer_id,
+      );
+      if (commercialCustomers.length > 0) {
+        setLoadingOrders(true);
+        Promise.allSettled(
+          commercialCustomers.map(async (c: RebateCustomer) => {
+            const res = await fetch("/api/rebates/sync", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                action: "fetch_active_orders",
+                customerId: c.id,
+              }),
+            });
+            const data = await res.json();
+            const total = (data.orders || []).reduce(
+              (sum: number, o: { total: number }) => sum + o.total,
+              0,
+            );
+            return { customerId: c.id, total };
+          }),
+        ).then((results) => {
+          const totals: Record<string, number> = {};
+          for (const r of results) {
+            if (r.status === "fulfilled") {
+              totals[r.value.customerId] = r.value.total;
+            }
+          }
+          setOrderTotals(totals);
+          setLoadingOrders(false);
+        });
+      }
     } finally {
       setLoading(false);
     }
@@ -506,27 +545,46 @@ export default function RebateTrackerPage() {
     setFormTiers((prev) => prev.filter((_, i) => i !== idx));
   };
 
-  // Compute YTD totals from quarterly summaries
-  const currentYear = new Date().getFullYear();
+  // Quarter navigation
   const currentQtr = getCurrentQuarter();
+  const [selectedQuarter, setSelectedQuarter] = useState(currentQtr);
 
+  const shiftQuarter = (quarter: string, delta: number): string => {
+    const match = quarter.match(/^(\d{4})\s*Q(\d)$/);
+    if (!match) return quarter;
+    let year = parseInt(match[1]);
+    let q = parseInt(match[2]) + delta;
+    while (q < 1) { year--; q += 4; }
+    while (q > 4) { year++; q -= 4; }
+    return `${year} Q${q}`;
+  };
+
+  const selectedYear = parseInt(selectedQuarter.split(" ")[0]);
+
+  // Compute totals from quarterly summaries
   const getCustomerYTDRevenue = (customerId: string) => {
     const sums = quarterlySummaries[customerId] || [];
     return sums
-      .filter((s) => s.quarter.startsWith(String(currentYear)))
+      .filter((s) => s.quarter.startsWith(String(selectedYear)))
       .reduce((total, s) => total + (s.total_revenue || 0), 0);
   };
 
   const getCustomerYTDRebate = (customerId: string) => {
     const sums = quarterlySummaries[customerId] || [];
     return sums
-      .filter((s) => s.quarter.startsWith(String(currentYear)))
+      .filter((s) => s.quarter.startsWith(String(selectedYear)))
       .reduce((total, s) => total + (s.total_rebate || 0), 0);
+  };
+
+  const getCustomerQtrRevenue = (customerId: string) => {
+    const sums = quarterlySummaries[customerId] || [];
+    const qtr = sums.find((s) => s.quarter === selectedQuarter);
+    return qtr?.total_revenue || 0;
   };
 
   const getCustomerQtrRebate = (customerId: string) => {
     const sums = quarterlySummaries[customerId] || [];
-    const qtr = sums.find((s) => s.quarter === currentQtr);
+    const qtr = sums.find((s) => s.quarter === selectedQuarter);
     return qtr?.total_rebate || 0;
   };
 
@@ -540,6 +598,10 @@ export default function RebateTrackerPage() {
   );
   const totalQtrRebate = customers.reduce(
     (s, c) => s + getCustomerQtrRebate(c.id),
+    0,
+  );
+  const totalActiveOrders = Object.values(orderTotals).reduce(
+    (s, v) => s + v,
     0,
   );
 
@@ -602,7 +664,7 @@ export default function RebateTrackerPage() {
       </div>
 
       {/* Summary Cards */}
-      <div className="grid gap-4 md:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-5">
         <Card>
           <CardHeader className="pb-2">
             <CardDescription>Active Agreements</CardDescription>
@@ -613,7 +675,19 @@ export default function RebateTrackerPage() {
         </Card>
         <Card>
           <CardHeader className="pb-2">
-            <CardDescription>YTD Revenue</CardDescription>
+            <CardDescription>Active Orders</CardDescription>
+            <CardTitle className="text-3xl">
+              {loadingOrders ? (
+                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+              ) : (
+                formatCurrency(totalActiveOrders)
+              )}
+            </CardTitle>
+          </CardHeader>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardDescription>{selectedYear} Revenue</CardDescription>
             <CardTitle className="text-3xl">
               {formatCurrency(totalYTDRevenue)}
             </CardTitle>
@@ -621,7 +695,7 @@ export default function RebateTrackerPage() {
         </Card>
         <Card>
           <CardHeader className="pb-2">
-            <CardDescription>YTD Rebates</CardDescription>
+            <CardDescription>{selectedYear} Rebates</CardDescription>
             <CardTitle className="text-3xl">
               {formatCurrency(totalYTDRebate)}
             </CardTitle>
@@ -629,7 +703,21 @@ export default function RebateTrackerPage() {
         </Card>
         <Card>
           <CardHeader className="pb-2">
-            <CardDescription>{currentQtr} Rebates</CardDescription>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setSelectedQuarter(shiftQuarter(selectedQuarter, -1))}
+                className="p-0.5 rounded hover:bg-muted transition-colors"
+              >
+                <ChevronLeft className="h-4 w-4 text-muted-foreground" />
+              </button>
+              <CardDescription>{selectedQuarter} Rebates</CardDescription>
+              <button
+                onClick={() => setSelectedQuarter(shiftQuarter(selectedQuarter, 1))}
+                className="p-0.5 rounded hover:bg-muted transition-colors"
+              >
+                <ChevronRight className="h-4 w-4 text-muted-foreground" />
+              </button>
+            </div>
             <CardTitle className="text-3xl">
               {formatCurrency(totalQtrRebate)}
             </CardTitle>
@@ -655,10 +743,28 @@ export default function RebateTrackerPage() {
                   <TableHead>Customer</TableHead>
                   <TableHead>Account #</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead className="text-right">YTD Revenue</TableHead>
-                  <TableHead className="text-right">YTD Rebate</TableHead>
+                  <TableHead className="text-right">Active Orders</TableHead>
+                  <TableHead className="text-right">{selectedYear} Revenue</TableHead>
+                  <TableHead className="text-right">{selectedYear} Rebate</TableHead>
                   <TableHead className="text-right">
-                    {currentQtr} Rebate
+                    <div className="flex items-center justify-end gap-1">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setSelectedQuarter(shiftQuarter(selectedQuarter, -1)); }}
+                        className="p-0.5 rounded hover:bg-muted transition-colors"
+                      >
+                        <ChevronLeft className="h-3.5 w-3.5" />
+                      </button>
+                      <span className="whitespace-nowrap">{selectedQuarter} Revenue</span>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setSelectedQuarter(shiftQuarter(selectedQuarter, 1)); }}
+                        className="p-0.5 rounded hover:bg-muted transition-colors"
+                      >
+                        <ChevronRight className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </TableHead>
+                  <TableHead className="text-right">
+                    {selectedQuarter} Rebate
                   </TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
@@ -727,10 +833,20 @@ export default function RebateTrackerPage() {
                       </Badge>
                     </TableCell>
                     <TableCell className="text-right">
+                      {loadingOrders ? (
+                        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground ml-auto" />
+                      ) : (
+                        formatCurrency(orderTotals[c.id] || 0)
+                      )}
+                    </TableCell>
+                    <TableCell className="text-right">
                       {formatCurrency(getCustomerYTDRevenue(c.id))}
                     </TableCell>
                     <TableCell className="text-right">
                       {formatCurrency(getCustomerYTDRebate(c.id))}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {formatCurrency(getCustomerQtrRevenue(c.id))}
                     </TableCell>
                     <TableCell className="text-right">
                       {formatCurrency(getCustomerQtrRebate(c.id))}
@@ -782,10 +898,27 @@ export default function RebateTrackerPage() {
                 <TableRow>
                   <TableHead>Customer</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead className="text-right">YTD Revenue</TableHead>
-                  <TableHead className="text-right">YTD Rebate</TableHead>
+                  <TableHead className="text-right">{selectedYear} Revenue</TableHead>
+                  <TableHead className="text-right">{selectedYear} Rebate</TableHead>
                   <TableHead className="text-right">
-                    {currentQtr} Rebate
+                    <div className="flex items-center justify-end gap-1">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setSelectedQuarter(shiftQuarter(selectedQuarter, -1)); }}
+                        className="p-0.5 rounded hover:bg-muted transition-colors"
+                      >
+                        <ChevronLeft className="h-3.5 w-3.5" />
+                      </button>
+                      <span className="whitespace-nowrap">{selectedQuarter} Revenue</span>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setSelectedQuarter(shiftQuarter(selectedQuarter, 1)); }}
+                        className="p-0.5 rounded hover:bg-muted transition-colors"
+                      >
+                        <ChevronRight className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </TableHead>
+                  <TableHead className="text-right">
+                    {selectedQuarter} Rebate
                   </TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
@@ -853,6 +986,9 @@ export default function RebateTrackerPage() {
                     </TableCell>
                     <TableCell className="text-right">
                       {formatCurrency(getCustomerYTDRebate(c.id))}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {formatCurrency(getCustomerQtrRevenue(c.id))}
                     </TableCell>
                     <TableCell className="text-right">
                       {formatCurrency(getCustomerQtrRebate(c.id))}
