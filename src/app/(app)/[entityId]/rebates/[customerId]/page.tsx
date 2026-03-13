@@ -1098,7 +1098,8 @@ export default function CustomerDetailPage() {
                                               const catTotal = items.reduce((s, it) => s + (it.extended || 0), 0);
                                               const excludedItems = items.filter((it) => {
                                                 const byICode = it.i_code != null && excludedICodes.has(it.i_code.trim());
-                                                return it.is_excluded || byICode;
+                                                const byLossAndDamage = it.record_type === "L";
+                                                return it.is_excluded || byICode || byLossAndDamage;
                                               });
                                               const excludedTotal = excludedItems.reduce(
                                                 (s, it) => s + (it.extended || 0),
@@ -1159,13 +1160,15 @@ export default function CustomerDetailPage() {
                                                         <TableBody>
                                                           {[...excludedItems, ...items.filter((it) => {
                                                             const byICode = it.i_code != null && excludedICodes.has(it.i_code.trim());
-                                                            return !(it.is_excluded || byICode);
+                                                            const byLossAndDamage = it.record_type === "L";
+                                                            return !(it.is_excluded || byICode || byLossAndDamage);
                                                           })].map((item) => {
                                                             const isExcludedByICode =
                                                               item.i_code != null &&
                                                               excludedICodes.has(item.i_code.trim());
+                                                            const isLossAndDamage = item.record_type === "L";
                                                             const isExcluded =
-                                                              item.is_excluded || isExcludedByICode;
+                                                              item.is_excluded || isExcludedByICode || isLossAndDamage;
                                                             return (
                                                               <TableRow
                                                                 key={item.id}
@@ -1193,7 +1196,7 @@ export default function CustomerDetailPage() {
                                                                       variant="destructive"
                                                                       className="text-xs"
                                                                     >
-                                                                      Excluded
+                                                                      {isLossAndDamage ? "Loss & Damage" : "Excluded"}
                                                                     </Badge>
                                                                   )}
                                                                 </TableCell>

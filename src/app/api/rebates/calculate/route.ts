@@ -203,11 +203,20 @@ async function calculateForCustomer(
 
     // Update item exclusion flags
     for (const excl of r.excluded_items) {
-      await admin
-        .from("rebate_invoice_items")
-        .update({ is_excluded: true })
-        .eq("rebate_invoice_id", r.invoice_id)
-        .eq("i_code", excl.iCode);
+      if (excl.reason === "loss_damage") {
+        // Mark all L&D items on this invoice as excluded
+        await admin
+          .from("rebate_invoice_items")
+          .update({ is_excluded: true })
+          .eq("rebate_invoice_id", r.invoice_id)
+          .eq("record_type", "L");
+      } else {
+        await admin
+          .from("rebate_invoice_items")
+          .update({ is_excluded: true })
+          .eq("rebate_invoice_id", r.invoice_id)
+          .eq("i_code", excl.iCode);
+      }
     }
   }
 

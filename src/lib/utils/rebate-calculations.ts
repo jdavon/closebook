@@ -57,12 +57,14 @@ export interface CachedInvoiceItem {
   i_code: string | null;
   description: string | null;
   extended: number | null;
+  record_type: string | null;
 }
 
 export interface ExcludedItemDetail {
   iCode: string;
   description: string | null;
   amount: number;
+  reason: "icode" | "loss_damage";
 }
 
 export interface RebateCalculationResult {
@@ -208,8 +210,8 @@ export function calculateCommercialInvoice(params: {
   // Back-calculate taxable sales from tax amount
   const taxableSales = taxRate > 0 ? taxAmount / (taxRate / 100) : 0;
 
-  // Before-discount base = list price minus exclusions minus taxable portion
-  const beforeDiscount = Math.max(0, listTotal - excludedTotal - taxableSales);
+  // Before-discount base = list price minus exclusions minus taxable portion minus tax
+  const beforeDiscount = Math.max(0, listTotal - excludedTotal - taxableSales - taxAmount);
 
   // Discount as percentage of before-discount base
   const discountPercent = beforeDiscount > 0 ? (discountAmount / beforeDiscount) * 100 : 0;
@@ -315,13 +317,25 @@ export function calculateCustomerRebates(
     const excludedItems: ExcludedItemDetail[] = [];
     const items = invoiceItemsMap.get(inv.id) || [];
     for (const item of items) {
-      if (item.i_code && excludedICodes.has(item.i_code.trim())) {
-        const amt = Number(item.extended) || 0;
+      const amt = Number(item.extended) || 0;
+
+      // Exclude loss & damage items (record_type "L")
+      if (item.record_type === "L") {
+        excludedTotal += amt;
+        excludedItems.push({
+          iCode: item.i_code || "L&D",
+          description: item.description,
+          amount: amt,
+          reason: "loss_damage",
+        });
+      } else if (item.i_code && excludedICodes.has(item.i_code.trim())) {
+        // Exclude by I-Code
         excludedTotal += amt;
         excludedItems.push({
           iCode: item.i_code,
           description: item.description,
           amount: amt,
+          reason: "icode",
         });
       }
     }
