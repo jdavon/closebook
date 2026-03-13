@@ -49,7 +49,19 @@ import {
   Plus,
   Search,
   Trash2,
+  Download,
 } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
 import {
@@ -509,6 +521,485 @@ export default function CustomerDetailPage() {
     }
   };
 
+  const [exporting, setExporting] = useState(false);
+
+  const loadItemsForExport = async (exportInvoices: RebateInvoice[]) => {
+    const missingIds = exportInvoices
+      .map((inv) => inv.id)
+      .filter((id) => !invoiceItems[id]);
+    if (missingIds.length > 0) {
+      const { data } = await supabase
+        .from("rebate_invoice_items")
+        .select("*")
+        .in("rebate_invoice_id", missingIds);
+      if (data) {
+        const grouped: Record<string, InvoiceItem[]> = {};
+        for (const item of data) {
+          const invId = item.rebate_invoice_id;
+          if (!grouped[invId]) grouped[invId] = [];
+          grouped[invId].push(item as InvoiceItem);
+        }
+        setInvoiceItems((prev) => ({ ...prev, ...grouped }));
+        Object.assign(invoiceItems, grouped);
+      }
+    }
+  };
+
+  const getExportInvoices = (quarter: string) => {
+    return quarter === "all"
+      ? invoices
+      : invoices.filter((inv) => inv.quarter === quarter);
+  };
+
+  const handleExport = async (quarter: string) => {
+    setExporting(true);
+    try {
+      const XLSX = await import("xlsx");
+
+      const exportInvoices = getExportInvoices(quarter);
+      if (exportInvoices.length === 0) {
+        toast.error("No invoices to export for this quarter");
+        return;
+      }
+
+      await loadItemsForExport(exportInvoices);
+
+      const wb = XLSX.utils.book_new();
+
+      // --- Summary sheet ---
+      const summaryData: (string | number | null)[][] = [
+        ["Rebate Report"],
+        [`Customer: ${customer!.customer_name}`],
+        [`Agreement Type: ${customer!.agreement_type}`],
+        [`Quarter: ${quarter === "all" ? "All Quarters" : quarter}`],
+        [`Generated: ${new Date().toLocaleDateString()}`],
+        [],
+        ["Invoice Summary"],
+        ["Invoice #", "Date", "Quarter", "Deal / Order", "Type", "List Total", "Discount", "Before Disc", "Rebate %", "Net Rebate"],
+      ];
+
+      let grandTotalListTotal = 0;
+      let grandTotalDiscount = 0;
+      let grandTotalBeforeDisc = 0;
+      let grandTotalNetRebate = 0;
+
+      for (const inv of exportInvoices) {
+        grandTotalListTotal += inv.list_total || 0;
+        grandTotalDiscount += inv.discount_amount || 0;
+        grandTotalBeforeDisc += (inv.before_discount || 0);
+        grandTotalNetRebate += (inv.net_rebate || 0);
+
+        summaryData.push([
+          inv.invoice_number,
+          inv.billing_end_date || inv.invoice_date || "",
+          inv.quarter || "",
+          inv.deal || inv.order_description || "",
+          getEquipmentLabel(inv.equipment_type as EquipmentType),
+          inv.list_total,
+          inv.discount_amount,
+          inv.before_discount,
+          inv.remaining_rebate_pct != null ? inv.remaining_rebate_pct / 100 : null,
+          inv.net_rebate,
+        ]);
+      }
+
+      summaryData.push([
+        "TOTALS", "", "", "", "",
+        grandTotalListTotal,
+        grandTotalDiscount,
+        grandTotalBeforeDisc,
+        null,
+        grandTotalNetRebate,
+      ]);
+
+      const summarySheet = XLSX.utils.aoa_to_sheet(summaryData);
+
+      // Column widths
+      summarySheet["!cols"] = [
+        { wch: 14 }, { wch: 12 }, { wch: 10 }, { wch: 35 }, { wch: 14 },
+        { wch: 14 }, { wch: 12 }, { wch: 14 }, { wch: 10 }, { wch: 14 },
+      ];
+
+      // Format currency columns (F, G, H, J = cols 5, 6, 7, 9) and percent (I = col 8)
+      const dataStartRow = 9; // 1-indexed, row 9 is first data row (after headers at row 8)
+      for (let r = dataStartRow; r <= dataStartRow + exportInvoices.length; r++) {
+        for (const col of [5, 6, 7, 9]) {
+          const cellRef = XLSX.utils.encode_cell({ r: r - 1, c: col });
+          if (summarySheet[cellRef] && typeof summarySheet[cellRef].v === "number") {
+            summarySheet[cellRef].z = '$#,##0.00';
+          }
+        }
+        const pctRef = XLSX.utils.encode_cell({ r: r - 1, c: 8 });
+        if (summarySheet[pctRef] && typeof summarySheet[pctRef].v === "number") {
+          summarySheet[pctRef].z = '0.00%';
+        }
+      }
+
+      XLSX.utils.book_append_sheet(wb, summarySheet, "Summary");
+
+      // --- Individual invoice detail sheets ---
+      for (const inv of exportInvoices) {
+        const items = invoiceItems[inv.id] || [];
+        const grouped = groupItemsByCategory(items);
+        const orderedKeys = [
+          ...RECORD_TYPE_CATEGORIES.map((c) => c.key).filter((k) => grouped[k]),
+          ...Object.keys(grouped).filter(
+            (k) => !RECORD_TYPE_CATEGORIES.some((c) => c.key === k),
+          ),
+        ];
+
+        const detailData: (string | number | null)[][] = [
+          [`Invoice: ${inv.invoice_number}`],
+          [`Date: ${inv.billing_end_date || inv.invoice_date || "N/A"}`],
+          [`Deal / Order: ${inv.deal || inv.order_description || "N/A"}`],
+          [`Equipment Type: ${getEquipmentLabel(inv.equipment_type as EquipmentType)}`],
+          [`Quarter: ${inv.quarter || "N/A"}`],
+          [],
+          ["Calculation Breakdown"],
+          ["", "Field", "Value"],
+          ["", "Gross Invoice Total", inv.list_total],
+          ["", "Excluded", inv.excluded_total || 0],
+          ["", "Tax", inv.tax_amount],
+          ["", "Taxable Sales", inv.taxable_sales || 0],
+          ["", "Before Discount", inv.before_discount || 0],
+          ["", "Discount", inv.discount_amount],
+          ["", "Discount %", inv.discount_percent != null ? inv.discount_percent / 100 : 0],
+          ["", "Final Amount", inv.final_amount || 0],
+          ["", "Remaining Rebate", inv.remaining_rebate_pct != null ? inv.remaining_rebate_pct / 100 : 0],
+          ["", "Net Rebate", inv.net_rebate || 0],
+          [],
+          ["", "Tier", inv.tier_label || "N/A"],
+          ["", "Rebate Rate", inv.rebate_rate != null ? inv.rebate_rate / 100 : 0],
+          ["", "Cumulative Revenue", inv.cumulative_revenue || 0],
+          ["", "Cumulative Rebate", inv.cumulative_rebate || 0],
+          [],
+          ["Line Items"],
+        ];
+
+        for (const catKey of orderedKeys) {
+          const catItems = grouped[catKey];
+          const catConfig = RECORD_TYPE_CATEGORIES.find((c) => c.key === catKey);
+          const label = catConfig?.label || "Other";
+          const catTotal = catItems.reduce((s, it) => s + (it.extended || 0), 0);
+
+          detailData.push([]);
+          detailData.push([`${label} (${catItems.length} items)`, "", "", "", formatCurrency(catTotal)]);
+          detailData.push(["I-Code", "Description", "Qty", "Extended", "Status"]);
+
+          for (const item of catItems) {
+            const isExcludedByICode = item.i_code != null && excludedICodes.has(item.i_code.trim());
+            const isLossAndDamage = item.record_type === "F" || item.record_type === "L";
+            const isExcluded = item.is_excluded || isExcludedByICode || isLossAndDamage;
+            detailData.push([
+              item.i_code || "",
+              item.description || "",
+              item.quantity,
+              item.extended,
+              isExcluded ? (isLossAndDamage ? "Loss & Damage" : "Excluded") : "",
+            ]);
+          }
+        }
+
+        const detailSheet = XLSX.utils.aoa_to_sheet(detailData);
+        detailSheet["!cols"] = [
+          { wch: 16 }, { wch: 45 }, { wch: 8 }, { wch: 14 }, { wch: 16 },
+        ];
+
+        // Format currency cells in calculation breakdown (column C, rows 9-18)
+        for (const r of [8, 9, 10, 11, 12, 13, 15, 17, 21, 22]) {
+          const cellRef = XLSX.utils.encode_cell({ r, c: 2 });
+          if (detailSheet[cellRef] && typeof detailSheet[cellRef].v === "number") {
+            detailSheet[cellRef].z = '$#,##0.00';
+          }
+        }
+        // Format percent cells
+        for (const r of [14, 16, 20]) {
+          const cellRef = XLSX.utils.encode_cell({ r, c: 2 });
+          if (detailSheet[cellRef] && typeof detailSheet[cellRef].v === "number") {
+            detailSheet[cellRef].z = '0.00%';
+          }
+        }
+
+        // Format extended column in line items
+        const range = XLSX.utils.decode_range(detailSheet["!ref"] || "A1");
+        for (let r = 25; r <= range.e.r; r++) {
+          const cellRef = XLSX.utils.encode_cell({ r, c: 3 });
+          if (detailSheet[cellRef] && typeof detailSheet[cellRef].v === "number") {
+            detailSheet[cellRef].z = '$#,##0.00';
+          }
+        }
+
+        // Sheet name: truncate invoice number to 31 chars (Excel limit)
+        const sheetName = inv.invoice_number.slice(0, 31);
+        XLSX.utils.book_append_sheet(wb, detailSheet, sheetName);
+      }
+
+      const quarterLabel = quarter === "all" ? "All" : quarter.replace(/\s+/g, "-");
+      const filename = `Rebate Report - ${customer!.customer_name} - ${quarterLabel}.xlsx`;
+      XLSX.writeFile(wb, filename);
+      toast.success(`Exported ${exportInvoices.length} invoices`);
+    } catch (err) {
+      console.error("Export error:", err);
+      toast.error("Export failed");
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const handleExportPdf = async (quarter: string) => {
+    setExporting(true);
+    try {
+      const { default: jsPDF } = await import("jspdf");
+      const { default: autoTable } = await import("jspdf-autotable");
+
+      const exportInvoices = getExportInvoices(quarter);
+      if (exportInvoices.length === 0) {
+        toast.error("No invoices to export for this quarter");
+        return;
+      }
+
+      await loadItemsForExport(exportInvoices);
+
+      const doc = new jsPDF({ orientation: "landscape", unit: "pt", format: "letter" });
+      const pageWidth = doc.internal.pageSize.getWidth();
+      const margin = 40;
+
+      // --- Title page / header ---
+      doc.setFontSize(18);
+      doc.text("Rebate Report", margin, 50);
+      doc.setFontSize(11);
+      doc.setTextColor(100);
+      doc.text(`Customer: ${customer!.customer_name}`, margin, 70);
+      doc.text(`Agreement Type: ${customer!.agreement_type}`, margin, 85);
+      doc.text(`Quarter: ${quarter === "all" ? "All Quarters" : quarter}`, margin, 100);
+      doc.text(`Generated: ${new Date().toLocaleDateString()}`, margin, 115);
+      doc.setTextColor(0);
+
+      // --- Summary table ---
+      const summaryHead = [["Invoice #", "Date", "Quarter", "Deal / Order", "Type", "List Total", "Discount", "Before Disc", "Rebate %", "Net Rebate"]];
+      const summaryBody: (string | number)[][] = [];
+
+      let grandTotalList = 0;
+      let grandTotalDisc = 0;
+      let grandTotalBefore = 0;
+      let grandTotalRebate = 0;
+
+      for (const inv of exportInvoices) {
+        grandTotalList += inv.list_total || 0;
+        grandTotalDisc += inv.discount_amount || 0;
+        grandTotalBefore += inv.before_discount || 0;
+        grandTotalRebate += inv.net_rebate || 0;
+
+        summaryBody.push([
+          inv.invoice_number,
+          inv.billing_end_date || inv.invoice_date || "",
+          inv.quarter || "",
+          (inv.deal || inv.order_description || "").slice(0, 40),
+          getEquipmentLabel(inv.equipment_type as EquipmentType),
+          formatCurrency(inv.list_total),
+          formatCurrency(inv.discount_amount),
+          formatCurrency(inv.before_discount),
+          formatPct(inv.remaining_rebate_pct),
+          formatCurrency(inv.net_rebate),
+        ]);
+      }
+
+      summaryBody.push([
+        "TOTALS", "", "", "", "",
+        formatCurrency(grandTotalList),
+        formatCurrency(grandTotalDisc),
+        formatCurrency(grandTotalBefore),
+        "",
+        formatCurrency(grandTotalRebate),
+      ]);
+
+      autoTable(doc, {
+        startY: 135,
+        head: summaryHead,
+        body: summaryBody,
+        theme: "grid",
+        headStyles: { fillColor: [41, 41, 41], fontSize: 8 },
+        bodyStyles: { fontSize: 7.5 },
+        columnStyles: {
+          0: { cellWidth: 65 },
+          3: { cellWidth: 120 },
+          5: { halign: "right" },
+          6: { halign: "right" },
+          7: { halign: "right" },
+          8: { halign: "right" },
+          9: { halign: "right", fontStyle: "bold" },
+        },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        didParseCell: (data: any) => {
+          if (data.row.index === summaryBody.length - 1) {
+            data.cell.styles.fillColor = [240, 240, 240];
+            data.cell.styles.fontStyle = "bold";
+          }
+        },
+        margin: { left: margin, right: margin },
+      });
+
+      // --- Individual invoice detail pages ---
+      for (const inv of exportInvoices) {
+        doc.addPage();
+        let yPos = 45;
+
+        // Invoice header
+        doc.setFontSize(14);
+        doc.text(`Invoice: ${inv.invoice_number}`, margin, yPos);
+        yPos += 20;
+
+        doc.setFontSize(9);
+        doc.setTextColor(100);
+        const metaLines = [
+          `Date: ${inv.billing_end_date || inv.invoice_date || "N/A"}`,
+          `Deal / Order: ${inv.deal || inv.order_description || "N/A"}`,
+          `Equipment Type: ${getEquipmentLabel(inv.equipment_type as EquipmentType)}    Quarter: ${inv.quarter || "N/A"}`,
+          `Tier: ${inv.tier_label || "N/A"}    Rebate Rate: ${formatPct(inv.rebate_rate)}    Cumulative Revenue: ${formatCurrency(inv.cumulative_revenue)}    Cumulative Rebate: ${formatCurrency(inv.cumulative_rebate)}`,
+        ];
+        for (const line of metaLines) {
+          doc.text(line, margin, yPos);
+          yPos += 13;
+        }
+        doc.setTextColor(0);
+        yPos += 5;
+
+        // Calculation breakdown table
+        doc.setFontSize(10);
+        doc.text("Calculation Breakdown", margin, yPos);
+        yPos += 5;
+
+        const breakdownBody = [
+          ["Gross Invoice Total", formatCurrency(inv.list_total)],
+          ["Excluded", formatCurrency(inv.excluded_total)],
+          ["Tax", formatCurrency(inv.tax_amount)],
+          ["Taxable Sales", formatCurrency(inv.taxable_sales)],
+          ["Before Discount", formatCurrency(inv.before_discount)],
+          ["Discount", formatCurrency(inv.discount_amount)],
+          ["Discount %", formatPct(inv.discount_percent)],
+          ["Final Amount", formatCurrency(inv.final_amount)],
+          ["Remaining Rebate", formatPct(inv.remaining_rebate_pct)],
+          ["Net Rebate", formatCurrency(inv.net_rebate)],
+        ];
+
+        autoTable(doc, {
+          startY: yPos,
+          body: breakdownBody,
+          theme: "plain",
+          bodyStyles: { fontSize: 8 },
+          columnStyles: {
+            0: { cellWidth: 120, fontStyle: "bold" },
+            1: { cellWidth: 80, halign: "right" },
+          },
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          didParseCell: (data: any) => {
+            if (data.row.index === 1) data.cell.styles.fillColor = [255, 230, 230]; // Excluded - red tint
+            if (data.row.index === 4) data.cell.styles.fillColor = [255, 255, 220]; // Before Disc - yellow tint
+            if (data.row.index === 9) {
+              data.cell.styles.fillColor = [220, 255, 220]; // Net Rebate - green tint
+              data.cell.styles.fontStyle = "bold";
+            }
+          },
+          margin: { left: margin, right: margin },
+          tableWidth: 200,
+        });
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        yPos = (doc as any).lastAutoTable.finalY + 15;
+
+        // Line items
+        const items = invoiceItems[inv.id] || [];
+        if (items.length > 0) {
+          const grouped = groupItemsByCategory(items);
+          const orderedKeys = [
+            ...RECORD_TYPE_CATEGORIES.map((c) => c.key).filter((k) => grouped[k]),
+            ...Object.keys(grouped).filter(
+              (k) => !RECORD_TYPE_CATEGORIES.some((c) => c.key === k),
+            ),
+          ];
+
+          doc.setFontSize(10);
+          doc.text("Line Items", margin, yPos);
+          yPos += 5;
+
+          for (const catKey of orderedKeys) {
+            const catItems = grouped[catKey];
+            const catConfig = RECORD_TYPE_CATEGORIES.find((c) => c.key === catKey);
+            const label = catConfig?.label || "Other";
+            const catTotal = catItems.reduce((s, it) => s + (it.extended || 0), 0);
+
+            // Check if we need a new page
+            if (yPos > doc.internal.pageSize.getHeight() - 80) {
+              doc.addPage();
+              yPos = 45;
+            }
+
+            doc.setFontSize(9);
+            doc.setTextColor(80);
+            doc.text(`${label} (${catItems.length} items) — ${formatCurrency(catTotal)}`, margin, yPos);
+            doc.setTextColor(0);
+            yPos += 3;
+
+            const itemHead = [["I-Code", "Description", "Qty", "Extended", "Status"]];
+            const itemBody: (string | number)[][] = [];
+
+            for (const item of catItems) {
+              const isExcludedByICode = item.i_code != null && excludedICodes.has(item.i_code.trim());
+              const isLossAndDamage = item.record_type === "F" || item.record_type === "L";
+              const isExcluded = item.is_excluded || isExcludedByICode || isLossAndDamage;
+              itemBody.push([
+                item.i_code || "",
+                (item.description || "").slice(0, 55),
+                item.quantity ?? "",
+                formatCurrency(item.extended),
+                isExcluded ? (isLossAndDamage ? "L&D" : "Excluded") : "",
+              ]);
+            }
+
+            autoTable(doc, {
+              startY: yPos,
+              head: itemHead,
+              body: itemBody,
+              theme: "striped",
+              headStyles: { fillColor: [70, 70, 70], fontSize: 7 },
+              bodyStyles: { fontSize: 7 },
+              columnStyles: {
+                0: { cellWidth: 70 },
+                1: { cellWidth: 250 },
+                2: { cellWidth: 35, halign: "right" },
+                3: { cellWidth: 65, halign: "right" },
+                4: { cellWidth: 50 },
+              },
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              didParseCell: (data: any) => {
+                if (data.section === "body") {
+                  const status = itemBody[data.row.index]?.[4];
+                  if (status) {
+                    data.cell.styles.fillColor = [255, 240, 240];
+                  }
+                }
+              },
+              margin: { left: margin, right: margin },
+            });
+
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            yPos = (doc as any).lastAutoTable.finalY + 10;
+          }
+        }
+      }
+
+      const quarterLabel = quarter === "all" ? "All" : quarter.replace(/\s+/g, "-");
+      const filename = `Rebate Report - ${customer!.customer_name} - ${quarterLabel}.pdf`;
+      doc.save(filename);
+      toast.success(`Exported ${exportInvoices.length} invoices as PDF`);
+    } catch (err) {
+      console.error("PDF export error:", err);
+      toast.error("PDF export failed");
+    } finally {
+      setExporting(false);
+    }
+  };
+
   // Filter invoices by selected quarter
   const filteredInvoices =
     selectedQuarter === "all"
@@ -629,6 +1120,39 @@ export default function CustomerDetailPage() {
             )}
             Calculate
           </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm" disabled={exporting || invoices.length === 0}>
+                {exporting ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Download className="mr-2 h-4 w-4" />
+                )}
+                Export
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuLabel>Excel (.xlsx)</DropdownMenuLabel>
+              <DropdownMenuItem onClick={() => handleExport("all")}>
+                All Quarters
+              </DropdownMenuItem>
+              {quarters.map((q) => (
+                <DropdownMenuItem key={`xlsx-${q}`} onClick={() => handleExport(q!)}>
+                  {q}
+                </DropdownMenuItem>
+              ))}
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel>PDF</DropdownMenuLabel>
+              <DropdownMenuItem onClick={() => handleExportPdf("all")}>
+                All Quarters
+              </DropdownMenuItem>
+              {quarters.map((q) => (
+                <DropdownMenuItem key={`pdf-${q}`} onClick={() => handleExportPdf(q!)}>
+                  {q}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
 
