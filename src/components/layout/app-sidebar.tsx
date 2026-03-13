@@ -294,12 +294,12 @@ export function AppSidebar({ user, entityId: entityIdProp, entities = [] }: AppS
             <SidebarMenuButton size="lg" asChild>
               <Link href={entityId ? `/${entityId}/dashboard` : "/dashboard"}>
                 {entityLogo ? (
-                  <div className="flex items-center py-1">
+                  <div className="flex items-center py-1 overflow-visible">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
                       src={entityLogo.src}
                       alt={entityLogo.alt}
-                      className="h-5 w-auto dark:invert"
+                      className="h-5 w-auto max-w-[180px] object-contain dark:invert"
                     />
                   </div>
                 ) : (
