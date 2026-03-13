@@ -336,8 +336,8 @@ export async function POST(request: Request) {
           orderbydirection: "desc",
         });
 
-        // Filter to active orders (OPEN, CONFIRMED, ACTIVE, etc. — exclude CLOSED, CANCELLED, COMPLETE)
-        const inactiveStatuses = new Set(["CLOSED", "CANCELLED", "COMPLETE", "SNAPSHOT", "VOID"]);
+        // Filter to active orders (OPEN, CONFIRMED, ACTIVE, COMPLETE, etc. — exclude CLOSED, CANCELLED)
+        const inactiveStatuses = new Set(["CLOSED", "CANCELLED", "SNAPSHOT", "VOID"]);
         const activeOrders = orderResult.rows.filter((o) => {
           const status = (o.Status || "").toUpperCase();
           return !inactiveStatuses.has(status);
