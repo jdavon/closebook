@@ -182,21 +182,13 @@ export default function RebateTrackerPage() {
       }
       setAllTiers(tierMap);
 
-      // Load quarterly summaries for each customer
+      // Build quarterly summaries map from config response
       const summaryMap: Record<string, QuarterlySummary[]> = {};
-      for (const c of config.customers || []) {
-        const res = await fetch("/api/rebates/calculate", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            action: "get_summaries",
-            entityId,
-            customerId: c.id,
-          }),
-        });
-        // This might 400 since we haven't implemented get_summaries - load from supabase directly
+      for (const s of config.quarterlySummaries || []) {
+        const cid = s.rebate_customer_id;
+        if (!summaryMap[cid]) summaryMap[cid] = [];
+        summaryMap[cid].push(s);
       }
-      // For now, summaries loaded from the quarterly table via a lightweight fetch
       setQuarterlySummaries(summaryMap);
     } finally {
       setLoading(false);
@@ -716,7 +708,9 @@ export default function RebateTrackerPage() {
                       </div>
                     </TableCell>
                     <TableCell className="text-muted-foreground">
-                      {c.rw_customer_number || c.rw_customer_id}
+                      {c.agreement_type === "freelancer"
+                        ? "N/A"
+                        : c.rw_customer_number || c.rw_customer_id}
                     </TableCell>
                     <TableCell>
                       <Badge

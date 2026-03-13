@@ -72,12 +72,24 @@ export async function POST(request: Request) {
         }
       }
 
+      // Load quarterly summaries for all customers
+      let quarterlySummaries: Record<string, unknown>[] = [];
+      if (customerIds.length > 0) {
+        const { data } = await admin
+          .from("rebate_quarterly_summaries")
+          .select("*")
+          .in("rebate_customer_id", customerIds)
+          .order("quarter", { ascending: false });
+        quarterlySummaries = data || [];
+      }
+
       return NextResponse.json({
         customers: customers || [],
         tiers,
         globalExcludedICodes: globalExcludedICodes || [],
         customerExcludedICodes: customerExcludedICodes || [],
         excludedAmountsByICode,
+        quarterlySummaries,
       });
     }
 
