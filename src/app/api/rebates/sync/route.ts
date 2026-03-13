@@ -365,6 +365,54 @@ export async function POST(request: Request) {
       }
     }
 
+    case "fetch_order_items": {
+      const { orderId } = body;
+
+      if (!orderId) {
+        return NextResponse.json(
+          { error: "orderId is required" },
+          { status: 400 },
+        );
+      }
+
+      try {
+        const { RentalWorksClient } = await import(
+          "@/lib/rentalworks/client"
+        );
+        const rw = new RentalWorksClient(process.env.RW_BASE_URL!);
+        await rw.ensureAuth(process.env.RW_USERNAME!, process.env.RW_PASSWORD!);
+
+        const itemResult = await rw.browse<{
+          OrderItemId: string;
+          ICode: string;
+          Description: string;
+          QuantityOrdered: string;
+          Extended: string;
+          RecType: string;
+          AvailableFor: string;
+          Category: string;
+        }>("orderitem", {
+          pagesize: 500,
+          uniqueids: { OrderId: orderId },
+        });
+
+        const items = itemResult.rows.map((item) => ({
+          orderItemId: item.OrderItemId || null,
+          iCode: item.ICode || null,
+          description: item.Description || null,
+          quantity: Number(item.QuantityOrdered) || 0,
+          extended: Number(item.Extended) || 0,
+          recordType: item.AvailableFor || item.RecType || null,
+          category: item.Category || null,
+        }));
+
+        return NextResponse.json({ success: true, items });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Failed to fetch order items";
+        return NextResponse.json({ error: msg }, { status: 500 });
+      }
+    }
+
     default:
       return NextResponse.json(
         { error: `Unknown action: ${action}` },

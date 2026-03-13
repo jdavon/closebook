@@ -114,6 +114,16 @@ interface ActiveOrder {
   equipmentType: string;
 }
 
+interface OrderItem {
+  orderItemId: string | null;
+  iCode: string | null;
+  description: string | null;
+  quantity: number;
+  extended: number;
+  recordType: string | null;
+  category: string | null;
+}
+
 interface QuarterlySummary {
   id: string;
   quarter: string;
@@ -213,6 +223,9 @@ export default function CustomerDetailPage() {
   const [activeOrders, setActiveOrders] = useState<ActiveOrder[]>([]);
   const [loadingOrders, setLoadingOrders] = useState(false);
   const [ordersLoaded, setOrdersLoaded] = useState(false);
+  const [expandedOrders, setExpandedOrders] = useState<Set<string>>(new Set());
+  const [orderItems, setOrderItems] = useState<Record<string, OrderItem[]>>({});
+  const [expandedOrderCategories, setExpandedOrderCategories] = useState<Set<string>>(new Set());
 
   // Add Invoice dialog (freelancer)
   const [addInvoiceOpen, setAddInvoiceOpen] = useState(false);
@@ -438,6 +451,37 @@ export default function CustomerDetailPage() {
     } finally {
       setLoadingOrders(false);
     }
+  };
+
+  const toggleOrderExpand = async (orderId: string) => {
+    const next = new Set(expandedOrders);
+    if (next.has(orderId)) {
+      next.delete(orderId);
+    } else {
+      next.add(orderId);
+      // Load items if not cached
+      if (!orderItems[orderId]) {
+        try {
+          const res = await fetch("/api/rebates/sync", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              action: "fetch_order_items",
+              orderId,
+            }),
+          });
+          const data = await res.json();
+          if (data.success) {
+            setOrderItems((prev) => ({ ...prev, [orderId]: data.items || [] }));
+          } else {
+            toast.error(data.error || "Failed to load order items");
+          }
+        } catch {
+          toast.error("Failed to load order items");
+        }
+      }
+    }
+    setExpandedOrders(next);
   };
 
   const handleAddInvoice = async () => {
@@ -1311,6 +1355,7 @@ export default function CustomerDetailPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
+                    <TableHead className="w-8"></TableHead>
                     <TableHead>Order #</TableHead>
                     <TableHead>Date</TableHead>
                     <TableHead>Status</TableHead>
@@ -1330,37 +1375,190 @@ export default function CustomerDetailPage() {
                       ? ((currentTier[rateKey] as number) || 0)
                       : 0;
                     const estRebate = order.total * (rate / 100);
+                    const isExpanded = expandedOrders.has(order.orderId);
+                    const items = orderItems[order.orderId];
                     return (
-                      <TableRow key={order.orderId}>
-                        <TableCell className="font-mono text-sm">
-                          {order.orderNumber}
-                        </TableCell>
-                        <TableCell>
-                          {order.estimatedStartDate || order.orderDate || "—"}
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant="secondary">{order.status}</Badge>
-                        </TableCell>
-                        <TableCell className="max-w-[150px] truncate">
-                          {order.deal || "—"}
-                        </TableCell>
-                        <TableCell className="max-w-[200px] truncate">
-                          {order.description || "—"}
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant="outline">
-                            {getEquipmentLabel(
-                              order.equipmentType as EquipmentType,
-                            )}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-right">
-                          {formatCurrency(order.total)}
-                        </TableCell>
-                        <TableCell className="text-right font-medium text-green-600 dark:text-green-400">
-                          {rate > 0 ? formatCurrency(estRebate) : "—"}
-                        </TableCell>
-                      </TableRow>
+                      <Collapsible key={order.orderId} asChild>
+                        <>
+                          <CollapsibleTrigger asChild>
+                            <TableRow
+                              className="cursor-pointer"
+                              onClick={() => toggleOrderExpand(order.orderId)}
+                            >
+                              <TableCell>
+                                {isExpanded ? (
+                                  <ChevronDown className="h-4 w-4" />
+                                ) : (
+                                  <ChevronRight className="h-4 w-4" />
+                                )}
+                              </TableCell>
+                              <TableCell className="font-mono text-sm">
+                                {order.orderNumber}
+                              </TableCell>
+                              <TableCell>
+                                {order.estimatedStartDate || order.orderDate || "—"}
+                              </TableCell>
+                              <TableCell>
+                                <Badge variant="secondary">{order.status}</Badge>
+                              </TableCell>
+                              <TableCell className="max-w-[150px] truncate">
+                                {order.deal || "—"}
+                              </TableCell>
+                              <TableCell className="max-w-[200px] truncate">
+                                {order.description || "—"}
+                              </TableCell>
+                              <TableCell>
+                                <Badge variant="outline">
+                                  {getEquipmentLabel(
+                                    order.equipmentType as EquipmentType,
+                                  )}
+                                </Badge>
+                              </TableCell>
+                              <TableCell className="text-right">
+                                {formatCurrency(order.total)}
+                              </TableCell>
+                              <TableCell className="text-right font-medium text-green-600 dark:text-green-400">
+                                {rate > 0 ? formatCurrency(estRebate) : "—"}
+                              </TableCell>
+                            </TableRow>
+                          </CollapsibleTrigger>
+                          <CollapsibleContent asChild>
+                            {isExpanded ? (
+                              <TableRow className="bg-muted/30">
+                                <TableCell colSpan={9}>
+                                  <div className="p-3 space-y-3">
+                                    {/* Order meta */}
+                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-x-8 gap-y-1 text-sm">
+                                      <div>
+                                        <span className="text-muted-foreground">PO#: </span>
+                                        {order.purchaseOrderNumber || "—"}
+                                      </div>
+                                      <div>
+                                        <span className="text-muted-foreground">Start: </span>
+                                        {order.estimatedStartDate || "—"}
+                                      </div>
+                                      <div>
+                                        <span className="text-muted-foreground">End: </span>
+                                        {order.estimatedStopDate || "—"}
+                                      </div>
+                                      <div>
+                                        <span className="text-muted-foreground">Rental Total: </span>
+                                        {formatCurrency(order.rentalTotal)}
+                                      </div>
+                                    </div>
+
+                                    {/* Line items */}
+                                    {!items ? (
+                                      <div className="flex justify-center py-4">
+                                        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                                      </div>
+                                    ) : items.length === 0 ? (
+                                      <p className="text-sm text-muted-foreground text-center py-4">
+                                        No line items found for this order.
+                                      </p>
+                                    ) : (() => {
+                                      const grouped: Record<string, OrderItem[]> = {};
+                                      for (const item of items) {
+                                        const key = item.recordType || "O";
+                                        if (!grouped[key]) grouped[key] = [];
+                                        grouped[key].push(item);
+                                      }
+                                      const orderedKeys = [
+                                        ...RECORD_TYPE_CATEGORIES.map((c) => c.key).filter((k) => grouped[k]),
+                                        ...Object.keys(grouped).filter(
+                                          (k) => !RECORD_TYPE_CATEGORIES.some((c) => c.key === k),
+                                        ),
+                                      ];
+
+                                      return (
+                                        <div className="space-y-1">
+                                          <h4 className="text-sm font-medium mb-2">Line Items</h4>
+                                          {orderedKeys.map((catKey) => {
+                                            const catItems = grouped[catKey];
+                                            const catConfig = RECORD_TYPE_CATEGORIES.find((c) => c.key === catKey);
+                                            const label = catConfig?.label || "Other";
+                                            const colorClass = catConfig?.color || "text-muted-foreground";
+                                            const expandKey = `order:${order.orderId}:${catKey}`;
+                                            const isCatExpanded = expandedOrderCategories.has(expandKey);
+                                            const catTotal = catItems.reduce((s, it) => s + (it.extended || 0), 0);
+
+                                            return (
+                                              <div key={catKey} className="border rounded-md">
+                                                <button
+                                                  type="button"
+                                                  className="flex items-center justify-between w-full px-3 py-2 text-sm hover:bg-muted/50 transition-colors"
+                                                  onClick={() => {
+                                                    setExpandedOrderCategories((prev) => {
+                                                      const next = new Set(prev);
+                                                      if (next.has(expandKey)) next.delete(expandKey);
+                                                      else next.add(expandKey);
+                                                      return next;
+                                                    });
+                                                  }}
+                                                >
+                                                  <div className="flex items-center gap-2">
+                                                    {isCatExpanded ? (
+                                                      <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+                                                    ) : (
+                                                      <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+                                                    )}
+                                                    <span className={`font-medium ${colorClass}`}>
+                                                      {label}
+                                                    </span>
+                                                    <span className="text-muted-foreground">
+                                                      ({catItems.length} item{catItems.length !== 1 ? "s" : ""})
+                                                    </span>
+                                                  </div>
+                                                  <span className="font-medium text-sm">
+                                                    {formatCurrency(catTotal)}
+                                                  </span>
+                                                </button>
+
+                                                {isCatExpanded && (
+                                                  <div className="border-t">
+                                                    <Table>
+                                                      <TableHeader>
+                                                        <TableRow>
+                                                          <TableHead>I-Code</TableHead>
+                                                          <TableHead>Description</TableHead>
+                                                          <TableHead className="text-right">Qty</TableHead>
+                                                          <TableHead className="text-right">Extended</TableHead>
+                                                        </TableRow>
+                                                      </TableHeader>
+                                                      <TableBody>
+                                                        {catItems.map((item, idx) => (
+                                                          <TableRow key={item.orderItemId || idx}>
+                                                            <TableCell className="font-mono text-xs">
+                                                              {item.iCode || "—"}
+                                                            </TableCell>
+                                                            <TableCell className="text-sm">
+                                                              {item.description || "—"}
+                                                            </TableCell>
+                                                            <TableCell className="text-right">
+                                                              {item.quantity}
+                                                            </TableCell>
+                                                            <TableCell className="text-right">
+                                                              {formatCurrency(item.extended)}
+                                                            </TableCell>
+                                                          </TableRow>
+                                                        ))}
+                                                      </TableBody>
+                                                    </Table>
+                                                  </div>
+                                                )}
+                                              </div>
+                                            );
+                                          })}
+                                        </div>
+                                      );
+                                    })()}
+                                  </div>
+                                </TableCell>
+                              </TableRow>
+                            ) : null}
+                          </CollapsibleContent>
+                        </>
+                      </Collapsible>
                     );
                   })}
                 </TableBody>
