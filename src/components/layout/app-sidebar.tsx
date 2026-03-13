@@ -84,9 +84,9 @@ const ENTITY_LOGOS: Record<string, { src: string; alt: string }> = {
     src: "/logos/versatile-studios.svg",
     alt: "Versatile Studios",
   },
-  "Silverco Enterprises": {
+  "Silverco Enterprises, LLC": {
     src: "/logos/silverco.svg",
-    alt: "Silverco Enterprises",
+    alt: "Silverco Enterprises, LLC",
   },
 };
 
