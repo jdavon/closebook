@@ -645,19 +645,16 @@ export default function RebateTrackerPage() {
         </Card>
       </div>
 
-      {/* Customer Table */}
+      {/* Commercial Agreements Table */}
       <Card>
         <CardHeader>
-          <CardTitle>Exclusive Agreements</CardTitle>
+          <CardTitle>Commercial Agreements</CardTitle>
+          <CardDescription>Exclusive rebate agreements with commercial customers</CardDescription>
         </CardHeader>
         <CardContent>
-          {customers.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">
-              <p>No rebate customers yet.</p>
-              <p className="text-sm mt-1">
-                Click &quot;Add Customer&quot; to set up your first exclusive
-                agreement.
-              </p>
+          {customers.filter((c) => c.agreement_type === "commercial").length === 0 ? (
+            <div className="text-center py-6 text-muted-foreground">
+              <p className="text-sm">No commercial agreements yet.</p>
             </div>
           ) : (
             <Table>
@@ -665,7 +662,6 @@ export default function RebateTrackerPage() {
                 <TableRow>
                   <TableHead>Customer</TableHead>
                   <TableHead>Account #</TableHead>
-                  <TableHead>Type</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead className="text-right">YTD Revenue</TableHead>
                   <TableHead className="text-right">YTD Rebate</TableHead>
@@ -676,7 +672,9 @@ export default function RebateTrackerPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {customers.map((c) => (
+                {customers
+                  .filter((c) => c.agreement_type === "commercial")
+                  .map((c) => (
                   <TableRow
                     key={c.id}
                     className="cursor-pointer"
@@ -718,20 +716,129 @@ export default function RebateTrackerPage() {
                       </div>
                     </TableCell>
                     <TableCell className="text-muted-foreground">
-                      {c.agreement_type === "freelancer"
-                        ? "N/A"
-                        : c.rw_customer_number || c.rw_customer_id}
+                      {c.rw_customer_number || c.rw_customer_id}
                     </TableCell>
                     <TableCell>
                       <Badge
                         variant={
-                          c.agreement_type === "commercial"
-                            ? "default"
-                            : "secondary"
+                          c.status === "active" ? "default" : "outline"
+                        }
+                        className={
+                          c.status === "active"
+                            ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200"
+                            : ""
                         }
                       >
-                        {c.agreement_type}
+                        {c.status}
                       </Badge>
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {formatCurrency(getCustomerYTDRevenue(c.id))}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {formatCurrency(getCustomerYTDRebate(c.id))}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {formatCurrency(getCustomerQtrRebate(c.id))}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <div
+                        className="flex justify-end gap-1"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => openEditDialog(c)}
+                        >
+                          Edit
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="text-destructive"
+                          onClick={() => handleDeleteCustomer(c.id)}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Freelancer Agreements Table */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Freelancer Agreements</CardTitle>
+          <CardDescription>Rebate agreements with freelancers (invoices added manually)</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {customers.filter((c) => c.agreement_type === "freelancer").length === 0 ? (
+            <div className="text-center py-6 text-muted-foreground">
+              <p className="text-sm">No freelancer agreements yet.</p>
+            </div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Customer</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead className="text-right">YTD Revenue</TableHead>
+                  <TableHead className="text-right">YTD Rebate</TableHead>
+                  <TableHead className="text-right">
+                    {currentQtr} Rebate
+                  </TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {customers
+                  .filter((c) => c.agreement_type === "freelancer")
+                  .map((c) => (
+                  <TableRow
+                    key={c.id}
+                    className="cursor-pointer"
+                    onClick={() =>
+                      router.push(`/${entityId}/rebates/${c.id}`)
+                    }
+                  >
+                    <TableCell className="font-medium">
+                      <div className="flex items-center gap-2">
+                        {c.contract_storage_path && (
+                          <button
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              try {
+                                const res = await fetch("/api/storage/signed-download-url", {
+                                  method: "POST",
+                                  headers: { "Content-Type": "application/json" },
+                                  body: JSON.stringify({
+                                    bucket: "rebate-contracts",
+                                    path: c.contract_storage_path,
+                                  }),
+                                });
+                                const data = await res.json();
+                                if (data.signedUrl) {
+                                  window.open(data.signedUrl, "_blank");
+                                } else {
+                                  toast.error(data.error || "Failed to open PDF");
+                                }
+                              } catch {
+                                toast.error("Failed to open PDF");
+                              }
+                            }}
+                            title="View contract PDF"
+                          >
+                            <FileText className="h-4 w-4 text-red-600 shrink-0 hover:text-red-800 transition-colors" />
+                          </button>
+                        )}
+                        {c.customer_name}
+                      </div>
                     </TableCell>
                     <TableCell>
                       <Badge
