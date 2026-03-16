@@ -94,7 +94,8 @@ export async function POST(request: NextRequest) {
     const status = resolveStatus(raw[hm.status]);
 
     // Insert debt instrument
-    const { data: instrument, error: insertError } = await supabase
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: instrument, error: insertError } = await (supabase as any)
       .from("debt_instruments")
       .insert({
         entity_id: entityId,
@@ -153,7 +154,8 @@ export async function POST(request: NextRequest) {
         ending_balance: entry.ending_balance,
       }));
 
-      await supabase.from("debt_amortization").insert(amortEntries);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (supabase as any).from("debt_amortization").insert(amortEntries);
     }
 
     results.imported++;

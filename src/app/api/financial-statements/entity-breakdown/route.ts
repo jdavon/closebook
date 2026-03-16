@@ -804,25 +804,28 @@ export async function GET(request: Request) {
 
     if (isPL) {
       totalNetChange = 0;
-      const sorted = [...periodEnding.entries()].sort((a, b) =>
-        a[0].localeCompare(b[0])
-      );
 
-      for (let i = 0; i < sorted.length; i++) {
-        const [key, ending] = sorted[i];
+      for (const [key, ending] of periodEnding) {
         if (!rangeMonthSet.has(key)) continue;
 
-        const month = parseInt(key.split("-")[1]);
+        const [yearStr, monthStr] = key.split("-");
+        const year = parseInt(yearStr);
+        const month = parseInt(monthStr);
 
         if (month === fiscalYearStartMonth) {
           totalNetChange += ending;
         } else {
-          let priorEnding = 0;
-          for (let j = i - 1; j >= 0; j--) {
-            priorEnding = sorted[j][1];
-            break;
+          // Look up the SPECIFIC prior month (month-1) by key,
+          // exactly matching aggregateByBucket() in the main route.
+          const pm = month === 1 ? 12 : month - 1;
+          const py = month === 1 ? year - 1 : year;
+          const priorKey = `${py}-${String(pm).padStart(2, "0")}`;
+          const priorEnding = periodEnding.get(priorKey);
+          if (priorEnding !== undefined) {
+            totalNetChange += ending - priorEnding;
+          } else {
+            totalNetChange += ending;
           }
-          totalNetChange += ending - priorEnding;
         }
       }
     } else {
