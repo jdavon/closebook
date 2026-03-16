@@ -503,6 +503,7 @@ export default function LeaseDetailPage() {
   const [editNickname, setEditNickname] = useState("");
   const [editLessorName, setEditLessorName] = useState("");
   const [editMaintenanceType, setEditMaintenanceType] = useState<MaintenanceType>("triple_net");
+  const [editRentableSf, setEditRentableSf] = useState("");
   const [editRentPerSf, setEditRentPerSf] = useState("");
   const [editSecurityDeposit, setEditSecurityDeposit] = useState("");
   const [editTiAllowance, setEditTiAllowance] = useState("");
@@ -674,6 +675,7 @@ export default function LeaseDetailPage() {
       setEditNickname(l.nickname ?? "");
       setEditLessorName(l.lessor_name ?? "");
       setEditMaintenanceType(l.maintenance_type);
+      setEditRentableSf(l.properties?.rentable_square_footage != null ? String(l.properties.rentable_square_footage) : "");
       setEditRentPerSf(l.rent_per_sf != null ? String(l.rent_per_sf) : "");
       setEditSecurityDeposit(String(l.security_deposit));
       setEditTiAllowance(String(l.tenant_improvement_allowance));
@@ -768,6 +770,7 @@ export default function LeaseDetailPage() {
 
   async function handleSaveDetails() {
     setSavingDetails(true);
+    const rentableSf = editRentableSf ? parseFloat(editRentableSf) : null;
     const rentPerSf = editRentPerSf ? parseFloat(editRentPerSf) : null;
     const securityDeposit = parseFloat(editSecurityDeposit) || 0;
     const tiAllowance = parseFloat(editTiAllowance) || 0;
@@ -813,11 +816,25 @@ export default function LeaseDetailPage() {
 
     if (error) {
       toast.error(error.message);
-    } else {
-      toast.success("Lease details updated");
-      setEditingDetails(false);
-      loadData();
+      setSavingDetails(false);
+      return;
     }
+
+    if (lease?.property_id) {
+      const { error: propError } = await supabase
+        .from("properties")
+        .update({ rentable_square_footage: rentableSf })
+        .eq("id", lease.property_id);
+      if (propError) {
+        toast.error(propError.message);
+        setSavingDetails(false);
+        return;
+      }
+    }
+
+    toast.success("Lease details updated");
+    setEditingDetails(false);
+    loadData();
     setSavingDetails(false);
   }
 
@@ -826,6 +843,7 @@ export default function LeaseDetailPage() {
       setEditNickname(lease.nickname ?? "");
       setEditLessorName(lease.lessor_name ?? "");
       setEditMaintenanceType(lease.maintenance_type);
+      setEditRentableSf(lease.properties?.rentable_square_footage != null ? String(lease.properties.rentable_square_footage) : "");
       setEditRentPerSf(lease.rent_per_sf != null ? String(lease.rent_per_sf) : "");
       setEditSecurityDeposit(String(lease.security_deposit));
       setEditTiAllowance(String(lease.tenant_improvement_allowance));
@@ -2003,11 +2021,13 @@ export default function LeaseDetailPage() {
                         </SelectContent>
                       </Select>
                       <Label className="text-muted-foreground">Rentable SF</Label>
-                      <span>
-                        {lease.properties?.rentable_square_footage
-                          ? lease.properties.rentable_square_footage.toLocaleString()
-                          : "---"}
-                      </span>
+                      <Input
+                        type="number"
+                        step="1"
+                        value={editRentableSf}
+                        onChange={(e) => setEditRentableSf(e.target.value)}
+                        placeholder="---"
+                      />
                       <Label className="text-muted-foreground">Rent / SF</Label>
                       <Input
                         type="number"
