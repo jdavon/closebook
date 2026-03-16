@@ -82,6 +82,14 @@ async function fetchAllGLBalances(
       .in("entity_id", entityIds)
       .in("period_year", years)
       .in("period_month", months)
+      // Deterministic ordering is CRITICAL for correct pagination.
+      // Without ORDER BY, PostgreSQL returns rows in arbitrary order that
+      // can change between page fetches, causing rows to be skipped or
+      // duplicated across pages.
+      .order("entity_id")
+      .order("account_id")
+      .order("period_year")
+      .order("period_month")
       .range(offset, offset + GL_PAGE_SIZE - 1);
 
     if (error) {
