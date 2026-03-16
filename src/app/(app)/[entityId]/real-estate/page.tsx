@@ -973,12 +973,6 @@ export default function RealEstatePage() {
   const totalAllocatedIn = allocatedLeases.reduce((s, a) => s + a.allocated_monthly, 0);
   const effectiveNetMonthly = netMonthly - totalAllocatedOut + totalAllocatedIn;
 
-  // Critical dates within alertable range
-  const upcomingDates = criticalDates.filter((cd) => {
-    const days = daysUntil(cd.critical_date);
-    return days <= cd.alert_days_before;
-  });
-
   // ASC 842 portfolio summary (active leases with discount rate)
   const asc842Summary = useMemo(() => {
     let totalLiability = 0;
@@ -1038,58 +1032,6 @@ export default function RealEstatePage() {
           </Link>
         </div>
       </div>
-
-      {/* Critical Dates Alert Banner */}
-      {upcomingDates.length > 0 && (
-        <Card className="border-yellow-200 bg-yellow-50/50">
-          <CardHeader className="pb-2">
-            <div className="flex items-center gap-2">
-              <AlertTriangle className="h-4 w-4 text-yellow-600" />
-              <CardTitle className="text-base text-yellow-800">
-                Upcoming Critical Dates ({upcomingDates.length})
-              </CardTitle>
-            </div>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-2">
-              {upcomingDates.slice(0, 5).map((cd) => {
-                const days = daysUntil(cd.critical_date);
-                return (
-                  <div
-                    key={cd.id}
-                    className="flex items-center justify-between text-sm"
-                  >
-                    <div className="flex items-center gap-3">
-                      {urgencyBadge(days)}
-                      <span className={urgencyColor(days)}>
-                        {new Date(
-                          cd.critical_date + "T00:00:00"
-                        ).toLocaleDateString()}
-                      </span>
-                      <span className="font-medium">
-                        {DATE_TYPE_LABELS[cd.date_type]}
-                      </span>
-                      <span className="text-muted-foreground">
-                        — {cd.leases?.nickname || (cd.leases?.lease_name ?? "Unknown Lease")}
-                      </span>
-                    </div>
-                    <Link href={`/${entityId}/real-estate/${cd.lease_id}`}>
-                      <Button variant="ghost" size="sm">
-                        View
-                      </Button>
-                    </Link>
-                  </div>
-                );
-              })}
-              {upcomingDates.length > 5 && (
-                <p className="text-xs text-muted-foreground pt-1">
-                  + {upcomingDates.length - 5} more upcoming dates
-                </p>
-              )}
-            </div>
-          </CardContent>
-        </Card>
-      )}
 
       {/* Summary Cards */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
