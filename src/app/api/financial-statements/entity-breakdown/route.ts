@@ -703,18 +703,13 @@ export async function GET(request: Request) {
     }
   }
 
-  // Build set of P&L entity account IDs (for standalone net_change derivation)
+  // Build set of P&L master account IDs (for standalone net_change derivation)
   const plMasterAccountIds = new Set(
     masterAccounts
       .filter((ma: { classification: string }) =>
         ma.classification === "Revenue" || ma.classification === "Expense"
       )
       .map((ma: { id: string }) => ma.id)
-  );
-  const plAccountIds = new Set(
-    (mappings ?? [])
-      .filter((m: { master_account_id: string }) => plMasterAccountIds.has(m.master_account_id))
-      .map((m: { account_id: string }) => m.account_id)
   );
 
   // Compute the prior month (needed to derive standalone P&L net changes)
@@ -738,30 +733,13 @@ export async function GET(request: Request) {
       uniqueMonthNums
     );
 
-    // Filter to mapped accounts (keep all fetched months for derivation)
-    const mappedBalances = allBalances.filter((b) =>
+    // Filter to mapped accounts (keep prior month for derivation)
+    glBalances = allBalances.filter((b) =>
       mappedAccountIdSet.has(b.account_id)
-    );
-
-    // Derive standalone monthly net_change for P&L accounts.
-    // QBO stores cumulative YTD in net_change — summing raw values across
-    // months inflates totals by ~N*(N+1)/2 factor.
-    deriveStandaloneNetChanges(mappedBalances, plAccountIds, fiscalYearStartMonth);
-
-    // Now filter to only months in the actual requested range
-    const monthSet = new Set(
-      allMonths.map(
-        (m) => `${m.year}-${String(m.month).padStart(2, "0")}`
-      )
-    );
-    glBalances = mappedBalances.filter((b) =>
-      monthSet.has(
-        `${b.period_year}-${String(b.period_month).padStart(2, "0")}`
-      )
     );
   }
 
-  // Index GL balances: (entity_id, account_id) -> balances sorted by period
+  // Index GL balances: (entity_id, account_id) -> balances (includes prior month)
   const balanceIndex = new Map<string, RawGLBalance[]>();
   for (const b of glBalances) {
     const key = `${b.entity_id}::${b.account_id}`;
@@ -770,11 +748,12 @@ export async function GET(request: Request) {
     balanceIndex.set(key, existing);
   }
 
-  // Build entity amounts per master account
-  // entityAmounts: Map<masterAccountId, EntityAmounts>
-  // EntityAmounts.netChange[entityId] = sum of net_change for all mapped accounts in period range
-  // EntityAmounts.endingBalance[entityId] = sum of ending_balance for last month in range
-  const entityAmounts = new Map<string, EntityAmounts>();
+  // Month set for the actual requested range (excludes prior month)
+  const rangeMonthSet = new Set(
+    allMonths.map(
+      (m) => `${m.year}-${String(m.month).padStart(2, "0")}`
+    )
+  );
 
   // Sort allMonths to find last month in range
   const sortedMonths = [...allMonths].sort((a, b) =>
@@ -785,41 +764,95 @@ export async function GET(request: Request) {
     ? `${lastMonth.year}-${String(lastMonth.month).padStart(2, "0")}`
     : "";
 
-  for (const ma of masterAccounts) {
-    const ea: EntityAmounts = { netChange: {}, endingBalance: {} };
+  // Build entity amounts per master account.
+  // For P&L accounts: consolidate ending_balances per entity per period, then
+  // derive standalone net_change from the consolidated figures.
+  // This matches the main route's aggregateByBucket() approach.
+  const entityAmounts = new Map<string, EntityAmounts>();
 
-    for (const entity of entities) {
-      const mapKey = `${ma.id}::${entity.id}`;
-      const entityAccountIds = masterEntityToAccounts.get(mapKey) ?? [];
-      let totalNetChange = 0;
-      let totalEndingBalance = 0;
+  // Helper: compute amounts for one entity (or group of entities for consolidated)
+  function computeColumnAmounts(
+    maId: string,
+    colEntityIds: string[],
+    isPL: boolean
+  ): { netChange: number; endingBalance: number } {
+    // Consolidate ending_balance per period across all entities in this column
+    const periodEnding = new Map<string, number>();
+    let bsNetChange = 0;
 
-      for (const accountId of entityAccountIds) {
-        const balKey = `${entity.id}::${accountId}`;
+    for (const eid of colEntityIds) {
+      const mapKey = `${maId}::${eid}`;
+      const accountIds = masterEntityToAccounts.get(mapKey) ?? [];
+
+      for (const accountId of accountIds) {
+        const balKey = `${eid}::${accountId}`;
         const bals = balanceIndex.get(balKey) ?? [];
 
         for (const b of bals) {
-          totalNetChange += b.net_change;
-          const bKey = `${b.period_year}-${String(b.period_month).padStart(2, "0")}`;
-          if (bKey === lastMonthKey) {
-            totalEndingBalance += b.ending_balance;
+          const pKey = `${b.period_year}-${String(b.period_month).padStart(2, "0")}`;
+          periodEnding.set(pKey, (periodEnding.get(pKey) ?? 0) + b.ending_balance);
+          if (!isPL && rangeMonthSet.has(pKey)) {
+            bsNetChange += b.net_change;
           }
         }
       }
-
-      ea.netChange[entity.id] = totalNetChange;
-      ea.endingBalance[entity.id] = totalEndingBalance;
     }
 
-    // Consolidated = sum across all entities
-    let consolidatedNetChange = 0;
-    let consolidatedEndingBalance = 0;
+    if (periodEnding.size === 0) return { netChange: 0, endingBalance: 0 };
+
+    let totalNetChange: number;
+
+    if (isPL) {
+      totalNetChange = 0;
+      const sorted = [...periodEnding.entries()].sort((a, b) =>
+        a[0].localeCompare(b[0])
+      );
+
+      for (let i = 0; i < sorted.length; i++) {
+        const [key, ending] = sorted[i];
+        if (!rangeMonthSet.has(key)) continue;
+
+        const month = parseInt(key.split("-")[1]);
+
+        if (month === fiscalYearStartMonth) {
+          totalNetChange += ending;
+        } else {
+          let priorEnding = 0;
+          for (let j = i - 1; j >= 0; j--) {
+            priorEnding = sorted[j][1];
+            break;
+          }
+          totalNetChange += ending - priorEnding;
+        }
+      }
+    } else {
+      totalNetChange = bsNetChange;
+    }
+
+    const totalEndingBalance = periodEnding.get(lastMonthKey) ?? 0;
+    return { netChange: totalNetChange, endingBalance: totalEndingBalance };
+  }
+
+  for (const ma of masterAccounts) {
+    const ea: EntityAmounts = { netChange: {}, endingBalance: {} };
+    const isPL = plMasterAccountIds.has(ma.id);
+
+    // Each entity column
     for (const entity of entities) {
-      consolidatedNetChange += ea.netChange[entity.id] ?? 0;
-      consolidatedEndingBalance += ea.endingBalance[entity.id] ?? 0;
+      const { netChange, endingBalance } = computeColumnAmounts(
+        ma.id,
+        [entity.id],
+        isPL
+      );
+      ea.netChange[entity.id] = netChange;
+      ea.endingBalance[entity.id] = endingBalance;
     }
-    ea.netChange["consolidated"] = consolidatedNetChange;
-    ea.endingBalance["consolidated"] = consolidatedEndingBalance;
+
+    // Consolidated = sum across ALL entities (consolidate-then-derive)
+    const { netChange: consNetChange, endingBalance: consEndingBalance } =
+      computeColumnAmounts(ma.id, entityIds, isPL);
+    ea.netChange["consolidated"] = consNetChange;
+    ea.endingBalance["consolidated"] = consEndingBalance;
 
     entityAmounts.set(ma.id, ea);
   }
