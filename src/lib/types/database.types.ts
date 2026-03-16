@@ -2123,6 +2123,7 @@ export type Database = {
           total_square_footage: number | null
           rentable_square_footage: number | null
           usable_square_footage: number | null
+          lot_square_footage: number | null
           notes: string | null
           created_by: string | null
           created_at: string
@@ -2142,6 +2143,7 @@ export type Database = {
           total_square_footage?: number | null
           rentable_square_footage?: number | null
           usable_square_footage?: number | null
+          lot_square_footage?: number | null
           notes?: string | null
           created_by?: string | null
           created_at?: string
@@ -2161,6 +2163,7 @@ export type Database = {
           total_square_footage?: number | null
           rentable_square_footage?: number | null
           usable_square_footage?: number | null
+          lot_square_footage?: number | null
           notes?: string | null
           created_by?: string | null
           created_at?: string

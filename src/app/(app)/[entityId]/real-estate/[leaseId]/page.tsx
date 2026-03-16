@@ -167,6 +167,7 @@ interface LeaseData {
     city: string | null;
     state: string | null;
     rentable_square_footage: number | null;
+    lot_square_footage: number | null;
   } | null;
 }
 
@@ -504,6 +505,7 @@ export default function LeaseDetailPage() {
   const [editLessorName, setEditLessorName] = useState("");
   const [editMaintenanceType, setEditMaintenanceType] = useState<MaintenanceType>("triple_net");
   const [editRentableSf, setEditRentableSf] = useState("");
+  const [editLotSf, setEditLotSf] = useState("");
   const [editRentPerSf, setEditRentPerSf] = useState("");
   const [editSecurityDeposit, setEditSecurityDeposit] = useState("");
   const [editTiAllowance, setEditTiAllowance] = useState("");
@@ -560,7 +562,7 @@ export default function LeaseDetailPage() {
         rou_asset_account_id, lease_liability_account_id, lease_expense_account_id,
         interest_expense_account_id, cam_expense_account_id,
         asc842_adjustment_account_id, cash_ap_account_id,
-        properties(property_name, address_line1, city, state, rentable_square_footage)`
+        properties(property_name, address_line1, city, state, rentable_square_footage, lot_square_footage)`
       )
       .eq("id", leaseId)
       .single();
@@ -676,6 +678,7 @@ export default function LeaseDetailPage() {
       setEditLessorName(l.lessor_name ?? "");
       setEditMaintenanceType(l.maintenance_type);
       setEditRentableSf(l.properties?.rentable_square_footage != null ? String(l.properties.rentable_square_footage) : "");
+      setEditLotSf(l.properties?.lot_square_footage != null ? String(l.properties.lot_square_footage) : "");
       setEditRentPerSf(l.rent_per_sf != null ? String(l.rent_per_sf) : "");
       setEditSecurityDeposit(String(l.security_deposit));
       setEditTiAllowance(String(l.tenant_improvement_allowance));
@@ -771,6 +774,7 @@ export default function LeaseDetailPage() {
   async function handleSaveDetails() {
     setSavingDetails(true);
     const rentableSf = editRentableSf ? parseFloat(editRentableSf) : null;
+    const lotSf = editLotSf ? parseFloat(editLotSf) : null;
     const rentPerSf = editRentPerSf ? parseFloat(editRentPerSf) : null;
     const securityDeposit = parseFloat(editSecurityDeposit) || 0;
     const tiAllowance = parseFloat(editTiAllowance) || 0;
@@ -823,7 +827,7 @@ export default function LeaseDetailPage() {
     if (lease?.property_id) {
       const { error: propError } = await supabase
         .from("properties")
-        .update({ rentable_square_footage: rentableSf })
+        .update({ rentable_square_footage: rentableSf, lot_square_footage: lotSf })
         .eq("id", lease.property_id);
       if (propError) {
         toast.error(propError.message);
@@ -844,6 +848,7 @@ export default function LeaseDetailPage() {
       setEditLessorName(lease.lessor_name ?? "");
       setEditMaintenanceType(lease.maintenance_type);
       setEditRentableSf(lease.properties?.rentable_square_footage != null ? String(lease.properties.rentable_square_footage) : "");
+      setEditLotSf(lease.properties?.lot_square_footage != null ? String(lease.properties.lot_square_footage) : "");
       setEditRentPerSf(lease.rent_per_sf != null ? String(lease.rent_per_sf) : "");
       setEditSecurityDeposit(String(lease.security_deposit));
       setEditTiAllowance(String(lease.tenant_improvement_allowance));
@@ -2020,12 +2025,20 @@ export default function LeaseDetailPage() {
                           <SelectItem value="modified_gross">Modified Gross</SelectItem>
                         </SelectContent>
                       </Select>
-                      <Label className="text-muted-foreground">Rentable SF</Label>
+                      <Label className="text-muted-foreground">Building SF</Label>
                       <Input
                         type="number"
                         step="1"
                         value={editRentableSf}
                         onChange={(e) => setEditRentableSf(e.target.value)}
+                        placeholder="---"
+                      />
+                      <Label className="text-muted-foreground">Lot SF</Label>
+                      <Input
+                        type="number"
+                        step="1"
+                        value={editLotSf}
+                        onChange={(e) => setEditLotSf(e.target.value)}
                         placeholder="---"
                       />
                       <Label className="text-muted-foreground">Rent / SF</Label>
@@ -2143,10 +2156,16 @@ export default function LeaseDetailPage() {
                       <span>{lease.lessor_name ?? "---"}</span>
                       <span className="text-muted-foreground">Maintenance</span>
                       <span>{MAINTENANCE_LABELS[lease.maintenance_type]}</span>
-                      <span className="text-muted-foreground">Rentable SF</span>
+                      <span className="text-muted-foreground">Building SF</span>
                       <span>
                         {lease.properties?.rentable_square_footage
                           ? lease.properties.rentable_square_footage.toLocaleString()
+                          : "---"}
+                      </span>
+                      <span className="text-muted-foreground">Lot SF</span>
+                      <span>
+                        {lease.properties?.lot_square_footage
+                          ? lease.properties.lot_square_footage.toLocaleString()
                           : "---"}
                       </span>
                       <span className="text-muted-foreground">Rent / SF</span>
