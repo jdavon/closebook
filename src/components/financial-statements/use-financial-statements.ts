@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import type {
   FinancialStatementsResponse,
   FinancialModelConfig,
@@ -10,6 +10,7 @@ interface UseFinancialStatementsReturn {
   data: FinancialStatementsResponse | null;
   loading: boolean;
   error: string | null;
+  stale: boolean;
   generate: () => void;
 }
 
@@ -110,10 +111,16 @@ export function useFinancialStatements(
 
   const { data, loading, error } = useFetchStatements(activeConfig, trigger, enabled);
 
+  // In manual mode, detect when the live config has diverged from the
+  // last-generated snapshot so the page can hide stale results.
+  const configKey = useMemo(() => JSON.stringify(config), [config]);
+  const snapshotKey = useMemo(() => JSON.stringify(snapshotConfig), [snapshotConfig]);
+  const stale = manual && fetchCount > 0 && configKey !== snapshotKey;
+
   const generate = useCallback(() => {
     setSnapshotConfig(configRef.current);
     setFetchCount((c) => c + 1);
   }, []);
 
-  return { data, loading, error, generate };
+  return { data, loading, error, stale, generate };
 }

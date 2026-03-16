@@ -197,7 +197,7 @@ export default function FinancialModelPage() {
       (scope === "entity" && selectedEntityId) ||
       (scope === "reporting_entity" && selectedReportingEntityId));
 
-  const { data, loading, error, generate } = useFinancialStatements(config, !!canFetch, true);
+  const { data, loading, error, stale, generate } = useFinancialStatements(config, !!canFetch, true);
   const drillDown = useDrillDown(config);
   usePrintFitToPage();
 
@@ -412,7 +412,7 @@ export default function FinancialModelPage() {
         activeTab={activeTab}
       />
 
-      {!data && !loading && !error && (
+      {(!data || stale) && !loading && !error && (
         <Card>
           <CardContent className="py-12 text-center">
             <p className="text-sm text-muted-foreground">
@@ -420,7 +420,9 @@ export default function FinancialModelPage() {
                 ? "Select an entity, then click Generate."
                 : scope === "reporting_entity" && !selectedReportingEntityId
                   ? "Select a reporting entity, then click Generate."
-                  : "Configure your report options above, then click Generate."}
+                  : stale
+                    ? "Configuration changed — click Generate to update."
+                    : "Configure your report options above, then click Generate."}
             </p>
           </CardContent>
         </Card>
@@ -445,7 +447,7 @@ export default function FinancialModelPage() {
       )}
 
       {/* Data Diagnostics Panel */}
-      {!loading && !error && data && data.diagnostics && canFetch && (
+      {!loading && !error && !stale && data && data.diagnostics && canFetch && (
         <div className="stmt-no-print">
           <button
             onClick={() => setShowDiagnostics(!showDiagnostics)}
@@ -570,7 +572,7 @@ export default function FinancialModelPage() {
         </div>
       )}
 
-      {!loading && !error && data && data.periods.length > 0 && canFetch && (
+      {!loading && !error && !stale && data && data.periods.length > 0 && canFetch && (
         <Tabs
           value={activeTab}
           onValueChange={(v) => setActiveTab(v as StatementTab)}
