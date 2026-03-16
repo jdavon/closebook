@@ -197,7 +197,7 @@ export default function FinancialModelPage() {
       (scope === "entity" && selectedEntityId) ||
       (scope === "reporting_entity" && selectedReportingEntityId));
 
-  const { data, loading, error } = useFinancialStatements(config, !!canFetch);
+  const { data, loading, error, generate } = useFinancialStatements(config, !!canFetch, true);
   const drillDown = useDrillDown(config);
   usePrintFitToPage();
 
@@ -403,22 +403,24 @@ export default function FinancialModelPage() {
         onIncludeTotalChange={setIncludeTotal}
         varianceDisplay={varianceDisplay}
         onVarianceDisplayChange={setVarianceDisplay}
+        onGenerate={generate}
         onExport={handleExport}
         onExportAll={handleExportAll}
         onPrint={handlePrint}
         loading={loading}
+        hasData={!!data}
         activeTab={activeTab}
       />
 
-      {!canFetch && !loading && (
+      {!data && !loading && !error && (
         <Card>
           <CardContent className="py-12 text-center">
             <p className="text-sm text-muted-foreground">
-              {scope === "entity"
-                ? "Select an entity to view financial statements."
-                : scope === "reporting_entity"
-                  ? "Select a reporting entity to view financial statements."
-                  : "Loading organization data..."}
+              {scope === "entity" && !selectedEntityId
+                ? "Select an entity, then click Generate."
+                : scope === "reporting_entity" && !selectedReportingEntityId
+                  ? "Select a reporting entity, then click Generate."
+                  : "Configure your report options above, then click Generate."}
             </p>
           </CardContent>
         </Card>

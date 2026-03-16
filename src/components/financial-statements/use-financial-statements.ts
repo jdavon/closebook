@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import type {
   FinancialStatementsResponse,
   FinancialModelConfig,
@@ -10,20 +10,20 @@ interface UseFinancialStatementsReturn {
   data: FinancialStatementsResponse | null;
   loading: boolean;
   error: string | null;
-  refetch: () => void;
+  generate: () => void;
 }
 
-export function useFinancialStatements(
+function useFetchStatements(
   config: FinancialModelConfig,
-  enabled: boolean = true
-): UseFinancialStatementsReturn {
+  trigger: number,
+  enabled: boolean
+) {
   const [data, setData] = useState<FinancialStatementsResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [fetchCount, setFetchCount] = useState(0);
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled || trigger === 0) return;
 
     const controller = new AbortController();
     const { signal } = controller;
@@ -82,28 +82,38 @@ export function useFinancialStatements(
     return () => {
       controller.abort();
     };
-  }, [
-    enabled,
-    config.scope,
-    config.entityId,
-    config.organizationId,
-    config.reportingEntityId,
-    config.startYear,
-    config.startMonth,
-    config.endYear,
-    config.endMonth,
-    config.granularity,
-    config.includeBudget,
-    config.includeYoY,
-    config.includeProForma,
-    config.includeAllocations,
-    config.includeTotal,
-    fetchCount,
-  ]);
+  }, [enabled, trigger, config.scope, config.entityId, config.organizationId, config.reportingEntityId, config.startYear, config.startMonth, config.endYear, config.endMonth, config.granularity, config.includeBudget, config.includeYoY, config.includeProForma, config.includeAllocations, config.includeTotal]);
 
-  const refetch = useCallback(() => {
+  return { data, loading, error };
+}
+
+/**
+ * @param config - Financial model configuration
+ * @param enabled - Whether fetching is allowed (e.g. required IDs are present)
+ * @param manual - If true, only fetches when generate() is called (no auto-fetch on config change)
+ */
+export function useFinancialStatements(
+  config: FinancialModelConfig,
+  enabled: boolean = true,
+  manual: boolean = false
+): UseFinancialStatementsReturn {
+  const [fetchCount, setFetchCount] = useState(0);
+  const configRef = useRef(config);
+  configRef.current = config;
+
+  // In manual mode, we snapshot the config at generate() time so the
+  // effect only fires on fetchCount change, not on every config change.
+  const [snapshotConfig, setSnapshotConfig] = useState(config);
+
+  const activeConfig = manual ? snapshotConfig : config;
+  const trigger = manual ? fetchCount : fetchCount + 1; // auto mode: always > 0
+
+  const { data, loading, error } = useFetchStatements(activeConfig, trigger, enabled);
+
+  const generate = useCallback(() => {
+    setSnapshotConfig(configRef.current);
     setFetchCount((c) => c + 1);
   }, []);
 
-  return { data, loading, error, refetch };
+  return { data, loading, error, generate };
 }

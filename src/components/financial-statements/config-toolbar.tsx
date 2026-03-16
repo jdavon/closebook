@@ -16,7 +16,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Download, Printer, ChevronDown } from "lucide-react";
+import { Download, Printer, ChevronDown, Play } from "lucide-react";
 import type { Granularity, StatementTab, VarianceDisplayMode } from "./types";
 
 const TAB_LABELS: Record<StatementTab, string> = {
@@ -57,10 +57,12 @@ interface ConfigToolbarProps {
   onIncludeTotalChange?: (val: boolean) => void;
   varianceDisplay?: VarianceDisplayMode;
   onVarianceDisplayChange?: (mode: VarianceDisplayMode) => void;
+  onGenerate?: () => void;
   onExport: () => void;
   onExportAll?: () => void;
   onPrint: () => void;
   loading?: boolean;
+  hasData?: boolean;
   activeTab?: StatementTab;
 }
 
@@ -98,10 +100,12 @@ export function ConfigToolbar({
   onIncludeTotalChange,
   varianceDisplay = "dollars",
   onVarianceDisplayChange,
+  onGenerate,
   onExport,
   onExportAll,
   onPrint,
   loading = false,
+  hasData = false,
   activeTab,
 }: ConfigToolbarProps) {
   const isIndividualTab = activeTab && activeTab !== "all";
@@ -311,6 +315,22 @@ export function ConfigToolbar({
 
       {/* Separator */}
       <div className="h-8 w-px bg-border" />
+
+      {/* Generate (manual mode only) */}
+      {onGenerate && (
+        <Button
+          size="sm"
+          onClick={onGenerate}
+          disabled={loading}
+          className="h-8 text-xs"
+        >
+          <Play className="h-3.5 w-3.5 mr-1" />
+          {loading ? "Generating..." : "Generate"}
+        </Button>
+      )}
+
+      {/* Separator */}
+      {onGenerate && <div className="h-8 w-px bg-border" />}
 
       {/* Actions */}
       <div className="flex items-center gap-1">
