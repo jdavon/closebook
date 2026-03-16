@@ -61,6 +61,7 @@ import {
 import type { VehicleClass } from "@/lib/types/database";
 import { ReconciliationTab } from "./reconciliation-tab";
 import { RollForwardTab } from "./roll-forward-tab";
+import { SoldTab } from "./sold-tab";
 
 interface FixedAsset {
   id: string;
@@ -349,6 +350,7 @@ export default function AssetsPage() {
       <Tabs defaultValue="register" className="space-y-6">
         <TabsList>
           <TabsTrigger value="register">Register</TabsTrigger>
+          <TabsTrigger value="sold">Sold</TabsTrigger>
           <TabsTrigger value="reconciliation">Reconciliation</TabsTrigger>
           <TabsTrigger value="roll-forward">Roll-Forward</TabsTrigger>
         </TabsList>
@@ -569,6 +571,10 @@ export default function AssetsPage() {
         </CardContent>
       </Card>
 
+        </TabsContent>
+
+        <TabsContent value="sold">
+          <SoldTab entityId={entityId} />
         </TabsContent>
 
         <TabsContent value="reconciliation">
