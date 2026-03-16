@@ -54,6 +54,52 @@ function parseGLBalance(row: any): RawGLBalance {
 }
 
 // ---------------------------------------------------------------------------
+// Derive standalone monthly net_change for P&L accounts.
+// QBO trial balance stores cumulative YTD in ending_balance/net_change for
+// P&L accounts. We must subtract the prior month's ending_balance to get the
+// true monthly activity. This mirrors aggregateByBucket() in the main route.
+// ---------------------------------------------------------------------------
+
+function deriveStandaloneNetChanges(
+  balances: RawGLBalance[],
+  plAccountIds: Set<string>,
+  fiscalYearStartMonth: number
+): void {
+  // Group by (entity_id, account_id)
+  const grouped = new Map<string, RawGLBalance[]>();
+  for (const b of balances) {
+    const key = `${b.entity_id}::${b.account_id}`;
+    const list = grouped.get(key) ?? [];
+    list.push(b);
+    grouped.set(key, list);
+  }
+
+  for (const [key, bals] of grouped) {
+    const accountId = key.split("::")[1];
+    if (!plAccountIds.has(accountId)) continue; // BS accounts are fine
+
+    // Sort by date
+    bals.sort(
+      (a, b) => a.period_year - b.period_year || a.period_month - b.period_month
+    );
+
+    // Derive standalone amounts from ending_balance differences
+    for (let i = 0; i < bals.length; i++) {
+      const curr = bals[i];
+      if (curr.period_month === fiscalYearStartMonth) {
+        // P&L resets at fiscal year start — YTD IS standalone
+        curr.net_change = curr.ending_balance;
+      } else if (i > 0) {
+        curr.net_change = curr.ending_balance - bals[i - 1].ending_balance;
+      } else {
+        // No prior month data — use ending_balance as best available
+        curr.net_change = curr.ending_balance;
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Paginated GL balance fetcher
 // ---------------------------------------------------------------------------
 
@@ -551,10 +597,14 @@ export async function GET(request: Request) {
   // Get ALL active entities for the org (to find unassigned ones)
   const { data: orgEntities } = await admin
     .from("entities")
-    .select("id, name, code")
+    .select("id, name, code, fiscal_year_end_month")
     .eq("organization_id", organizationId)
     .eq("is_active", true)
     .order("name");
+
+  // Derive fiscal year start month (consistent with main route)
+  const fyEnd = (orgEntities ?? [])[0]?.fiscal_year_end_month ?? 12;
+  const fiscalYearStartMonth = (fyEnd % 12) + 1;
 
   const allEntities = orgEntities ?? [];
   const allEntityIds = allEntities.map((e) => e.id);
@@ -652,12 +702,32 @@ export async function GET(request: Request) {
     }
   }
 
-  // Get GL balances for ALL entities
+  // Build set of P&L entity account IDs (for standalone net_change derivation)
+  const plMasterAccountIds = new Set(
+    masterAccounts
+      .filter((ma: { classification: string }) =>
+        ma.classification === "Revenue" || ma.classification === "Expense"
+      )
+      .map((ma: { id: string }) => ma.id)
+  );
+  const plAccountIds = new Set(
+    (mappings ?? [])
+      .filter((m: { master_account_id: string }) => plMasterAccountIds.has(m.master_account_id))
+      .map((m: { account_id: string }) => m.account_id)
+  );
+
+  // Compute the prior month (needed to derive standalone P&L net changes)
+  const priorMonth = startMonth === 1
+    ? { year: startYear - 1, month: 12 }
+    : { year: startYear, month: startMonth - 1 };
+
+  // Get GL balances for ALL entities (include prior month for derivation)
   let glBalances: RawGLBalance[] = [];
 
   if (mappedAccountIdSet.size > 0 && allEntityIds.length > 0) {
-    const uniqueYears = [...new Set(allMonths.map((m) => m.year))];
-    const uniqueMonthNums = [...new Set(allMonths.map((m) => m.month))];
+    const fetchMonths = [...allMonths, priorMonth];
+    const uniqueYears = [...new Set(fetchMonths.map((m) => m.year))];
+    const uniqueMonthNums = [...new Set(fetchMonths.map((m) => m.month))];
 
     const allBalances = await fetchAllGLBalances(
       admin,
@@ -666,17 +736,26 @@ export async function GET(request: Request) {
       uniqueMonthNums
     );
 
+    // Filter to mapped accounts (keep all fetched months for derivation)
+    const mappedBalances = allBalances.filter((b) =>
+      mappedAccountIdSet.has(b.account_id)
+    );
+
+    // Derive standalone monthly net_change for P&L accounts.
+    // QBO stores cumulative YTD in net_change — summing raw values across
+    // months inflates totals by ~N*(N+1)/2 factor.
+    deriveStandaloneNetChanges(mappedBalances, plAccountIds, fiscalYearStartMonth);
+
+    // Now filter to only months in the actual requested range
     const monthSet = new Set(
       allMonths.map(
         (m) => `${m.year}-${String(m.month).padStart(2, "0")}`
       )
     );
-    glBalances = allBalances.filter(
-      (b) =>
-        mappedAccountIdSet.has(b.account_id) &&
-        monthSet.has(
-          `${b.period_year}-${String(b.period_month).padStart(2, "0")}`
-        )
+    glBalances = mappedBalances.filter((b) =>
+      monthSet.has(
+        `${b.period_year}-${String(b.period_month).padStart(2, "0")}`
+      )
     );
   }
 
