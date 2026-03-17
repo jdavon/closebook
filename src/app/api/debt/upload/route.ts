@@ -93,6 +93,17 @@ export async function POST(request: NextRequest) {
     const currentDraw = parseNumber(raw[hm.currentDraw]) || null;
     const status = resolveStatus(raw[hm.status]);
 
+    // Parse enhanced fields (v2)
+    const loanNumber = parseString(raw[hm.loanNumber]);
+    const paymentStructure = resolvePaymentStructure(raw[hm.paymentStructure]);
+    const dayCountConvention = resolveDayCount(raw[hm.dayCountConvention]);
+    const rateType = resolveRateType(raw[hm.rateType]);
+    const indexRateName = parseString(raw[hm.indexRateName]);
+    const spreadMargin = parseRate(raw[hm.spreadMargin]) || null;
+    const balloonAmount = parseNumber(raw[hm.balloonAmount]) || null;
+    const collateralDescription = parseString(raw[hm.collateral]);
+    const notes = parseString(raw[hm.notes]);
+
     // Insert debt instrument
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data: instrument, error: insertError } = await (supabase as any)
@@ -111,6 +122,16 @@ export async function POST(request: NextRequest) {
         credit_limit: creditLimit,
         current_draw: currentDraw,
         status,
+        loan_number: loanNumber,
+        payment_structure: paymentStructure,
+        day_count_convention: dayCountConvention,
+        rate_type: rateType,
+        index_rate_name: indexRateName,
+        spread_margin: spreadMargin,
+        balloon_amount: balloonAmount,
+        is_secured: collateralDescription ? true : false,
+        collateral_description: collateralDescription,
+        notes,
         source_file_name: file.name,
         uploaded_at: new Date().toISOString(),
         created_by: user.id,
@@ -131,9 +152,14 @@ export async function POST(request: NextRequest) {
       interest_rate: interestRate,
       term_months: termMonths,
       start_date: startDate,
+      maturity_date: maturityDate,
       payment_amount: paymentAmount,
+      payment_structure: paymentStructure,
+      day_count_convention: dayCountConvention,
       credit_limit: creditLimit,
       current_draw: currentDraw,
+      balloon_amount: balloonAmount,
+      rate_type: rateType,
     };
 
     const schedule = generateAmortizationSchedule(
@@ -152,6 +178,10 @@ export async function POST(request: NextRequest) {
         principal: entry.principal,
         interest: entry.interest,
         ending_balance: entry.ending_balance,
+        interest_rate: entry.interest_rate,
+        fees: entry.fees,
+        cumulative_principal: entry.cumulative_principal,
+        cumulative_interest: entry.cumulative_interest,
       }));
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -190,6 +220,15 @@ function buildHeaderMap(headers: string[]) {
     creditLimit: find(["creditlimit", "limit", "maxdraw"]),
     currentDraw: find(["currentdraw", "draw", "outstandingbalance", "outstanding", "currentbalance"]),
     status: find(["status", "active", "state"]),
+    loanNumber: find(["loannumber", "accountnumber", "loannumber", "loanno", "accountno"]),
+    paymentStructure: find(["paymentstructure", "paymenttype", "amorttype", "amortization"]),
+    dayCountConvention: find(["daycountconvention", "daycount", "basis", "accrual"]),
+    rateType: find(["ratetype", "fixedvariable", "variablerate"]),
+    indexRateName: find(["indexrate", "indexname", "benchmark", "primerate", "sofr"]),
+    spreadMargin: find(["spreadmargin", "spread", "margin"]),
+    balloonAmount: find(["balloonamount", "balloon", "balloonpayment"]),
+    collateral: find(["collateral", "security", "secured", "collateraldescription"]),
+    notes: find(["notes", "comments", "memo"]),
   };
 }
 
@@ -255,12 +294,16 @@ function parseRate(value: unknown): number {
   return 0;
 }
 
-function resolveDebtType(value: unknown): "term_loan" | "line_of_credit" {
+function resolveDebtType(value: unknown): string {
   if (!value) return "term_loan";
   const s = String(value).toLowerCase().replace(/[^a-z]/g, "");
-  if (s.includes("loc") || s.includes("lineofcredit") || s.includes("line") || s.includes("revolv")) {
-    return "line_of_credit";
-  }
+  if (s.includes("revolv")) return "revolving_credit";
+  if (s.includes("loc") || s.includes("lineofcredit") || s.includes("line")) return "line_of_credit";
+  if (s.includes("mortgage")) return "mortgage";
+  if (s.includes("equipment")) return "equipment_loan";
+  if (s.includes("balloon")) return "balloon_loan";
+  if (s.includes("bridge")) return "bridge_loan";
+  if (s.includes("sba")) return "sba_loan";
   return "term_loan";
 }
 
@@ -270,4 +313,31 @@ function resolveStatus(value: unknown): "active" | "paid_off" | "inactive" {
   if (s.includes("paidoff") || s.includes("paid") || s.includes("closed")) return "paid_off";
   if (s.includes("inactive") || s.includes("dormant")) return "inactive";
   return "active";
+}
+
+function resolvePaymentStructure(value: unknown): string {
+  if (!value) return "principal_and_interest";
+  const s = String(value).toLowerCase().replace(/[^a-z]/g, "");
+  if (s.includes("interestonly") || s.includes("io")) return "interest_only";
+  if (s.includes("balloon")) return "balloon";
+  if (s.includes("revolv")) return "revolving";
+  if (s.includes("custom")) return "custom";
+  return "principal_and_interest";
+}
+
+function resolveDayCount(value: unknown): string {
+  if (!value) return "30/360";
+  const s = String(value).toLowerCase().replace(/[^a-z0-9/]/g, "");
+  if (s.includes("actual/360") || s.includes("act360")) return "actual/360";
+  if (s.includes("actual/365") || s.includes("act365")) return "actual/365";
+  if (s.includes("actual/actual") || s.includes("actact")) return "actual/actual";
+  return "30/360";
+}
+
+function resolveRateType(value: unknown): string {
+  if (!value) return "fixed";
+  const s = String(value).toLowerCase().replace(/[^a-z]/g, "");
+  if (s.includes("variable") || s.includes("float")) return "variable";
+  if (s.includes("adjustable") || s.includes("arm")) return "adjustable";
+  return "fixed";
 }

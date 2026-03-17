@@ -34,6 +34,9 @@ import {
   Landmark,
   DollarSign,
   ArrowRight,
+  TrendingDown,
+  Percent,
+  CreditCard,
 } from "lucide-react";
 import {
   formatCurrency,
@@ -41,25 +44,10 @@ import {
   getCurrentPeriod,
   getPeriodLabel,
 } from "@/lib/utils/dates";
-import type { DebtType, DebtStatus } from "@/lib/types/database";
+import type { DebtStatus } from "@/lib/types/database";
 
-interface DebtInstrument {
-  id: string;
-  instrument_name: string;
-  lender_name: string | null;
-  debt_type: DebtType;
-  original_amount: number;
-  interest_rate: number;
-  term_months: number | null;
-  start_date: string;
-  maturity_date: string | null;
-  credit_limit: number | null;
-  current_draw: number | null;
-  status: DebtStatus;
-  liability_account_id: string | null;
-  interest_expense_account_id: string | null;
-  fixed_asset_id: string | null;
-}
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type AnyInstrument = any;
 
 interface AmortizationPeriod {
   debt_instrument_id: string;
@@ -68,6 +56,7 @@ interface AmortizationPeriod {
   principal: number;
   interest: number;
   ending_balance: number;
+  interest_rate: number | null;
 }
 
 interface GLBalance {
@@ -87,9 +76,24 @@ const STATUS_VARIANTS: Record<DebtStatus, "default" | "secondary" | "outline"> =
   inactive: "outline",
 };
 
-const TYPE_LABELS: Record<DebtType, string> = {
+const TYPE_LABELS: Record<string, string> = {
   term_loan: "Term Loan",
   line_of_credit: "Line of Credit",
+  revolving_credit: "Revolving Credit",
+  mortgage: "Mortgage",
+  equipment_loan: "Equipment Loan",
+  balloon_loan: "Balloon Loan",
+  bridge_loan: "Bridge Loan",
+  sba_loan: "SBA Loan",
+  other: "Other",
+};
+
+const PAYMENT_STRUCTURE_LABELS: Record<string, string> = {
+  principal_and_interest: "P&I",
+  interest_only: "Interest Only",
+  balloon: "Balloon",
+  custom: "Custom",
+  revolving: "Revolving",
 };
 
 export default function DebtPage() {
@@ -101,7 +105,7 @@ export default function DebtPage() {
   const current = getCurrentPeriod();
   const [periodYear, setPeriodYear] = useState(current.year);
   const [periodMonth, setPeriodMonth] = useState(current.month);
-  const [instruments, setInstruments] = useState<DebtInstrument[]>([]);
+  const [instruments, setInstruments] = useState<AnyInstrument[]>([]);
   const [amortization, setAmortization] = useState<
     Record<string, AmortizationPeriod>
   >({});
@@ -112,23 +116,21 @@ export default function DebtPage() {
   const loadData = useCallback(async () => {
     setLoading(true);
 
-    // Load instruments
     const { data: instrData } = await supabase
       .from("debt_instruments")
       .select("*")
       .eq("entity_id", entityId)
       .order("instrument_name");
 
-    const instr = (instrData as unknown as DebtInstrument[]) ?? [];
+    const instr = (instrData ?? []) as AnyInstrument[];
     setInstruments(instr);
 
     if (instr.length > 0) {
-      // Load amortization for the selected period
-      const instrIds = instr.map((i) => i.id);
+      const instrIds = instr.map((i: AnyInstrument) => i.id);
       const { data: amortData } = await supabase
         .from("debt_amortization")
         .select(
-          "debt_instrument_id, beginning_balance, payment, principal, interest, ending_balance"
+          "debt_instrument_id, beginning_balance, payment, principal, interest, ending_balance, interest_rate"
         )
         .in("debt_instrument_id", instrIds)
         .eq("period_year", periodYear)
@@ -142,10 +144,9 @@ export default function DebtPage() {
       }
       setAmortization(amortMap);
 
-      // Load GL balances for linked liability accounts
       const liabilityAccountIds = instr
-        .map((i) => i.liability_account_id)
-        .filter((id): id is string => id !== null);
+        .map((i: AnyInstrument) => i.liability_account_id)
+        .filter((id: string | null): id is string => id !== null);
 
       if (liabilityAccountIds.length > 0) {
         const { data: glData } = await supabase
@@ -214,7 +215,8 @@ export default function DebtPage() {
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
-  // Compute summary totals from amortization data
+  // Compute summary totals
+  const activeInstruments = instruments.filter((i: AnyInstrument) => i.status === "active");
   const totalOutstanding = Object.values(amortization).reduce(
     (sum, a) => sum + a.ending_balance,
     0
@@ -231,6 +233,38 @@ export default function DebtPage() {
     (sum, a) => sum + a.payment,
     0
   );
+
+  // Current / Long-term split
+  const totalCurrentPortion = instruments.reduce(
+    (sum: number, i: AnyInstrument) => sum + (i.current_portion ?? 0),
+    0
+  );
+  const totalLongTermPortion = instruments.reduce(
+    (sum: number, i: AnyInstrument) => sum + (i.long_term_portion ?? 0),
+    0
+  );
+
+  // Credit utilization for LOCs
+  const locTypes = ["line_of_credit", "revolving_credit"];
+  const totalCreditLimit = instruments
+    .filter((i: AnyInstrument) => locTypes.includes(i.debt_type))
+    .reduce((sum: number, i: AnyInstrument) => sum + (i.credit_limit ?? 0), 0);
+  const totalCreditUsed = instruments
+    .filter((i: AnyInstrument) => locTypes.includes(i.debt_type))
+    .reduce((sum: number, i: AnyInstrument) => sum + (i.current_draw ?? 0), 0);
+  const creditUtilization =
+    totalCreditLimit > 0 ? (totalCreditUsed / totalCreditLimit) * 100 : 0;
+
+  // Weighted average interest rate
+  const totalWeightedRate = instruments
+    .filter((i: AnyInstrument) => i.status === "active")
+    .reduce((sum: number, i: AnyInstrument) => {
+      const balance =
+        amortization[i.id]?.ending_balance ?? i.current_draw ?? i.original_amount;
+      return sum + i.interest_rate * balance;
+    }, 0);
+  const weightedAvgRate =
+    totalOutstanding > 0 ? totalWeightedRate / totalOutstanding : 0;
 
   // GL comparison
   const glTotal = glBalances.reduce(
@@ -251,7 +285,7 @@ export default function DebtPage() {
             Debt Schedule
           </h1>
           <p className="text-muted-foreground">
-            Track term loans and lines of credit with amortization schedules
+            Track loans, lines of credit, and amortization schedules
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -309,7 +343,7 @@ export default function DebtPage() {
         </span>
       </div>
 
-      {/* Summary Cards */}
+      {/* Summary Cards — Row 1: Core Metrics */}
       <div className="grid grid-cols-4 gap-4">
         <Card>
           <CardContent className="pt-6">
@@ -322,33 +356,93 @@ export default function DebtPage() {
             <p className="text-2xl font-semibold tabular-nums mt-1">
               {formatCurrency(totalOutstanding)}
             </p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-6">
-            <p className="text-sm text-muted-foreground">Monthly Principal</p>
-            <p className="text-2xl font-semibold tabular-nums mt-1">
-              {formatCurrency(totalPrincipal)}
+            <p className="text-xs text-muted-foreground mt-1">
+              {activeInstruments.length} active instrument
+              {activeInstruments.length !== 1 ? "s" : ""}
             </p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="pt-6">
-            <p className="text-sm text-muted-foreground">Monthly Interest</p>
-            <p className="text-2xl font-semibold tabular-nums mt-1">
-              {formatCurrency(totalInterest)}
-            </p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-6">
-            <p className="text-sm text-muted-foreground">Total Payment</p>
+            <div className="flex items-center gap-2">
+              <TrendingDown className="h-4 w-4 text-muted-foreground" />
+              <p className="text-sm text-muted-foreground">Monthly Payment</p>
+            </div>
             <p className="text-2xl font-semibold tabular-nums mt-1">
               {formatCurrency(totalPayment)}
             </p>
+            <div className="flex gap-4 text-xs text-muted-foreground mt-1">
+              <span>P: {formatCurrency(totalPrincipal)}</span>
+              <span>I: {formatCurrency(totalInterest)}</span>
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-6">
+            <div className="flex items-center gap-2">
+              <Percent className="h-4 w-4 text-muted-foreground" />
+              <p className="text-sm text-muted-foreground">Wtd Avg Rate</p>
+            </div>
+            <p className="text-2xl font-semibold tabular-nums mt-1">
+              {formatPercentage(weightedAvgRate, 2)}
+            </p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-6">
+            <div className="flex items-center gap-2">
+              <CreditCard className="h-4 w-4 text-muted-foreground" />
+              <p className="text-sm text-muted-foreground">Credit Utilization</p>
+            </div>
+            <p className="text-2xl font-semibold tabular-nums mt-1">
+              {totalCreditLimit > 0
+                ? `${creditUtilization.toFixed(1)}%`
+                : "N/A"}
+            </p>
+            {totalCreditLimit > 0 && (
+              <p className="text-xs text-muted-foreground mt-1">
+                {formatCurrency(totalCreditUsed)} / {formatCurrency(totalCreditLimit)}
+              </p>
+            )}
           </CardContent>
         </Card>
       </div>
+
+      {/* Summary Cards — Row 2: Classification */}
+      {(totalCurrentPortion > 0 || totalLongTermPortion > 0) && (
+        <div className="grid grid-cols-3 gap-4">
+          <Card>
+            <CardContent className="pt-6">
+              <p className="text-sm text-muted-foreground">
+                Current Portion ({"<"}12 mo)
+              </p>
+              <p className="text-xl font-semibold tabular-nums mt-1">
+                {formatCurrency(totalCurrentPortion)}
+              </p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="pt-6">
+              <p className="text-sm text-muted-foreground">
+                Long-Term Portion
+              </p>
+              <p className="text-xl font-semibold tabular-nums mt-1">
+                {formatCurrency(totalLongTermPortion)}
+              </p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="pt-6">
+              <p className="text-sm text-muted-foreground">
+                Total Debt
+              </p>
+              <p className="text-xl font-semibold tabular-nums mt-1">
+                {formatCurrency(totalCurrentPortion + totalLongTermPortion)}
+              </p>
+            </CardContent>
+          </Card>
+        </div>
+      )}
 
       {/* GL Comparison */}
       {hasGLData && (
@@ -427,9 +521,11 @@ export default function DebtPage() {
                   <TableRow>
                     <TableHead>Instrument</TableHead>
                     <TableHead>Lender</TableHead>
+                    <TableHead>Loan #</TableHead>
                     <TableHead>Type</TableHead>
+                    <TableHead>Structure</TableHead>
                     <TableHead className="text-right">Rate</TableHead>
-                    <TableHead className="text-right">Original</TableHead>
+                    <TableHead className="text-right">Original / Limit</TableHead>
                     <TableHead className="text-right">Balance</TableHead>
                     <TableHead className="text-right">Payment</TableHead>
                     <TableHead className="text-right">Principal</TableHead>
@@ -439,8 +535,9 @@ export default function DebtPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {instruments.map((instr) => {
+                  {instruments.map((instr: AnyInstrument) => {
                     const amort = amortization[instr.id];
+                    const isLOC = locTypes.includes(instr.debt_type);
                     return (
                       <TableRow key={instr.id}>
                         <TableCell className="font-medium">
@@ -449,16 +546,36 @@ export default function DebtPage() {
                         <TableCell className="text-muted-foreground">
                           {instr.lender_name ?? "---"}
                         </TableCell>
+                        <TableCell className="text-muted-foreground text-xs font-mono">
+                          {instr.loan_number ?? "---"}
+                        </TableCell>
                         <TableCell>
                           <Badge variant="outline">
-                            {TYPE_LABELS[instr.debt_type]}
+                            {TYPE_LABELS[instr.debt_type] ?? instr.debt_type}
                           </Badge>
                         </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {formatPercentage(instr.interest_rate)}
+                        <TableCell>
+                          <span className="text-xs text-muted-foreground">
+                            {PAYMENT_STRUCTURE_LABELS[instr.payment_structure] ??
+                              instr.payment_structure ?? "P&I"}
+                          </span>
                         </TableCell>
                         <TableCell className="text-right tabular-nums">
-                          {formatCurrency(instr.original_amount)}
+                          <div>
+                            {amort?.interest_rate != null
+                              ? formatPercentage(amort.interest_rate, 2)
+                              : formatPercentage(instr.interest_rate, 2)}
+                          </div>
+                          {instr.rate_type && instr.rate_type !== "fixed" && (
+                            <span className="text-xs text-muted-foreground">
+                              {instr.rate_type}
+                            </span>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {isLOC && instr.credit_limit
+                            ? formatCurrency(instr.credit_limit)
+                            : formatCurrency(instr.original_amount)}
                         </TableCell>
                         <TableCell className="text-right tabular-nums font-medium">
                           {amort
@@ -477,10 +594,10 @@ export default function DebtPage() {
                         <TableCell>
                           <Badge
                             variant={
-                              STATUS_VARIANTS[instr.status] ?? "outline"
+                              STATUS_VARIANTS[instr.status as DebtStatus] ?? "outline"
                             }
                           >
-                            {STATUS_LABELS[instr.status] ?? instr.status}
+                            {STATUS_LABELS[instr.status as DebtStatus] ?? instr.status}
                           </Badge>
                         </TableCell>
                         <TableCell>
@@ -495,7 +612,7 @@ export default function DebtPage() {
                   })}
                   {/* Totals Row */}
                   <TableRow className="font-semibold border-t-2">
-                    <TableCell colSpan={5}>Totals</TableCell>
+                    <TableCell colSpan={7}>Totals</TableCell>
                     <TableCell className="text-right tabular-nums">
                       {formatCurrency(totalOutstanding)}
                     </TableCell>

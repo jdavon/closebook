@@ -164,12 +164,23 @@ export default function CommissionsPage() {
   const [detailBalances, setDetailBalances] = useState<
     Record<string, number>
   >({});
+  // Prior month GL balances for standalone derivation
+  const [priorDetailBalances, setPriorDetailBalances] = useState<
+    Record<string, number>
+  >({});
 
   // QBO Classes
   const [qboClasses, setQboClasses] = useState<QboClass[]>([]);
   const [classBalances, setClassBalances] = useState<
     Record<string, number>
   >({}); // key: `${account_id}__${class_id}`
+  // Prior month class balances
+  const [priorClassBalances, setPriorClassBalances] = useState<
+    Record<string, number>
+  >({});
+
+  // Annual results for calendar grid (all months for selected year)
+  const [annualResults, setAnnualResults] = useState<CommissionResult[]>([]);
 
   // Diagnostics
   const [missingClassData, setMissingClassData] = useState(false);
@@ -200,6 +211,10 @@ export default function CommissionsPage() {
   const loadData = useCallback(async () => {
     setLoading(true);
 
+    // Compute prior month for standalone derivation
+    const pm = periodMonth === 1 ? 12 : periodMonth - 1;
+    const py = periodMonth === 1 ? periodYear - 1 : periodYear;
+
     // Fetch profiles and assignments via API
     const res = await fetch(
       `/api/commissions?entityId=${entityId}`
@@ -219,6 +234,15 @@ export default function CommissionsPage() {
       .eq("period_month", periodMonth);
 
     setResults(resultData ?? []);
+
+    // Fetch all results for the selected year (for calendar grid)
+    const { data: annualData } = await supabase
+      .from("commission_results")
+      .select("*")
+      .eq("entity_id", entityId)
+      .eq("period_year", periodYear);
+
+    setAnnualResults(annualData ?? []);
 
     // Fetch entity accounts for the picker
     const { data: acctData } = await supabase
@@ -240,11 +264,11 @@ export default function CommissionsPage() {
 
     setQboClasses((classData ?? []) as QboClass[]);
 
-    // Fetch GL balances for detail expansion (all accounts for this period)
+    // Fetch GL balances for detail expansion (current period ending_balance)
     const glData = await fetchAllPaginated<any>((offset, limit) =>
       supabase
         .from("gl_balances")
-        .select("account_id, net_change")
+        .select("account_id, ending_balance")
         .eq("entity_id", entityId)
         .eq("period_year", periodYear)
         .eq("period_month", periodMonth)
@@ -253,9 +277,30 @@ export default function CommissionsPage() {
 
     const balanceMap: Record<string, number> = {};
     for (const row of glData) {
-      balanceMap[row.account_id] = Number(row.net_change ?? 0);
+      balanceMap[row.account_id] = Number(row.ending_balance ?? 0);
     }
     setDetailBalances(balanceMap);
+
+    // Fetch prior month GL balances for standalone derivation
+    if (periodMonth !== 1) {
+      const priorGlData = await fetchAllPaginated<any>((offset, limit) =>
+        supabase
+          .from("gl_balances")
+          .select("account_id, ending_balance")
+          .eq("entity_id", entityId)
+          .eq("period_year", py)
+          .eq("period_month", pm)
+          .range(offset, offset + limit - 1)
+      );
+
+      const priorMap: Record<string, number> = {};
+      for (const row of priorGlData) {
+        priorMap[row.account_id] = Number(row.ending_balance ?? 0);
+      }
+      setPriorDetailBalances(priorMap);
+    } else {
+      setPriorDetailBalances({});
+    }
 
     // Fetch class-level GL balances for detail expansion
     const classGlData = await fetchAllPaginated<any>((offset, limit) =>
@@ -275,6 +320,29 @@ export default function CommissionsPage() {
       );
     }
     setClassBalances(classBalanceMap);
+
+    // Fetch prior month class balances for standalone derivation
+    if (periodMonth !== 1) {
+      const priorClassGlData = await fetchAllPaginated<any>((offset, limit) =>
+        supabase
+          .from("gl_class_balances")
+          .select("account_id, qbo_class_id, net_change")
+          .eq("entity_id", entityId)
+          .eq("period_year", py)
+          .eq("period_month", pm)
+          .range(offset, offset + limit - 1)
+      );
+
+      const priorClassMap: Record<string, number> = {};
+      for (const row of priorClassGlData) {
+        priorClassMap[`${row.account_id}__${row.qbo_class_id}`] = Number(
+          row.net_change ?? 0
+        );
+      }
+      setPriorClassBalances(priorClassMap);
+    } else {
+      setPriorClassBalances({});
+    }
 
     // Check if any assignments use include/exclude but class data is missing
     setMissingClassData(false); // Reset; will be checked in useEffect after state settles
@@ -558,22 +626,40 @@ export default function CommissionsPage() {
 
   function getAssignmentRawBalance(a: AccountAssignment): number {
     const classIds = a.qbo_class_ids ?? [];
+    const isFYStart = periodMonth === 1;
+
     if (a.class_filter_mode === "all" || classIds.length === 0) {
-      return detailBalances[a.account_id] ?? 0;
+      // Standalone = current ending_balance - prior ending_balance
+      const current = detailBalances[a.account_id] ?? 0;
+      if (isFYStart) return current;
+      const prior = priorDetailBalances[a.account_id] ?? 0;
+      return current - prior;
     }
     if (a.class_filter_mode === "include") {
-      return classIds.reduce(
+      const current = classIds.reduce(
         (sum, cid) => sum + (classBalances[`${a.account_id}__${cid}`] ?? 0),
         0
       );
+      if (isFYStart) return current;
+      const prior = classIds.reduce(
+        (sum, cid) => sum + (priorClassBalances[`${a.account_id}__${cid}`] ?? 0),
+        0
+      );
+      return current - prior;
     }
     // exclude: total balance minus the excluded class balances
-    const totalBalance = detailBalances[a.account_id] ?? 0;
-    const excludedSum = classIds.reduce(
+    const currentTotal = detailBalances[a.account_id] ?? 0;
+    const excludedCurrent = classIds.reduce(
       (sum, cid) => sum + (classBalances[`${a.account_id}__${cid}`] ?? 0),
       0
     );
-    return totalBalance - excludedSum;
+    if (isFYStart) return currentTotal - excludedCurrent;
+    const priorTotal = priorDetailBalances[a.account_id] ?? 0;
+    const excludedPrior = classIds.reduce(
+      (sum, cid) => sum + (priorClassBalances[`${a.account_id}__${cid}`] ?? 0),
+      0
+    );
+    return (currentTotal - priorTotal) - (excludedCurrent - excludedPrior);
   }
 
   function getClassFilterLabel(a: AccountAssignment): string {
@@ -676,6 +762,104 @@ export default function CommissionsPage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Commission Calendar Grid */}
+      {profiles.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Commission by Month — {periodYear}</CardTitle>
+            <CardDescription>
+              Monthly commission earned per salesperson. Click a month to navigate.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="sticky left-0 bg-background z-10">Salesperson</TableHead>
+                    {months.map((m) => (
+                      <TableHead key={m} className="text-right min-w-[90px]">
+                        {new Date(2000, m - 1).toLocaleString("default", { month: "short" })}
+                      </TableHead>
+                    ))}
+                    <TableHead className="text-right font-semibold min-w-[100px]">Total</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {profiles.map((profile) => {
+                    let yearTotal = 0;
+                    return (
+                      <TableRow key={profile.id}>
+                        <TableCell className="sticky left-0 bg-background z-10 font-medium whitespace-nowrap">
+                          {profile.name}
+                        </TableCell>
+                        {months.map((m) => {
+                          const r = annualResults.find(
+                            (ar) =>
+                              ar.commission_profile_id === profile.id &&
+                              ar.period_month === m
+                          );
+                          const earned = r ? Number(r.commission_earned) : 0;
+                          yearTotal += earned;
+                          const isSelected = m === periodMonth;
+                          return (
+                            <TableCell
+                              key={m}
+                              className={cn(
+                                "text-right tabular-nums cursor-pointer hover:bg-muted/50 transition-colors",
+                                isSelected && "bg-primary/10 font-semibold",
+                                !r && "text-muted-foreground"
+                              )}
+                              onClick={() => setPeriodMonth(m)}
+                            >
+                              {r ? formatCurrency(earned) : "—"}
+                            </TableCell>
+                          );
+                        })}
+                        <TableCell className="text-right tabular-nums font-semibold border-l">
+                          {formatCurrency(yearTotal)}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                  {/* Totals row */}
+                  {profiles.length > 1 && (
+                    <TableRow className="border-t-2 font-semibold">
+                      <TableCell className="sticky left-0 bg-background z-10">Total</TableCell>
+                      {months.map((m) => {
+                        const monthTotal = annualResults
+                          .filter((ar) => ar.period_month === m)
+                          .reduce((sum, ar) => sum + Number(ar.commission_earned), 0);
+                        return (
+                          <TableCell
+                            key={m}
+                            className={cn(
+                              "text-right tabular-nums cursor-pointer hover:bg-muted/50",
+                              m === periodMonth && "bg-primary/10"
+                            )}
+                            onClick={() => setPeriodMonth(m)}
+                          >
+                            {monthTotal !== 0 ? formatCurrency(monthTotal) : "—"}
+                          </TableCell>
+                        );
+                      })}
+                      <TableCell className="text-right tabular-nums border-l">
+                        {formatCurrency(
+                          annualResults.reduce(
+                            (sum, ar) => sum + Number(ar.commission_earned),
+                            0
+                          )
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Summary Cards */}
       <div className="grid grid-cols-4 gap-4">

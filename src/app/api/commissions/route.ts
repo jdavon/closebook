@@ -206,6 +206,13 @@ export async function POST(request: Request) {
       });
     }
 
+    // Compute prior month for standalone derivation.
+    // QBO trial balance stores cumulative YTD in ending_balance/net_change
+    // for P&L accounts. We subtract the prior month to get monthly-only activity.
+    const priorMonth = periodMonth === 1 ? 12 : periodMonth - 1;
+    const priorYear = periodMonth === 1 ? periodYear - 1 : periodYear;
+    const isFiscalYearStart = periodMonth === 1; // Assumes calendar fiscal year
+
     const results = [];
     const warnings: string[] = [];
 
@@ -244,24 +251,41 @@ export async function POST(request: Request) {
             .eq("account_id", a.account_id)
             .in("qbo_class_id", a.qbo_class_ids);
 
-          netChange = (classBalances ?? []).reduce(
+          const currentTotal = (classBalances ?? []).reduce(
             (sum, row) => sum + Number(row.net_change ?? 0),
             0
           );
+
+          if (isFiscalYearStart) {
+            netChange = currentTotal;
+          } else {
+            const { data: priorClassBalances } = await adminClient
+              .from("gl_class_balances")
+              .select("net_change")
+              .eq("entity_id", entityId)
+              .eq("period_year", priorYear)
+              .eq("period_month", priorMonth)
+              .eq("account_id", a.account_id)
+              .in("qbo_class_id", a.qbo_class_ids);
+
+            const priorTotal = (priorClassBalances ?? []).reduce(
+              (sum, row) => sum + Number(row.net_change ?? 0),
+              0
+            );
+            netChange = currentTotal - priorTotal;
+          }
         } else if (a.class_filter_mode === "exclude" && a.qbo_class_ids.length > 0) {
           // Exclude mode: total balance minus excluded class balances
-          // This correctly handles unclassified transactions that exist in
-          // gl_balances but have no row in gl_class_balances
           const { data: totalBalance } = await adminClient
             .from("gl_balances")
-            .select("net_change")
+            .select("ending_balance")
             .eq("entity_id", entityId)
             .eq("period_year", periodYear)
             .eq("period_month", periodMonth)
             .eq("account_id", a.account_id)
             .maybeSingle();
 
-          const total = Number(totalBalance?.net_change ?? 0);
+          const currentEnding = Number(totalBalance?.ending_balance ?? 0);
 
           const { data: excludedClassBalances } = await adminClient
             .from("gl_class_balances")
@@ -272,7 +296,7 @@ export async function POST(request: Request) {
             .eq("account_id", a.account_id)
             .in("qbo_class_id", a.qbo_class_ids);
 
-          const excludedSum = (excludedClassBalances ?? []).reduce(
+          const excludedCurrent = (excludedClassBalances ?? []).reduce(
             (sum, row) => sum + Number(row.net_change ?? 0),
             0
           );
@@ -285,19 +309,63 @@ export async function POST(request: Request) {
             );
           }
 
-          netChange = total - excludedSum;
+          if (isFiscalYearStart) {
+            netChange = currentEnding - excludedCurrent;
+          } else {
+            const { data: priorBalance } = await adminClient
+              .from("gl_balances")
+              .select("ending_balance")
+              .eq("entity_id", entityId)
+              .eq("period_year", priorYear)
+              .eq("period_month", priorMonth)
+              .eq("account_id", a.account_id)
+              .maybeSingle();
+
+            const priorEnding = Number(priorBalance?.ending_balance ?? 0);
+
+            const { data: priorExcludedClassBalances } = await adminClient
+              .from("gl_class_balances")
+              .select("net_change")
+              .eq("entity_id", entityId)
+              .eq("period_year", priorYear)
+              .eq("period_month", priorMonth)
+              .eq("account_id", a.account_id)
+              .in("qbo_class_id", a.qbo_class_ids);
+
+            const excludedPrior = (priorExcludedClassBalances ?? []).reduce(
+              (sum, row) => sum + Number(row.net_change ?? 0),
+              0
+            );
+
+            netChange = (currentEnding - priorEnding) - (excludedCurrent - excludedPrior);
+          }
         } else {
-          // All classes: use full gl_balances (existing behavior)
+          // All classes: derive standalone from ending_balance delta
           const { data: balance } = await adminClient
             .from("gl_balances")
-            .select("net_change")
+            .select("ending_balance")
             .eq("entity_id", entityId)
             .eq("period_year", periodYear)
             .eq("period_month", periodMonth)
             .eq("account_id", a.account_id)
             .maybeSingle();
 
-          netChange = Number(balance?.net_change ?? 0);
+          const currentEnding = Number(balance?.ending_balance ?? 0);
+
+          if (isFiscalYearStart) {
+            netChange = currentEnding;
+          } else {
+            const { data: priorBalance } = await adminClient
+              .from("gl_balances")
+              .select("ending_balance")
+              .eq("entity_id", entityId)
+              .eq("period_year", priorYear)
+              .eq("period_month", priorMonth)
+              .eq("account_id", a.account_id)
+              .maybeSingle();
+
+            netChange = currentEnding - Number(priorBalance?.ending_balance ?? 0);
+          }
         }
 
         if (a.role === "revenue") {
