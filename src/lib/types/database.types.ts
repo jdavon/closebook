@@ -384,6 +384,159 @@ export type Database = {
         }
         Relationships: []
       }
+      debt_covenants: {
+        Row: {
+          id: string
+          debt_instrument_id: string
+          covenant_name: string
+          covenant_type: string
+          description: string | null
+          threshold_value: number | null
+          threshold_operator: string | null
+          measurement_frequency: string
+          next_measurement_date: string | null
+          last_measured_value: number | null
+          last_measured_date: string | null
+          is_in_compliance: boolean
+          notes: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          debt_instrument_id: string
+          covenant_name: string
+          covenant_type: string
+          description?: string | null
+          threshold_value?: number | null
+          threshold_operator?: string | null
+          measurement_frequency?: string
+          next_measurement_date?: string | null
+          last_measured_value?: number | null
+          last_measured_date?: string | null
+          is_in_compliance?: boolean
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          debt_instrument_id?: string
+          covenant_name?: string
+          covenant_type?: string
+          description?: string | null
+          threshold_value?: number | null
+          threshold_operator?: string | null
+          measurement_frequency?: string
+          next_measurement_date?: string | null
+          last_measured_value?: number | null
+          last_measured_date?: string | null
+          is_in_compliance?: boolean
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      debt_rate_history: {
+        Row: {
+          id: string
+          debt_instrument_id: string
+          effective_date: string
+          interest_rate: number
+          index_rate: number | null
+          spread: number | null
+          change_reason: string | null
+          notes: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          debt_instrument_id: string
+          effective_date: string
+          interest_rate: number
+          index_rate?: number | null
+          spread?: number | null
+          change_reason?: string | null
+          notes?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          debt_instrument_id?: string
+          effective_date?: string
+          interest_rate?: number
+          index_rate?: number | null
+          spread?: number | null
+          change_reason?: string | null
+          notes?: string | null
+          created_at?: string
+        }
+        Relationships: []
+      }
+      debt_transactions: {
+        Row: {
+          id: string
+          debt_instrument_id: string
+          transaction_date: string
+          effective_date: string
+          transaction_type: string
+          amount: number
+          to_principal: number
+          to_interest: number
+          to_fees: number
+          running_balance: number | null
+          reference_number: string | null
+          description: string | null
+          statement_date: string | null
+          is_reconciled: boolean
+          notes: string | null
+          created_by: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          debt_instrument_id: string
+          transaction_date: string
+          effective_date: string
+          transaction_type: string
+          amount: number
+          to_principal?: number
+          to_interest?: number
+          to_fees?: number
+          running_balance?: number | null
+          reference_number?: string | null
+          description?: string | null
+          statement_date?: string | null
+          is_reconciled?: boolean
+          notes?: string | null
+          created_by?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          debt_instrument_id?: string
+          transaction_date?: string
+          effective_date?: string
+          transaction_type?: string
+          amount?: number
+          to_principal?: number
+          to_interest?: number
+          to_fees?: number
+          running_balance?: number | null
+          reference_number?: string | null
+          description?: string | null
+          statement_date?: string | null
+          is_reconciled?: boolean
+          notes?: string | null
+          created_by?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       debt_instruments: {
         Row: {
           id: string
