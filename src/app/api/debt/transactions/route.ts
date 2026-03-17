@@ -146,6 +146,46 @@ export async function PATCH(request: NextRequest) {
 }
 
 /**
+ * DELETE /api/debt/transactions?id=...
+ * Delete a transaction and recalculate the instrument's current_draw.
+ */
+export async function DELETE(request: NextRequest) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const id = request.nextUrl.searchParams.get("id");
+  if (!id) {
+    return NextResponse.json({ error: "Missing required param: id" }, { status: 400 });
+  }
+
+  // Fetch the transaction to get the debt_instrument_id before deleting
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: existing } = await (supabase as any)
+    .from("debt_transactions")
+    .select("debt_instrument_id")
+    .eq("id", id)
+    .single();
+
+  if (!existing) {
+    return NextResponse.json({ error: "Transaction not found" }, { status: 404 });
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { error } = await (supabase as any)
+    .from("debt_transactions")
+    .delete()
+    .eq("id", id);
+
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // Recalculate current_draw and running balances
+  await recalculateCurrentDraw(supabase, existing.debt_instrument_id);
+
+  return NextResponse.json({ success: true });
+}
+
+/**
  * Recalculate an instrument's current_draw by replaying all balance-affecting
  * transactions from the original amount.
  */

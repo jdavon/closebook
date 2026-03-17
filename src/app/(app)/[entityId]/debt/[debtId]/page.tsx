@@ -48,6 +48,7 @@ import {
   Pencil,
   Plus,
   DollarSign,
+  Trash2,
 } from "lucide-react";
 import {
   formatCurrency,
@@ -435,6 +436,22 @@ export default function DebtDetailPage() {
       toast.error("Network error");
     }
     setEditTxnSaving(false);
+  }
+
+  async function handleDeleteTransaction(txnId: string) {
+    if (!confirm("Delete this transaction? This will recalculate the running balance.")) return;
+    try {
+      const res = await fetch(`/api/debt/transactions?id=${txnId}`, { method: "DELETE" });
+      const json = await res.json();
+      if (!res.ok) {
+        toast.error(json.error || "Failed to delete transaction");
+      } else {
+        toast.success("Transaction deleted");
+        loadData();
+      }
+    } catch {
+      toast.error("Network error");
+    }
   }
 
   const loadData = useCallback(async () => {
@@ -1476,6 +1493,9 @@ export default function DebtDetailPage() {
                               {txn.is_reconciled && <Badge variant="secondary" className="text-xs">Reconciled</Badge>}
                               <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => openEditTxn(txn)}>
                                 <Pencil className="h-3 w-3" />
+                              </Button>
+                              <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-destructive hover:text-destructive" onClick={() => handleDeleteTransaction(txn.id)}>
+                                <Trash2 className="h-3 w-3" />
                               </Button>
                             </div>
                           </TableCell>
