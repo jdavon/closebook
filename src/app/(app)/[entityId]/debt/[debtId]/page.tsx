@@ -754,9 +754,9 @@ export default function DebtDetailPage() {
   const latestAmort =
     amortization.length > 0 ? amortization[amortization.length - 1] : null;
 
-  const totalInterest = amortization.reduce((sum: number, a: AnyRow) => sum + a.interest, 0);
-  const totalPrincipal = amortization.reduce((sum: number, a: AnyRow) => sum + a.principal, 0);
-  const totalFees = amortization.reduce((sum: number, a: AnyRow) => sum + (a.fees ?? 0), 0);
+  const totalInterest = transactions.reduce((sum: number, t: AnyRow) => sum + (t.to_interest ?? 0), 0);
+  const totalPrincipal = transactions.reduce((sum: number, t: AnyRow) => sum + (t.to_principal ?? 0), 0);
+  const totalFees = transactions.reduce((sum: number, t: AnyRow) => sum + (t.to_fees ?? 0), 0);
 
   const isLOC = ["line_of_credit", "revolving_credit"].includes(instrument.debt_type);
 
