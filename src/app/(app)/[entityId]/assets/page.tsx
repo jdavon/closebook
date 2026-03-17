@@ -48,9 +48,23 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Plus, ArrowRight, Car, Search, Upload, Trash2, DollarSign } from "lucide-react";
+import { Plus, ArrowRight, Car, Search, Upload, Trash2, DollarSign, ChevronsUpDown, Check } from "lucide-react";
 import { toast } from "sonner";
+import { cn } from "@/lib/utils";
 import { formatCurrency } from "@/lib/utils/dates";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
 import { calculateDispositionGainLoss } from "@/lib/utils/depreciation";
 import {
   getVehicleClassification,
@@ -127,6 +141,7 @@ export default function AssetsPage() {
   const [soldPrice, setSoldPrice] = useState("0");
   const [soldNotes, setSoldNotes] = useState("");
   const [selling, setSelling] = useState(false);
+  const [vehiclePickerOpen, setVehiclePickerOpen] = useState(false);
 
   const loadAssets = useCallback(async () => {
     let query = supabase
@@ -609,18 +624,49 @@ export default function AssetsPage() {
           <div className="space-y-4 py-2">
             <div className="space-y-2">
               <Label htmlFor="soldVehicle">Vehicle</Label>
-              <Select value={soldAssetId} onValueChange={handleSoldAssetChange}>
-                <SelectTrigger id="soldVehicle">
-                  <SelectValue placeholder="Select a vehicle..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {activeAssets.map((a) => (
-                    <SelectItem key={a.id} value={a.id}>
-                      {a.asset_name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <Popover open={vehiclePickerOpen} onOpenChange={setVehiclePickerOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    role="combobox"
+                    aria-expanded={vehiclePickerOpen}
+                    className="w-full justify-between"
+                  >
+                    {soldAssetId
+                      ? activeAssets.find((a) => a.id === soldAssetId)?.asset_name ?? "Select a vehicle..."
+                      : "Select a vehicle..."}
+                    <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
+                  <Command>
+                    <CommandInput placeholder="Search vehicles..." />
+                    <CommandList>
+                      <CommandEmpty>No vehicles found.</CommandEmpty>
+                      <CommandGroup>
+                        {activeAssets.map((a) => (
+                          <CommandItem
+                            key={a.id}
+                            value={a.asset_name}
+                            onSelect={() => {
+                              handleSoldAssetChange(a.id);
+                              setVehiclePickerOpen(false);
+                            }}
+                          >
+                            <Check
+                              className={cn(
+                                "mr-2 h-4 w-4",
+                                soldAssetId === a.id ? "opacity-100" : "opacity-0"
+                              )}
+                            />
+                            {a.asset_name}
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
             </div>
             <div className="space-y-2">
               <Label htmlFor="soldBuyer">Buyer</Label>
