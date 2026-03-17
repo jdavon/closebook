@@ -173,17 +173,14 @@ export default function CommissionsPage() {
   const [qboClasses, setQboClasses] = useState<QboClass[]>([]);
   const [classBalances, setClassBalances] = useState<
     Record<string, number>
-  >({}); // key: `${account_id}__${class_id}`
-  // Prior month class balances
-  const [priorClassBalances, setPriorClassBalances] = useState<
-    Record<string, number>
-  >({});
+  >({}); // key: `${account_id}__${class_id}` — already standalone monthly
 
   // Annual results for calendar grid (all months for selected year)
   const [annualResults, setAnnualResults] = useState<CommissionResult[]>([]);
 
   // Diagnostics
   const [missingClassData, setMissingClassData] = useState(false);
+  const [missingPriorData, setMissingPriorData] = useState(false);
 
   // UI
   const [loading, setLoading] = useState(true);
@@ -298,11 +295,17 @@ export default function CommissionsPage() {
         priorMap[row.account_id] = Number(row.ending_balance ?? 0);
       }
       setPriorDetailBalances(priorMap);
+
+      // Check if prior month data exists
+      setMissingPriorData(priorGlData.length === 0 && glData.length > 0);
     } else {
       setPriorDetailBalances({});
+      setMissingPriorData(false);
     }
 
-    // Fetch class-level GL balances for detail expansion
+    // Fetch class-level GL balances for detail expansion.
+    // gl_class_balances.net_change is already standalone monthly
+    // (from QBO P&L by Class report), no prior month subtraction needed.
     const classGlData = await fetchAllPaginated<any>((offset, limit) =>
       supabase
         .from("gl_class_balances")
@@ -320,29 +323,6 @@ export default function CommissionsPage() {
       );
     }
     setClassBalances(classBalanceMap);
-
-    // Fetch prior month class balances for standalone derivation
-    if (periodMonth !== 1) {
-      const priorClassGlData = await fetchAllPaginated<any>((offset, limit) =>
-        supabase
-          .from("gl_class_balances")
-          .select("account_id, qbo_class_id, net_change")
-          .eq("entity_id", entityId)
-          .eq("period_year", py)
-          .eq("period_month", pm)
-          .range(offset, offset + limit - 1)
-      );
-
-      const priorClassMap: Record<string, number> = {};
-      for (const row of priorClassGlData) {
-        priorClassMap[`${row.account_id}__${row.qbo_class_id}`] = Number(
-          row.net_change ?? 0
-        );
-      }
-      setPriorClassBalances(priorClassMap);
-    } else {
-      setPriorClassBalances({});
-    }
 
     // Check if any assignments use include/exclude but class data is missing
     setMissingClassData(false); // Reset; will be checked in useEffect after state settles
@@ -418,12 +398,14 @@ export default function CommissionsPage() {
       if (data.success) {
         if (data.warnings?.length > 0) {
           toast.warning(
-            `Calculated with warnings: class-level GL data missing for some accounts. Sync P&L by Class from QBO.`,
-            { duration: 8000 }
+            data.warnings[0],
+            { duration: 10000 }
           );
         } else {
+          const diag = data.diagnostics;
           toast.success(
-            `Calculated commissions for ${data.results.length} salesperson(s)`
+            `Calculated commissions for ${data.results.length} salesperson(s)` +
+            (diag ? ` (${diag.currentGlAccounts} current / ${diag.priorGlAccounts} prior GL accounts)` : "")
           );
         }
         await loadData();
@@ -628,38 +610,32 @@ export default function CommissionsPage() {
     const classIds = a.qbo_class_ids ?? [];
     const isFYStart = periodMonth === 1;
 
-    if (a.class_filter_mode === "all" || classIds.length === 0) {
-      // Standalone = current ending_balance - prior ending_balance
-      const current = detailBalances[a.account_id] ?? 0;
-      if (isFYStart) return current;
-      const prior = priorDetailBalances[a.account_id] ?? 0;
-      return current - prior;
-    }
-    if (a.class_filter_mode === "include") {
-      const current = classIds.reduce(
+    if (a.class_filter_mode === "include" && classIds.length > 0) {
+      // Include mode: gl_class_balances.net_change is already standalone
+      // monthly (from QBO P&L by Class report). Use directly.
+      return classIds.reduce(
         (sum, cid) => sum + (classBalances[`${a.account_id}__${cid}`] ?? 0),
         0
       );
-      if (isFYStart) return current;
-      const prior = classIds.reduce(
-        (sum, cid) => sum + (priorClassBalances[`${a.account_id}__${cid}`] ?? 0),
+    }
+
+    // For "all" and "exclude" modes, gl_balances stores cumulative YTD.
+    // Derive standalone = current ending_balance - prior ending_balance.
+    const currentEnding = detailBalances[a.account_id] ?? 0;
+    const priorEnding = isFYStart ? 0 : (priorDetailBalances[a.account_id] ?? 0);
+    const totalStandalone = currentEnding - priorEnding;
+
+    if (a.class_filter_mode === "exclude" && classIds.length > 0) {
+      // Exclude mode: subtract excluded class balances (already standalone).
+      const excludedStandalone = classIds.reduce(
+        (sum, cid) => sum + (classBalances[`${a.account_id}__${cid}`] ?? 0),
         0
       );
-      return current - prior;
+      return totalStandalone - excludedStandalone;
     }
-    // exclude: total balance minus the excluded class balances
-    const currentTotal = detailBalances[a.account_id] ?? 0;
-    const excludedCurrent = classIds.reduce(
-      (sum, cid) => sum + (classBalances[`${a.account_id}__${cid}`] ?? 0),
-      0
-    );
-    if (isFYStart) return currentTotal - excludedCurrent;
-    const priorTotal = priorDetailBalances[a.account_id] ?? 0;
-    const excludedPrior = classIds.reduce(
-      (sum, cid) => sum + (priorClassBalances[`${a.account_id}__${cid}`] ?? 0),
-      0
-    );
-    return (currentTotal - priorTotal) - (excludedCurrent - excludedPrior);
+
+    // All classes
+    return totalStandalone;
   }
 
   function getClassFilterLabel(a: AccountAssignment): string {
@@ -916,6 +892,24 @@ export default function CommissionsPage() {
       </div>
 
       {/* Missing class balance data warning */}
+      {missingPriorData && (
+        <div className="flex items-center gap-3 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-900 dark:border-red-800 dark:bg-red-950/50 dark:text-red-200">
+          <AlertTriangle className="h-5 w-5 shrink-0" />
+          <div>
+            <p className="font-medium">
+              Prior month GL data missing
+            </p>
+            <p className="text-red-700 dark:text-red-300 mt-0.5">
+              No GL data found for {getPeriodLabel(
+                periodMonth === 1 ? periodYear - 1 : periodYear,
+                periodMonth === 1 ? 12 : periodMonth - 1
+              )}. Commission values may show cumulative YTD instead of standalone monthly amounts.
+              Sync the prior month from QBO, then recalculate.
+            </p>
+          </div>
+        </div>
+      )}
+
       {missingClassData && (
         <div className="flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-200">
           <AlertTriangle className="h-5 w-5 shrink-0" />

@@ -209,12 +209,77 @@ export async function POST(request: Request) {
     // Compute prior month for standalone derivation.
     // QBO trial balance stores cumulative YTD in ending_balance/net_change
     // for P&L accounts. We subtract the prior month to get monthly-only activity.
-    const priorMonth = periodMonth === 1 ? 12 : periodMonth - 1;
-    const priorYear = periodMonth === 1 ? periodYear - 1 : periodYear;
+    const pm = periodMonth === 1 ? 12 : periodMonth - 1;
+    const py = periodMonth === 1 ? periodYear - 1 : periodYear;
     const isFiscalYearStart = periodMonth === 1; // Assumes calendar fiscal year
 
     const results = [];
     const warnings: string[] = [];
+
+    // ── Batch-fetch GL data for current AND prior months ──────────────
+    // This avoids N+1 queries per assignment and makes diagnostics easy.
+
+    // Current month gl_balances
+    const { data: currentGlRows, error: currentGlErr } = await adminClient
+      .from("gl_balances")
+      .select("account_id, ending_balance")
+      .eq("entity_id", entityId)
+      .eq("period_year", periodYear)
+      .eq("period_month", periodMonth);
+
+    if (currentGlErr) {
+      console.error("Failed to fetch current GL balances:", currentGlErr);
+    }
+
+    const currentGlMap: Record<string, number> = {};
+    for (const row of currentGlRows ?? []) {
+      currentGlMap[row.account_id] = Number(row.ending_balance ?? 0);
+    }
+
+    // Prior month gl_balances (needed for standalone derivation)
+    const priorGlMap: Record<string, number> = {};
+    let priorGlCount = 0;
+    if (!isFiscalYearStart) {
+      const { data: priorGlRows, error: priorGlErr } = await adminClient
+        .from("gl_balances")
+        .select("account_id, ending_balance")
+        .eq("entity_id", entityId)
+        .eq("period_year", py)
+        .eq("period_month", pm);
+
+      if (priorGlErr) {
+        console.error("Failed to fetch prior GL balances:", priorGlErr);
+      }
+
+      for (const row of priorGlRows ?? []) {
+        priorGlMap[row.account_id] = Number(row.ending_balance ?? 0);
+      }
+      priorGlCount = Object.keys(priorGlMap).length;
+
+      if (priorGlCount === 0 && (currentGlRows?.length ?? 0) > 0) {
+        warnings.push(
+          `No GL data found for prior month ${py}-${String(pm).padStart(2, "0")}. ` +
+          `Standalone monthly amounts cannot be derived — values may show cumulative YTD. ` +
+          `Sync ${py}-${String(pm).padStart(2, "0")} from QBO first.`
+        );
+      }
+    }
+
+    // Current month gl_class_balances
+    // NOTE: gl_class_balances.net_change comes from the QBO P&L by Class report,
+    // which returns activity for the specified date range (standalone monthly),
+    // NOT cumulative YTD like the Trial Balance.
+    const { data: currentClassRows } = await adminClient
+      .from("gl_class_balances")
+      .select("account_id, qbo_class_id, net_change")
+      .eq("entity_id", entityId)
+      .eq("period_year", periodYear)
+      .eq("period_month", periodMonth);
+
+    const currentClassMap: Record<string, number> = {};
+    for (const row of currentClassRows ?? []) {
+      currentClassMap[`${row.account_id}__${row.qbo_class_id}`] = Number(row.net_change ?? 0);
+    }
 
     for (const profile of profiles) {
       // Get assignments (with class filter mode)
@@ -241,130 +306,47 @@ export async function POST(request: Request) {
         let netChange = 0;
 
         if (a.class_filter_mode === "include" && a.qbo_class_ids.length > 0) {
-          // Include mode: sum gl_class_balances for selected classes only
-          const { data: classBalances } = await adminClient
-            .from("gl_class_balances")
-            .select("net_change")
-            .eq("entity_id", entityId)
-            .eq("period_year", periodYear)
-            .eq("period_month", periodMonth)
-            .eq("account_id", a.account_id)
-            .in("qbo_class_id", a.qbo_class_ids);
-
-          const currentTotal = (classBalances ?? []).reduce(
-            (sum, row) => sum + Number(row.net_change ?? 0),
+          // Include mode: sum gl_class_balances for selected classes.
+          // gl_class_balances.net_change is already standalone monthly
+          // (from P&L by Class report), so use directly — no prior subtraction.
+          netChange = a.qbo_class_ids.reduce(
+            (sum, cid) => sum + (currentClassMap[`${a.account_id}__${cid}`] ?? 0),
             0
           );
-
-          if (isFiscalYearStart) {
-            netChange = currentTotal;
-          } else {
-            const { data: priorClassBalances } = await adminClient
-              .from("gl_class_balances")
-              .select("net_change")
-              .eq("entity_id", entityId)
-              .eq("period_year", priorYear)
-              .eq("period_month", priorMonth)
-              .eq("account_id", a.account_id)
-              .in("qbo_class_id", a.qbo_class_ids);
-
-            const priorTotal = (priorClassBalances ?? []).reduce(
-              (sum, row) => sum + Number(row.net_change ?? 0),
-              0
-            );
-            netChange = currentTotal - priorTotal;
-          }
         } else if (a.class_filter_mode === "exclude" && a.qbo_class_ids.length > 0) {
-          // Exclude mode: total balance minus excluded class balances
-          const { data: totalBalance } = await adminClient
-            .from("gl_balances")
-            .select("ending_balance")
-            .eq("entity_id", entityId)
-            .eq("period_year", periodYear)
-            .eq("period_month", periodMonth)
-            .eq("account_id", a.account_id)
-            .maybeSingle();
+          // Exclude mode: standalone total minus excluded class balances.
+          // gl_balances is cumulative YTD → derive standalone via prior subtraction.
+          // gl_class_balances is already standalone → use directly.
+          const currentEnding = currentGlMap[a.account_id] ?? 0;
+          const priorEnding = priorGlMap[a.account_id] ?? 0;
+          const totalStandalone = isFiscalYearStart
+            ? currentEnding
+            : currentEnding - priorEnding;
 
-          const currentEnding = Number(totalBalance?.ending_balance ?? 0);
-
-          const { data: excludedClassBalances } = await adminClient
-            .from("gl_class_balances")
-            .select("net_change")
-            .eq("entity_id", entityId)
-            .eq("period_year", periodYear)
-            .eq("period_month", periodMonth)
-            .eq("account_id", a.account_id)
-            .in("qbo_class_id", a.qbo_class_ids);
-
-          const excludedCurrent = (excludedClassBalances ?? []).reduce(
-            (sum, row) => sum + Number(row.net_change ?? 0),
+          const excludedStandalone = a.qbo_class_ids.reduce(
+            (sum, cid) => sum + (currentClassMap[`${a.account_id}__${cid}`] ?? 0),
             0
           );
 
           // Warn if class data is missing — exclude filter has no effect
-          if (!excludedClassBalances || excludedClassBalances.length === 0) {
+          if (excludedStandalone === 0 && a.qbo_class_ids.length > 0) {
             const classNames = a.qbo_class_ids.join(", ");
             warnings.push(
               `${profile.name}: No class-level GL data found for account ${a.account_id} — exclude filter for class(es) [${classNames}] had no effect. Sync P&L by Class from QBO.`
             );
           }
 
-          if (isFiscalYearStart) {
-            netChange = currentEnding - excludedCurrent;
-          } else {
-            const { data: priorBalance } = await adminClient
-              .from("gl_balances")
-              .select("ending_balance")
-              .eq("entity_id", entityId)
-              .eq("period_year", priorYear)
-              .eq("period_month", priorMonth)
-              .eq("account_id", a.account_id)
-              .maybeSingle();
-
-            const priorEnding = Number(priorBalance?.ending_balance ?? 0);
-
-            const { data: priorExcludedClassBalances } = await adminClient
-              .from("gl_class_balances")
-              .select("net_change")
-              .eq("entity_id", entityId)
-              .eq("period_year", priorYear)
-              .eq("period_month", priorMonth)
-              .eq("account_id", a.account_id)
-              .in("qbo_class_id", a.qbo_class_ids);
-
-            const excludedPrior = (priorExcludedClassBalances ?? []).reduce(
-              (sum, row) => sum + Number(row.net_change ?? 0),
-              0
-            );
-
-            netChange = (currentEnding - priorEnding) - (excludedCurrent - excludedPrior);
-          }
+          netChange = totalStandalone - excludedStandalone;
         } else {
-          // All classes: derive standalone from ending_balance delta
-          const { data: balance } = await adminClient
-            .from("gl_balances")
-            .select("ending_balance")
-            .eq("entity_id", entityId)
-            .eq("period_year", periodYear)
-            .eq("period_month", periodMonth)
-            .eq("account_id", a.account_id)
-            .maybeSingle();
-
-          const currentEnding = Number(balance?.ending_balance ?? 0);
+          // All classes: derive standalone from ending_balance delta.
+          // gl_balances stores cumulative YTD for P&L accounts.
+          const currentEnding = currentGlMap[a.account_id] ?? 0;
 
           if (isFiscalYearStart) {
             netChange = currentEnding;
           } else {
-            const { data: priorBalance } = await adminClient
-              .from("gl_balances")
-              .select("ending_balance")
-              .eq("entity_id", entityId)
-              .eq("period_year", priorYear)
-              .eq("period_month", priorMonth)
-              .eq("account_id", a.account_id)
-              .maybeSingle();
-
-            netChange = currentEnding - Number(priorBalance?.ending_balance ?? 0);
+            const priorEnding = priorGlMap[a.account_id] ?? 0;
+            netChange = currentEnding - priorEnding;
           }
         }
 
@@ -411,6 +393,13 @@ export async function POST(request: Request) {
     return NextResponse.json({
       success: true,
       results,
+      diagnostics: {
+        currentMonth: `${periodYear}-${String(periodMonth).padStart(2, "0")}`,
+        priorMonth: isFiscalYearStart ? "(fiscal year start)" : `${py}-${String(pm).padStart(2, "0")}`,
+        currentGlAccounts: Object.keys(currentGlMap).length,
+        priorGlAccounts: priorGlCount,
+        currentClassEntries: Object.keys(currentClassMap).length,
+      },
       ...(warnings.length > 0 ? { warnings } : {}),
     });
   }
