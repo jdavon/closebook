@@ -585,32 +585,19 @@ export default function DebtDetailPage() {
 
       balance = adjustedBalance;
 
-      // For fully amortizing loans, reduce balance by principal from amortization
-      // But for interest-only / revolving, balance only changes via transactions
-      if (!isLOCType && instrument.payment_structure !== "interest_only") {
-        const amortEntry = amortization.find(
-          (a: AnyRow) => a.period_year === cy && a.period_month === cm
-        );
-        if (amortEntry) {
-          balance = Math.max(0, balance - amortEntry.principal);
-        }
-      }
-
+      // Balance only changes via transactions (draws/paydowns), not amortization
       if (balance <= 0 && changes === 0 && i > 0) break;
     }
 
     return entries;
-  }, [instrument, transactions, rateHistory, amortization]);
+  }, [instrument, transactions, rateHistory]);
 
-  // Daily interest based on current outstanding balance
+  // Daily interest based on current outstanding balance (from transactions, not amortization)
   const dailyInterest = useMemo(() => {
     if (!instrument) return 0;
-    const balance = instrument.current_draw ?? (
-      amortization.length > 0 ? amortization[amortization.length - 1].ending_balance : instrument.original_amount
-    );
+    const balance = instrument.current_draw ?? instrument.original_amount;
     const rate = instrument.interest_rate ?? 0;
     const convention = instrument.day_count_convention ?? "30/360";
-    // Use a per-day calculation based on convention
     switch (convention) {
       case "30/360": return Math.round(balance * rate / 360 * 100) / 100;
       case "actual/360": return Math.round(balance * rate / 360 * 100) / 100;
@@ -622,7 +609,7 @@ export default function DebtDetailPage() {
       }
       default: return Math.round(balance * rate / 365 * 100) / 100;
     }
-  }, [instrument, amortization]);
+  }, [instrument]);
 
   if (loading)
     return <p className="text-muted-foreground p-6">Loading...</p>;
