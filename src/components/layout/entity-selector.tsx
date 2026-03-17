@@ -1,6 +1,6 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
 import { Building2, ChevronsUpDown, Plus } from "lucide-react";
 import {
   DropdownMenu,
@@ -27,8 +27,20 @@ export function EntitySelector({
   currentEntityId,
 }: EntitySelectorProps) {
   const router = useRouter();
+  const pathname = usePathname();
 
   const currentEntity = entities.find((e) => e.id === currentEntityId);
+
+  // Extract the sub-path after the entity ID (e.g., "/assets" from "/uuid/assets")
+  const getEntitySubPath = () => {
+    if (!currentEntityId) return "/dashboard";
+    const prefix = `/${currentEntityId}`;
+    if (pathname.startsWith(prefix)) {
+      const subPath = pathname.slice(prefix.length);
+      return subPath || "/dashboard";
+    }
+    return "/dashboard";
+  };
 
   if (entities.length === 0) {
     return (
@@ -62,7 +74,7 @@ export function EntitySelector({
         {entities.map((entity) => (
           <DropdownMenuItem
             key={entity.id}
-            onClick={() => router.push(`/${entity.id}/dashboard`)}
+            onClick={() => router.push(`/${entity.id}${getEntitySubPath()}`)}
             className={entity.id === currentEntityId ? "bg-accent" : ""}
           >
             <Building2 className="mr-2 h-4 w-4" />
