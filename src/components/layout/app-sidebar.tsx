@@ -352,6 +352,45 @@ export function AppSidebar({ user, entityId: entityIdProp, entities = [] }: AppS
 
         {entityId && (
           <SidebarGroup>
+            <SidebarGroupLabel>Consolidated</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {[
+                  {
+                    title: "Financial Model",
+                    url: "/reports/financial-model",
+                    icon: FileText,
+                  },
+                  {
+                    title: "IC Eliminations",
+                    url: "/ic-eliminations",
+                    icon: ArrowLeftRight,
+                  },
+                  {
+                    title: "Master GL",
+                    url: "/settings/master-gl",
+                    icon: LibraryBig,
+                  },
+                ].map((item) => (
+                  <SidebarMenuItem key={item.title}>
+                    <SidebarMenuButton
+                      asChild
+                      isActive={pathname === item.url || pathname.startsWith(item.url + "/")}
+                    >
+                      <Link href={item.url}>
+                        <item.icon />
+                        <span>{item.title}</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ))}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        )}
+
+        {entityId && (
+          <SidebarGroup>
             <SidebarGroupLabel>Tools</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
