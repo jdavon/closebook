@@ -47,6 +47,7 @@ import {
   FileText,
   Pencil,
   Plus,
+  DollarSign,
 } from "lucide-react";
 import {
   formatCurrency,
@@ -56,6 +57,7 @@ import {
 import {
   generateWhatIfSchedule,
   summarizeSchedule,
+  interestFactor,
 } from "@/lib/utils/amortization";
 import type { DebtStatus } from "@/lib/types/database";
 
@@ -481,6 +483,147 @@ export default function DebtDetailPage() {
     return summarizeSchedule(whatIfSchedule);
   }, [whatIfSchedule]);
 
+  // Interest accrual schedule — walks month by month adjusting for transactions
+  interface AccrualEntry {
+    year: number;
+    month: number;
+    beginningBalance: number;
+    rate: number;
+    interestAccrued: number;
+    endingBalance: number;
+    cumulativeInterest: number;
+    balanceChanges: number; // net draws/paydowns in the month
+  }
+
+  const interestAccrualSchedule = useMemo((): AccrualEntry[] => {
+    if (!instrument) return [];
+
+    const entries: AccrualEntry[] = [];
+    const startDate = new Date(instrument.start_date);
+    let sy = startDate.getFullYear();
+    let sm = startDate.getMonth() + 1;
+    const now = new Date();
+    const endYear = now.getFullYear();
+    const endMonth = now.getMonth() + 1;
+    const convention = instrument.day_count_convention ?? "30/360";
+    const rate = instrument.interest_rate ?? 0;
+
+    // Build a map of balance changes by month from transactions
+    // Positive = draws/advances increase balance, negative = principal payments decrease
+    const monthlyChanges: Record<string, number> = {};
+    const sortedTxns = [...transactions].sort(
+      (a, b) => new Date(a.effective_date).getTime() - new Date(b.effective_date).getTime()
+    );
+    for (const txn of sortedTxns) {
+      const d = new Date(txn.effective_date);
+      const key = `${d.getFullYear()}-${d.getMonth() + 1}`;
+      if (!monthlyChanges[key]) monthlyChanges[key] = 0;
+      if (txn.transaction_type === "advance") {
+        monthlyChanges[key] += Math.abs(txn.amount);
+      } else if (txn.transaction_type === "principal_payment") {
+        monthlyChanges[key] -= Math.abs(txn.to_principal ?? txn.amount);
+      } else if (txn.transaction_type === "payoff") {
+        monthlyChanges[key] -= Math.abs(txn.amount);
+      }
+    }
+
+    // Also check rate history for variable-rate instruments
+    const rateChangesSorted = [...rateHistory].sort(
+      (a, b) => new Date(a.effective_date).getTime() - new Date(b.effective_date).getTime()
+    );
+    function getRateForMonth(y: number, m: number): number {
+      if (rateChangesSorted.length === 0) return rate;
+      const periodStart = new Date(y, m - 1, 1);
+      let effective = rate;
+      for (const rc of rateChangesSorted) {
+        if (new Date(rc.effective_date) <= periodStart) {
+          effective = rc.interest_rate;
+        }
+      }
+      return effective;
+    }
+
+    let balance = instrument.current_draw ?? instrument.original_amount ?? 0;
+    // Walk backwards from start to figure out original balance if transactions exist before start
+    // Actually, start with original amount and apply transactions forward
+    const isLOCType = ["line_of_credit", "revolving_credit"].includes(instrument.debt_type);
+    balance = isLOCType ? (instrument.current_draw ?? instrument.original_amount) : instrument.original_amount;
+
+    let cumInterest = 0;
+
+    // Generate up to 24 months past current, but at least through today
+    const maxMonths = 240; // 20 years max
+
+    for (let i = 0; i < maxMonths; i++) {
+      const cy = sy + Math.floor((sm - 1 + i) / 12);
+      const cm = ((sm - 1 + i) % 12) + 1;
+
+      // Stop 12 months past current period
+      if (cy > endYear + 1 || (cy === endYear + 1 && cm > endMonth)) break;
+
+      const key = `${cy}-${cm}`;
+      const changes = monthlyChanges[key] ?? 0;
+
+      // Apply balance changes at start of month (draws happen, then interest accrues)
+      const adjustedBalance = Math.max(0, balance + changes);
+      const monthRate = getRateForMonth(cy, cm);
+      const factor = interestFactor(cy, cm, convention);
+      const interest = Math.round(adjustedBalance * monthRate * factor * 100) / 100;
+
+      cumInterest += interest;
+
+      entries.push({
+        year: cy,
+        month: cm,
+        beginningBalance: Math.round(balance * 100) / 100,
+        rate: monthRate,
+        interestAccrued: interest,
+        endingBalance: Math.round(adjustedBalance * 100) / 100,
+        cumulativeInterest: Math.round(cumInterest * 100) / 100,
+        balanceChanges: Math.round(changes * 100) / 100,
+      });
+
+      balance = adjustedBalance;
+
+      // For fully amortizing loans, reduce balance by principal from amortization
+      // But for interest-only / revolving, balance only changes via transactions
+      if (!isLOCType && instrument.payment_structure !== "interest_only") {
+        const amortEntry = amortization.find(
+          (a: AnyRow) => a.period_year === cy && a.period_month === cm
+        );
+        if (amortEntry) {
+          balance = Math.max(0, balance - amortEntry.principal);
+        }
+      }
+
+      if (balance <= 0 && changes === 0 && i > 0) break;
+    }
+
+    return entries;
+  }, [instrument, transactions, rateHistory, amortization]);
+
+  // Daily interest based on current outstanding balance
+  const dailyInterest = useMemo(() => {
+    if (!instrument) return 0;
+    const balance = instrument.current_draw ?? (
+      amortization.length > 0 ? amortization[amortization.length - 1].ending_balance : instrument.original_amount
+    );
+    const rate = instrument.interest_rate ?? 0;
+    const convention = instrument.day_count_convention ?? "30/360";
+    // Use a per-day calculation based on convention
+    switch (convention) {
+      case "30/360": return Math.round(balance * rate / 360 * 100) / 100;
+      case "actual/360": return Math.round(balance * rate / 360 * 100) / 100;
+      case "actual/365": return Math.round(balance * rate / 365 * 100) / 100;
+      case "actual/actual": {
+        const now = new Date();
+        const diy = (now.getFullYear() % 4 === 0 && (now.getFullYear() % 100 !== 0 || now.getFullYear() % 400 === 0)) ? 366 : 365;
+        return Math.round(balance * rate / diy * 100) / 100;
+      }
+      default: return Math.round(balance * rate / 365 * 100) / 100;
+    }
+  }, [instrument, amortization]);
+
   if (loading)
     return <p className="text-muted-foreground p-6">Loading...</p>;
   if (!instrument)
@@ -776,6 +919,12 @@ export default function DebtDetailPage() {
           <span className="text-sm text-muted-foreground">Day Count</span>
           <p className="text-lg font-semibold">{instrument.day_count_convention ?? "30/360"}</p>
         </div>
+        <div className="border-l pl-6">
+          <span className="text-sm text-muted-foreground">Daily Interest</span>
+          <p className="text-lg font-semibold tabular-nums text-amber-600">
+            {formatCurrency(dailyInterest)}
+          </p>
+        </div>
       </div>
 
       {/* Tabs */}
@@ -794,6 +943,10 @@ export default function DebtDetailPage() {
             Transactions ({transactions.length})
           </TabsTrigger>
           <TabsTrigger value="amortization">Amortization ({amortization.length})</TabsTrigger>
+          <TabsTrigger value="accrual">
+            <DollarSign className="h-4 w-4 mr-1" />
+            Interest Accrual ({interestAccrualSchedule.length})
+          </TabsTrigger>
           <TabsTrigger value="whatif">
             <Calculator className="h-4 w-4 mr-1" />
             What-If
@@ -1264,6 +1417,90 @@ export default function DebtDetailPage() {
                         <TableCell className="text-right tabular-nums">{formatCurrency(totalPrincipal)}</TableCell>
                         <TableCell className="text-right tabular-nums">{formatCurrency(totalInterest)}</TableCell>
                         <TableCell colSpan={3} />
+                      </TableRow>
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* TAB: Interest Accrual */}
+        <TabsContent value="accrual">
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle>Monthly Interest Accrual Schedule</CardTitle>
+                  <CardDescription>
+                    Interest expense recognition per month — adjusts dynamically with draws and paydowns
+                  </CardDescription>
+                </div>
+                {interestAccrualSchedule.length > 0 && (
+                  <div className="text-right">
+                    <span className="text-sm text-muted-foreground">Total Accrued Interest</span>
+                    <p className="text-lg font-semibold tabular-nums">
+                      {formatCurrency(interestAccrualSchedule[interestAccrualSchedule.length - 1].cumulativeInterest)}
+                    </p>
+                  </div>
+                )}
+              </div>
+            </CardHeader>
+            <CardContent>
+              {interestAccrualSchedule.length === 0 ? (
+                <p className="text-sm text-muted-foreground py-8 text-center">
+                  No interest accrual data available. Ensure the instrument has a start date and balance.
+                </p>
+              ) : (
+                <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Period</TableHead>
+                        <TableHead className="text-right">Beg Balance</TableHead>
+                        <TableHead className="text-right">Draws / Paydowns</TableHead>
+                        <TableHead className="text-right">Adj Balance</TableHead>
+                        <TableHead className="text-right">Rate</TableHead>
+                        <TableHead className="text-right">Interest Accrued</TableHead>
+                        <TableHead className="text-right">Cumulative Interest</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {interestAccrualSchedule.map((row, idx) => {
+                        const now = new Date();
+                        const isCurrent = row.year === now.getFullYear() && row.month === now.getMonth() + 1;
+                        const isPast = new Date(row.year, row.month - 1, 1) < new Date(now.getFullYear(), now.getMonth(), 1);
+                        return (
+                          <TableRow
+                            key={idx}
+                            className={isCurrent ? "bg-amber-50 dark:bg-amber-950/20" : !isPast ? "text-muted-foreground" : ""}
+                          >
+                            <TableCell className="font-medium">
+                              {getPeriodShortLabel(row.year, row.month)}
+                              {isCurrent && <Badge variant="outline" className="ml-2 text-xs">Current</Badge>}
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums">{formatCurrency(row.beginningBalance)}</TableCell>
+                            <TableCell className={`text-right tabular-nums ${row.balanceChanges > 0 ? "text-red-600" : row.balanceChanges < 0 ? "text-green-600" : "text-muted-foreground"}`}>
+                              {row.balanceChanges !== 0 ? (row.balanceChanges > 0 ? "+" : "") + formatCurrency(row.balanceChanges) : "---"}
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums font-medium">{formatCurrency(row.endingBalance)}</TableCell>
+                            <TableCell className="text-right tabular-nums text-muted-foreground">{formatPercentage(row.rate, 2)}</TableCell>
+                            <TableCell className="text-right tabular-nums font-medium text-amber-600">{formatCurrency(row.interestAccrued)}</TableCell>
+                            <TableCell className="text-right tabular-nums">{formatCurrency(row.cumulativeInterest)}</TableCell>
+                          </TableRow>
+                        );
+                      })}
+                      <TableRow className="font-semibold border-t-2">
+                        <TableCell>Total</TableCell>
+                        <TableCell />
+                        <TableCell />
+                        <TableCell />
+                        <TableCell />
+                        <TableCell className="text-right tabular-nums text-amber-600">
+                          {formatCurrency(interestAccrualSchedule.reduce((s, r) => s + r.interestAccrued, 0))}
+                        </TableCell>
+                        <TableCell />
                       </TableRow>
                     </TableBody>
                   </Table>
