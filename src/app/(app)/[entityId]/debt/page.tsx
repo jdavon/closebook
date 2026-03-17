@@ -28,6 +28,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import {
   Upload,
@@ -37,6 +46,7 @@ import {
   TrendingDown,
   Percent,
   CreditCard,
+  Plus,
 } from "lucide-react";
 import {
   formatCurrency,
@@ -112,6 +122,107 @@ export default function DebtPage() {
   const [glBalances, setGLBalances] = useState<GLBalance[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState({
+    instrument_name: "",
+    lender_name: "",
+    loan_number: "",
+    debt_type: "term_loan",
+    payment_structure: "principal_and_interest",
+    original_amount: "",
+    interest_rate: "",
+    rate_type: "fixed",
+    index_rate_name: "",
+    spread_margin: "",
+    term_months: "",
+    start_date: "",
+    maturity_date: "",
+    payment_amount: "",
+    credit_limit: "",
+    current_draw: "",
+    day_count_convention: "30/360",
+    balloon_amount: "",
+    is_secured: false,
+    collateral_description: "",
+    notes: "",
+  });
+
+  function resetForm() {
+    setForm({
+      instrument_name: "",
+      lender_name: "",
+      loan_number: "",
+      debt_type: "term_loan",
+      payment_structure: "principal_and_interest",
+      original_amount: "",
+      interest_rate: "",
+      rate_type: "fixed",
+      index_rate_name: "",
+      spread_margin: "",
+      term_months: "",
+      start_date: "",
+      maturity_date: "",
+      payment_amount: "",
+      credit_limit: "",
+      current_draw: "",
+      day_count_convention: "30/360",
+      balloon_amount: "",
+      is_secured: false,
+      collateral_description: "",
+      notes: "",
+    });
+  }
+
+  async function handleCreate() {
+    if (!form.instrument_name || !form.original_amount || !form.start_date) {
+      toast.error("Name, original amount, and start date are required");
+      return;
+    }
+    setSaving(true);
+    try {
+      const res = await fetch("/api/debt", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          entity_id: entityId,
+          instrument_name: form.instrument_name,
+          lender_name: form.lender_name || null,
+          loan_number: form.loan_number || null,
+          debt_type: form.debt_type,
+          payment_structure: form.payment_structure,
+          original_amount: parseFloat(form.original_amount),
+          interest_rate: parseFloat(form.interest_rate) || 0,
+          rate_type: form.rate_type,
+          index_rate_name: form.index_rate_name || null,
+          spread_margin: form.spread_margin ? parseFloat(form.spread_margin) : null,
+          term_months: form.term_months ? parseInt(form.term_months) : null,
+          start_date: form.start_date,
+          maturity_date: form.maturity_date || null,
+          payment_amount: form.payment_amount ? parseFloat(form.payment_amount) : null,
+          credit_limit: form.credit_limit ? parseFloat(form.credit_limit) : null,
+          current_draw: form.current_draw ? parseFloat(form.current_draw) : null,
+          day_count_convention: form.day_count_convention,
+          balloon_amount: form.balloon_amount ? parseFloat(form.balloon_amount) : null,
+          is_secured: form.is_secured,
+          collateral_description: form.collateral_description || null,
+          notes: form.notes || null,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        toast.error(json.error || "Failed to create instrument");
+      } else {
+        toast.success("Instrument created");
+        setAddOpen(false);
+        resetForm();
+        loadData();
+      }
+    } catch {
+      toast.error("Network error");
+    }
+    setSaving(false);
+  }
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -297,12 +408,172 @@ export default function DebtPage() {
             onChange={handleUpload}
           />
           <Button
+            variant="outline"
             onClick={() => fileInputRef.current?.click()}
             disabled={uploading}
           >
             <Upload className="mr-2 h-4 w-4" />
             {uploading ? "Importing..." : "Import Spreadsheet"}
           </Button>
+          <Dialog open={addOpen} onOpenChange={(open) => { setAddOpen(open); if (!open) resetForm(); }}>
+            <DialogTrigger asChild>
+              <Button>
+                <Plus className="mr-2 h-4 w-4" />
+                Add Instrument
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+              <DialogHeader>
+                <DialogTitle>New Debt Instrument</DialogTitle>
+              </DialogHeader>
+              <div className="grid gap-4 py-2">
+                {/* Row 1: Name & Lender */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="instrument_name">Instrument Name *</Label>
+                    <Input id="instrument_name" value={form.instrument_name} onChange={(e) => setForm({ ...form, instrument_name: e.target.value })} placeholder="e.g. ALT Revolving LOC" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="lender_name">Lender</Label>
+                    <Input id="lender_name" value={form.lender_name} onChange={(e) => setForm({ ...form, lender_name: e.target.value })} placeholder="e.g. Auto & Light Truck" />
+                  </div>
+                </div>
+                {/* Row 2: Loan #, Type, Structure */}
+                <div className="grid grid-cols-3 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="loan_number">Loan / Account #</Label>
+                    <Input id="loan_number" value={form.loan_number} onChange={(e) => setForm({ ...form, loan_number: e.target.value })} placeholder="992210108992" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="debt_type">Debt Type</Label>
+                    <Select value={form.debt_type} onValueChange={(v) => setForm({ ...form, debt_type: v })}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {Object.entries(TYPE_LABELS).map(([k, v]) => (
+                          <SelectItem key={k} value={k}>{v}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="payment_structure">Payment Structure</Label>
+                    <Select value={form.payment_structure} onValueChange={(v) => setForm({ ...form, payment_structure: v })}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {Object.entries(PAYMENT_STRUCTURE_LABELS).map(([k, v]) => (
+                          <SelectItem key={k} value={k}>{v}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                {/* Row 3: Amount, Rate, Rate Type */}
+                <div className="grid grid-cols-3 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="original_amount">Original Amount *</Label>
+                    <Input id="original_amount" type="number" step="0.01" value={form.original_amount} onChange={(e) => setForm({ ...form, original_amount: e.target.value })} placeholder="500000" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="interest_rate">Interest Rate (%)</Label>
+                    <Input id="interest_rate" type="number" step="0.01" value={form.interest_rate} onChange={(e) => setForm({ ...form, interest_rate: e.target.value })} placeholder="9.25" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="rate_type">Rate Type</Label>
+                    <Select value={form.rate_type} onValueChange={(v) => setForm({ ...form, rate_type: v })}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="fixed">Fixed</SelectItem>
+                        <SelectItem value="variable">Variable</SelectItem>
+                        <SelectItem value="adjustable">Adjustable</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                {/* Conditional: Variable rate fields */}
+                {form.rate_type !== "fixed" && (
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="index_rate_name">Index / Benchmark</Label>
+                      <Input id="index_rate_name" value={form.index_rate_name} onChange={(e) => setForm({ ...form, index_rate_name: e.target.value })} placeholder="e.g. Prime, SOFR" />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="spread_margin">Spread / Margin (%)</Label>
+                      <Input id="spread_margin" type="number" step="0.01" value={form.spread_margin} onChange={(e) => setForm({ ...form, spread_margin: e.target.value })} placeholder="1.75" />
+                    </div>
+                  </div>
+                )}
+                {/* Row 4: Dates & Term */}
+                <div className="grid grid-cols-3 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="start_date">Start Date *</Label>
+                    <Input id="start_date" type="date" value={form.start_date} onChange={(e) => setForm({ ...form, start_date: e.target.value })} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="maturity_date">Maturity Date</Label>
+                    <Input id="maturity_date" type="date" value={form.maturity_date} onChange={(e) => setForm({ ...form, maturity_date: e.target.value })} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="term_months">Term (months)</Label>
+                    <Input id="term_months" type="number" value={form.term_months} onChange={(e) => setForm({ ...form, term_months: e.target.value })} placeholder="60" />
+                  </div>
+                </div>
+                {/* Row 5: Payment, Credit Limit, Current Draw */}
+                <div className="grid grid-cols-3 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="payment_amount">Monthly Payment</Label>
+                    <Input id="payment_amount" type="number" step="0.01" value={form.payment_amount} onChange={(e) => setForm({ ...form, payment_amount: e.target.value })} placeholder="5000" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="credit_limit">Credit Limit</Label>
+                    <Input id="credit_limit" type="number" step="0.01" value={form.credit_limit} onChange={(e) => setForm({ ...form, credit_limit: e.target.value })} placeholder="For LOCs" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="current_draw">Current Draw / Balance</Label>
+                    <Input id="current_draw" type="number" step="0.01" value={form.current_draw} onChange={(e) => setForm({ ...form, current_draw: e.target.value })} placeholder="Outstanding balance" />
+                  </div>
+                </div>
+                {/* Row 6: Day count, Balloon */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="day_count_convention">Day Count Convention</Label>
+                    <Select value={form.day_count_convention} onValueChange={(v) => setForm({ ...form, day_count_convention: v })}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="30/360">30/360</SelectItem>
+                        <SelectItem value="actual/360">Actual/360</SelectItem>
+                        <SelectItem value="actual/365">Actual/365</SelectItem>
+                        <SelectItem value="actual/actual">Actual/Actual</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  {form.payment_structure === "balloon" && (
+                    <div className="space-y-2">
+                      <Label htmlFor="balloon_amount">Balloon Amount</Label>
+                      <Input id="balloon_amount" type="number" step="0.01" value={form.balloon_amount} onChange={(e) => setForm({ ...form, balloon_amount: e.target.value })} />
+                    </div>
+                  )}
+                </div>
+                {/* Row 7: Collateral & Notes */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="collateral_description">Collateral Description</Label>
+                    <Input id="collateral_description" value={form.collateral_description} onChange={(e) => setForm({ ...form, collateral_description: e.target.value, is_secured: !!e.target.value })} placeholder="e.g. Vehicle fleet" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="notes">Notes</Label>
+                    <Input id="notes" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
+                  </div>
+                </div>
+                {/* Submit */}
+                <div className="flex justify-end gap-2 pt-2">
+                  <Button variant="outline" onClick={() => setAddOpen(false)}>Cancel</Button>
+                  <Button onClick={handleCreate} disabled={saving}>
+                    {saving ? "Creating..." : "Create Instrument"}
+                  </Button>
+                </div>
+              </div>
+            </DialogContent>
+          </Dialog>
         </div>
       </div>
 
