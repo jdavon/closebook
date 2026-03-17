@@ -600,22 +600,30 @@ export default function DebtDetailPage() {
     const convention = instrument.day_count_convention ?? "30/360";
     const rate = instrument.interest_rate ?? 0;
 
-    // Build a map of balance changes by month from transactions
-    // Positive = draws/advances increase balance, negative = principal payments decrease
-    const monthlyChanges: Record<string, number> = {};
+    // Build a map of balance-affecting transactions by month, preserving the day
+    // so we can pro-rate interest within the month
+    interface DayChange { day: number; amount: number; }
+    const monthlyDayChanges: Record<string, DayChange[]> = {};
+    const monthlyNetChanges: Record<string, number> = {};
     const sortedTxns = [...transactions].sort(
       (a, b) => new Date(a.effective_date).getTime() - new Date(b.effective_date).getTime()
     );
     for (const txn of sortedTxns) {
       const d = new Date(txn.effective_date);
       const key = `${d.getFullYear()}-${d.getMonth() + 1}`;
-      if (!monthlyChanges[key]) monthlyChanges[key] = 0;
+      if (!monthlyDayChanges[key]) monthlyDayChanges[key] = [];
+      if (!monthlyNetChanges[key]) monthlyNetChanges[key] = 0;
+      let delta = 0;
       if (txn.transaction_type === "advance") {
-        monthlyChanges[key] += Math.abs(txn.amount);
+        delta = Math.abs(txn.amount);
       } else if (txn.transaction_type === "principal_payment" || txn.transaction_type === "vehicle_payoff") {
-        monthlyChanges[key] -= Math.abs(txn.to_principal ?? txn.amount);
+        delta = -Math.abs(txn.to_principal ?? txn.amount);
       } else if (txn.transaction_type === "payoff") {
-        monthlyChanges[key] -= Math.abs(txn.amount);
+        delta = -Math.abs(txn.amount);
+      }
+      if (delta !== 0) {
+        monthlyDayChanges[key].push({ day: d.getDate(), amount: delta });
+        monthlyNetChanges[key] += delta;
       }
     }
 
@@ -654,14 +662,40 @@ export default function DebtDetailPage() {
       if (cy > endYear + 1 || (cy === endYear + 1 && cm > endMonth)) break;
 
       const key = `${cy}-${cm}`;
-      const changes = monthlyChanges[key] ?? 0;
-
-      // Apply balance changes at start of month (draws happen, then interest accrues)
-      const adjustedBalance = Math.max(0, balance + changes);
+      const changes = monthlyNetChanges[key] ?? 0;
+      const dayChanges = monthlyDayChanges[key] ?? [];
       const monthRate = getRateForMonth(cy, cm);
-      const factor = interestFactor(cy, cm, convention);
-      const interest = Math.round(adjustedBalance * monthRate * factor * 100) / 100;
 
+      // Calculate interest using day-weighted average balance when mid-month transactions exist
+      let interest: number;
+      const totalDays = new Date(cy, cm, 0).getDate(); // days in this month
+
+      if (dayChanges.length > 0) {
+        // Sort changes by day, compute weighted balance
+        const sorted = [...dayChanges].sort((a, b) => a.day - b.day);
+        let runBal = balance;
+        let weightedSum = 0;
+        let prevDay = 1;
+
+        for (const dc of sorted) {
+          // Days at the previous balance (from prevDay to dc.day - 1)
+          const daysAtBal = Math.max(0, dc.day - prevDay);
+          weightedSum += runBal * daysAtBal;
+          runBal = Math.max(0, runBal + dc.amount);
+          prevDay = dc.day;
+        }
+        // Remaining days at the final balance
+        weightedSum += runBal * (totalDays - prevDay + 1);
+
+        const avgBalance = weightedSum / totalDays;
+        const factor = interestFactor(cy, cm, convention);
+        interest = Math.round(avgBalance * monthRate * factor * 100) / 100;
+      } else {
+        const factor = interestFactor(cy, cm, convention);
+        interest = Math.round(balance * monthRate * factor * 100) / 100;
+      }
+
+      const adjustedBalance = Math.max(0, balance + changes);
       cumInterest += interest;
 
       entries.push({
