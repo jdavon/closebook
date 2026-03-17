@@ -588,9 +588,11 @@ export default function DebtDetailPage() {
     if (!instrument) return [];
 
     const entries: AccrualEntry[] = [];
-    const startDate = new Date(instrument.start_date);
-    let sy = startDate.getFullYear();
-    let sm = startDate.getMonth() + 1;
+    // Parse as local date to avoid UTC timezone shift
+    const [sdY, sdM, sdD] = instrument.start_date.split("T")[0].split("-").map(Number);
+    const startDate = new Date(sdY, sdM - 1, sdD);
+    let sy = sdY;
+    let sm = sdM;
     const now = new Date();
     const endYear = now.getFullYear();
     const endMonth = now.getMonth() + 1;
@@ -758,8 +760,12 @@ export default function DebtDetailPage() {
 
   const isLOC = ["line_of_credit", "revolving_credit"].includes(instrument.debt_type);
 
-  const formatDate = (d: string | null) =>
-    d ? new Date(d).toLocaleDateString() : "---";
+  const formatDate = (d: string | null) => {
+    if (!d) return "---";
+    // Parse as local date to avoid UTC timezone shift (e.g. 2025-12-19 → Dec 18 in PST)
+    const [y, m, day] = d.split("T")[0].split("-").map(Number);
+    return new Date(y, m - 1, day).toLocaleDateString();
+  };
 
   return (
     <div className="space-y-6">
