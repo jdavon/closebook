@@ -153,6 +153,9 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: "Missing required field: id" }, { status: 400 });
   }
 
+  // current_draw is derived from transactions only — never allow manual override
+  delete updates.current_draw;
+
   // Normalize rates if passed as percentage
   if (updates.interest_rate != null && updates.interest_rate > 1) {
     updates.interest_rate = updates.interest_rate / 100;
