@@ -271,22 +271,39 @@ export default function DebtPage() {
 
       const { data: txnData } = await supabase
         .from("debt_transactions")
-        .select("debt_instrument_id, to_principal, to_interest, to_fees")
+        .select("debt_instrument_id, transaction_type, amount, to_principal, to_interest, to_fees")
         .in("debt_instrument_id", instrIds)
         .gte("transaction_date", periodStart)
         .lt("transaction_date", periodEnd);
 
       const txnMap: Record<string, TransactionSummary> = {};
       if (txnData) {
-        for (const t of txnData as unknown as { debt_instrument_id: string; to_principal: number; to_interest: number; to_fees: number }[]) {
+        for (const t of txnData as unknown as { debt_instrument_id: string; transaction_type: string; amount: number; to_principal: number; to_interest: number; to_fees: number }[]) {
           if (!txnMap[t.debt_instrument_id]) {
             txnMap[t.debt_instrument_id] = { principal: 0, interest: 0, fees: 0, payment: 0 };
           }
           const s = txnMap[t.debt_instrument_id];
-          s.principal += t.to_principal ?? 0;
-          s.interest += t.to_interest ?? 0;
-          s.fees += t.to_fees ?? 0;
-          s.payment += (t.to_principal ?? 0) + (t.to_interest ?? 0) + (t.to_fees ?? 0);
+          const hasBreakdown = (t.to_principal ?? 0) !== 0 || (t.to_interest ?? 0) !== 0 || (t.to_fees ?? 0) !== 0;
+          if (hasBreakdown) {
+            s.principal += t.to_principal ?? 0;
+            s.interest += t.to_interest ?? 0;
+            s.fees += t.to_fees ?? 0;
+            s.payment += (t.to_principal ?? 0) + (t.to_interest ?? 0) + (t.to_fees ?? 0);
+          } else {
+            // Infer allocation from transaction type when breakdown fields are empty
+            const amt = t.amount ?? 0;
+            const principalTypes = ["principal_payment", "vehicle_payoff", "payoff", "advance"];
+            const interestTypes = ["interest_payment"];
+            const feeTypes = ["fee_payment", "late_fee", "misc_fee", "origination_fee", "annual_fee"];
+            if (principalTypes.includes(t.transaction_type)) {
+              s.principal += amt;
+            } else if (interestTypes.includes(t.transaction_type)) {
+              s.interest += amt;
+            } else if (feeTypes.includes(t.transaction_type)) {
+              s.fees += amt;
+            }
+            s.payment += amt;
+          }
         }
       }
       setTxnSummary(txnMap);

@@ -754,9 +754,25 @@ export default function DebtDetailPage() {
   const latestAmort =
     amortization.length > 0 ? amortization[amortization.length - 1] : null;
 
-  const totalInterest = transactions.reduce((sum: number, t: AnyRow) => sum + (t.to_interest ?? 0), 0);
-  const totalPrincipal = transactions.reduce((sum: number, t: AnyRow) => sum + (t.to_principal ?? 0), 0);
-  const totalFees = transactions.reduce((sum: number, t: AnyRow) => sum + (t.to_fees ?? 0), 0);
+  const principalTypes = ["principal_payment", "vehicle_payoff", "payoff", "advance"];
+  const interestTypes = ["interest_payment"];
+  const feeTypes = ["fee_payment", "late_fee", "misc_fee", "origination_fee", "annual_fee"];
+
+  const totalInterest = transactions.reduce((sum: number, t: AnyRow) => {
+    if ((t.to_interest ?? 0) !== 0) return sum + t.to_interest;
+    if ((t.to_principal ?? 0) === 0 && (t.to_fees ?? 0) === 0 && interestTypes.includes(t.transaction_type)) return sum + (t.amount ?? 0);
+    return sum;
+  }, 0);
+  const totalPrincipal = transactions.reduce((sum: number, t: AnyRow) => {
+    if ((t.to_principal ?? 0) !== 0) return sum + t.to_principal;
+    if ((t.to_interest ?? 0) === 0 && (t.to_fees ?? 0) === 0 && principalTypes.includes(t.transaction_type)) return sum + (t.amount ?? 0);
+    return sum;
+  }, 0);
+  const totalFees = transactions.reduce((sum: number, t: AnyRow) => {
+    if ((t.to_fees ?? 0) !== 0) return sum + t.to_fees;
+    if ((t.to_principal ?? 0) === 0 && (t.to_interest ?? 0) === 0 && feeTypes.includes(t.transaction_type)) return sum + (t.amount ?? 0);
+    return sum;
+  }, 0);
 
   const isLOC = ["line_of_credit", "revolving_credit"].includes(instrument.debt_type);
 
