@@ -1,5 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import {
+  generateAmortizationSchedule,
+  type DebtForAmortization,
+} from "@/lib/utils/amortization";
+import { getCurrentPeriod } from "@/lib/utils/dates";
 
 /**
  * POST /api/debt
@@ -81,6 +86,53 @@ export async function POST(request: NextRequest) {
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // Generate amortization schedule
+  if (data) {
+    const currentPeriod = getCurrentPeriod();
+    const amortInput: DebtForAmortization = {
+      debt_type: data.debt_type,
+      original_amount: data.original_amount,
+      interest_rate: data.interest_rate,
+      term_months: data.term_months,
+      start_date: data.start_date,
+      maturity_date: data.maturity_date,
+      payment_amount: data.payment_amount,
+      payment_structure: data.payment_structure,
+      day_count_convention: data.day_count_convention,
+      credit_limit: data.credit_limit,
+      current_draw: data.current_draw,
+      balloon_amount: data.balloon_amount,
+      rate_type: data.rate_type,
+    };
+
+    const schedule = generateAmortizationSchedule(
+      amortInput,
+      currentPeriod.year,
+      currentPeriod.month
+    );
+
+    if (schedule.length > 0) {
+      const amortEntries = schedule.map((entry) => ({
+        debt_instrument_id: data.id,
+        period_year: entry.period_year,
+        period_month: entry.period_month,
+        beginning_balance: entry.beginning_balance,
+        payment: entry.payment,
+        principal: entry.principal,
+        interest: entry.interest,
+        ending_balance: entry.ending_balance,
+        interest_rate: entry.interest_rate,
+        fees: entry.fees,
+        cumulative_principal: entry.cumulative_principal,
+        cumulative_interest: entry.cumulative_interest,
+      }));
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (supabase as any).from("debt_amortization").insert(amortEntries);
+    }
+  }
+
   return NextResponse.json(data, { status: 201 });
 }
 

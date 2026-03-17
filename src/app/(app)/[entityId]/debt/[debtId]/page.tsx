@@ -267,6 +267,30 @@ export default function DebtDetailPage() {
     setEditSaving(false);
   }
 
+  // Regenerate amortization
+  const [regenerating, setRegenerating] = useState(false);
+
+  async function handleRegenerate() {
+    setRegenerating(true);
+    try {
+      const res = await fetch("/api/debt/amortize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ debt_instrument_id: debtId }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        toast.error(json.error || "Failed to generate schedule");
+      } else {
+        toast.success(`Generated ${json.periods} period${json.periods !== 1 ? "s" : ""}`);
+        loadData();
+      }
+    } catch {
+      toast.error("Network error");
+    }
+    setRegenerating(false);
+  }
+
   // Add transaction
   const [txnOpen, setTxnOpen] = useState(false);
   const [txnSaving, setTxnSaving] = useState(false);
@@ -1181,13 +1205,25 @@ export default function DebtDetailPage() {
         <TabsContent value="amortization">
           <Card>
             <CardHeader>
-              <CardTitle>Amortization Schedule</CardTitle>
-              <CardDescription>{amortization.length} period{amortization.length !== 1 ? "s" : ""} generated</CardDescription>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle>Amortization Schedule</CardTitle>
+                  <CardDescription>{amortization.length} period{amortization.length !== 1 ? "s" : ""} generated</CardDescription>
+                </div>
+                <Button
+                  variant={amortization.length === 0 ? "default" : "outline"}
+                  onClick={handleRegenerate}
+                  disabled={regenerating}
+                >
+                  <Calculator className="mr-2 h-4 w-4" />
+                  {regenerating ? "Generating..." : amortization.length === 0 ? "Generate Schedule" : "Regenerate"}
+                </Button>
+              </div>
             </CardHeader>
             <CardContent>
               {amortization.length === 0 ? (
                 <p className="text-sm text-muted-foreground py-8 text-center">
-                  No amortization entries. The schedule will be generated when instrument data is uploaded.
+                  No amortization entries. Click &quot;Generate Schedule&quot; to create the amortization table from current instrument parameters.
                 </p>
               ) : (
                 <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
