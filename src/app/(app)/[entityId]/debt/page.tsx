@@ -74,6 +74,13 @@ interface GLBalance {
   ending_balance: number;
 }
 
+interface TransactionSummary {
+  principal: number;
+  interest: number;
+  fees: number;
+  payment: number;
+}
+
 const STATUS_LABELS: Record<DebtStatus, string> = {
   active: "Active",
   paid_off: "Paid Off",
@@ -120,6 +127,7 @@ export default function DebtPage() {
     Record<string, AmortizationPeriod>
   >({});
   const [glBalances, setGLBalances] = useState<GLBalance[]>([]);
+  const [txnSummary, setTxnSummary] = useState<Record<string, TransactionSummary>>({});
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
@@ -255,6 +263,34 @@ export default function DebtPage() {
       }
       setAmortization(amortMap);
 
+      // Fetch transactions for the selected period to derive actual principal/interest/fees
+      const periodStart = `${periodYear}-${String(periodMonth).padStart(2, "0")}-01`;
+      const periodEnd = periodMonth === 12
+        ? `${periodYear + 1}-01-01`
+        : `${periodYear}-${String(periodMonth + 1).padStart(2, "0")}-01`;
+
+      const { data: txnData } = await supabase
+        .from("debt_transactions")
+        .select("debt_instrument_id, to_principal, to_interest, to_fees")
+        .in("debt_instrument_id", instrIds)
+        .gte("transaction_date", periodStart)
+        .lt("transaction_date", periodEnd);
+
+      const txnMap: Record<string, TransactionSummary> = {};
+      if (txnData) {
+        for (const t of txnData as unknown as { debt_instrument_id: string; to_principal: number; to_interest: number; to_fees: number }[]) {
+          if (!txnMap[t.debt_instrument_id]) {
+            txnMap[t.debt_instrument_id] = { principal: 0, interest: 0, fees: 0, payment: 0 };
+          }
+          const s = txnMap[t.debt_instrument_id];
+          s.principal += t.to_principal ?? 0;
+          s.interest += t.to_interest ?? 0;
+          s.fees += t.to_fees ?? 0;
+          s.payment += (t.to_principal ?? 0) + (t.to_interest ?? 0) + (t.to_fees ?? 0);
+        }
+      }
+      setTxnSummary(txnMap);
+
       const liabilityAccountIds = instr
         .map((i: AnyInstrument) => i.liability_account_id)
         .filter((id: string | null): id is string => id !== null);
@@ -275,6 +311,7 @@ export default function DebtPage() {
     } else {
       setAmortization({});
       setGLBalances([]);
+      setTxnSummary({});
     }
 
     setLoading(false);
@@ -326,22 +363,22 @@ export default function DebtPage() {
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
-  // Compute summary totals
+  // Compute summary totals — derived from transactions (actual), not amortization (projected)
   const activeInstruments = instruments.filter((i: AnyInstrument) => i.status === "active");
-  const totalOutstanding = Object.values(amortization).reduce(
-    (sum, a) => sum + a.ending_balance,
+  const totalOutstanding = activeInstruments.reduce(
+    (sum: number, i: AnyInstrument) => sum + (i.current_draw ?? i.original_amount ?? 0),
     0
   );
-  const totalPrincipal = Object.values(amortization).reduce(
-    (sum, a) => sum + a.principal,
+  const totalPrincipal = Object.values(txnSummary).reduce(
+    (sum, s) => sum + s.principal,
     0
   );
-  const totalInterest = Object.values(amortization).reduce(
-    (sum, a) => sum + a.interest,
+  const totalInterest = Object.values(txnSummary).reduce(
+    (sum, s) => sum + s.interest,
     0
   );
-  const totalPayment = Object.values(amortization).reduce(
-    (sum, a) => sum + a.payment,
+  const totalPayment = Object.values(txnSummary).reduce(
+    (sum, s) => sum + s.payment,
     0
   );
 
@@ -370,8 +407,7 @@ export default function DebtPage() {
   const totalWeightedRate = instruments
     .filter((i: AnyInstrument) => i.status === "active")
     .reduce((sum: number, i: AnyInstrument) => {
-      const balance =
-        amortization[i.id]?.ending_balance ?? i.current_draw ?? i.original_amount;
+      const balance = i.current_draw ?? i.original_amount;
       return sum + i.interest_rate * balance;
     }, 0);
   const weightedAvgRate =
@@ -808,6 +844,7 @@ export default function DebtPage() {
                 <TableBody>
                   {instruments.map((instr: AnyInstrument) => {
                     const amort = amortization[instr.id];
+                    const txn = txnSummary[instr.id];
                     const isLOC = locTypes.includes(instr.debt_type);
                     return (
                       <TableRow key={instr.id}>
@@ -849,18 +886,16 @@ export default function DebtPage() {
                             : formatCurrency(instr.original_amount)}
                         </TableCell>
                         <TableCell className="text-right tabular-nums font-medium">
-                          {amort
-                            ? formatCurrency(amort.ending_balance)
-                            : "---"}
+                          {formatCurrency(instr.current_draw ?? instr.original_amount ?? 0)}
                         </TableCell>
                         <TableCell className="text-right tabular-nums">
-                          {amort ? formatCurrency(amort.payment) : "---"}
+                          {txn ? formatCurrency(txn.payment) : formatCurrency(0)}
                         </TableCell>
                         <TableCell className="text-right tabular-nums">
-                          {amort ? formatCurrency(amort.principal) : "---"}
+                          {txn ? formatCurrency(txn.principal) : formatCurrency(0)}
                         </TableCell>
                         <TableCell className="text-right tabular-nums">
-                          {amort ? formatCurrency(amort.interest) : "---"}
+                          {txn ? formatCurrency(txn.interest) : formatCurrency(0)}
                         </TableCell>
                         <TableCell>
                           <Badge
