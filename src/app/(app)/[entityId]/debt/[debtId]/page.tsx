@@ -364,6 +364,79 @@ export default function DebtDetailPage() {
     setTxnSaving(false);
   }
 
+  // Edit transaction
+  const [editTxnOpen, setEditTxnOpen] = useState(false);
+  const [editTxnSaving, setEditTxnSaving] = useState(false);
+  const [editTxnId, setEditTxnId] = useState<string | null>(null);
+  const [editTxnForm, setEditTxnForm] = useState({
+    transaction_type: "interest_payment",
+    effective_date: "",
+    amount: "",
+    to_principal: "",
+    to_interest: "",
+    to_fees: "",
+    running_balance: "",
+    reference_number: "",
+    description: "",
+    notes: "",
+  });
+
+  function openEditTxn(txn: AnyRow) {
+    setEditTxnId(txn.id);
+    setEditTxnForm({
+      transaction_type: txn.transaction_type,
+      effective_date: txn.effective_date ?? "",
+      amount: String(txn.amount ?? ""),
+      to_principal: txn.to_principal ? String(txn.to_principal) : "",
+      to_interest: txn.to_interest ? String(txn.to_interest) : "",
+      to_fees: txn.to_fees ? String(txn.to_fees) : "",
+      running_balance: txn.running_balance != null ? String(txn.running_balance) : "",
+      reference_number: txn.reference_number ?? "",
+      description: txn.description ?? "",
+      notes: txn.notes ?? "",
+    });
+    setEditTxnOpen(true);
+  }
+
+  async function handleEditTransaction() {
+    if (!editTxnId || !editTxnForm.effective_date || !editTxnForm.amount) {
+      toast.error("Date and amount are required");
+      return;
+    }
+    setEditTxnSaving(true);
+    try {
+      const res = await fetch("/api/debt/transactions", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: editTxnId,
+          transaction_date: editTxnForm.effective_date,
+          effective_date: editTxnForm.effective_date,
+          transaction_type: editTxnForm.transaction_type,
+          amount: parseFloat(editTxnForm.amount),
+          to_principal: editTxnForm.to_principal ? parseFloat(editTxnForm.to_principal) : 0,
+          to_interest: editTxnForm.to_interest ? parseFloat(editTxnForm.to_interest) : 0,
+          to_fees: editTxnForm.to_fees ? parseFloat(editTxnForm.to_fees) : 0,
+          running_balance: editTxnForm.running_balance ? parseFloat(editTxnForm.running_balance) : null,
+          reference_number: editTxnForm.reference_number || null,
+          description: editTxnForm.description || null,
+          notes: editTxnForm.notes || null,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        toast.error(json.error || "Failed to update transaction");
+      } else {
+        toast.success("Transaction updated");
+        setEditTxnOpen(false);
+        loadData();
+      }
+    } catch {
+      toast.error("Network error");
+    }
+    setEditTxnSaving(false);
+  }
+
   const loadData = useCallback(async () => {
     // Fetch instrument
     const instrResult = await supabase
@@ -859,9 +932,7 @@ export default function DebtDetailPage() {
             {isLOC ? "Outstanding Draw" : "Current Balance"}
           </span>
           <p className="text-lg font-semibold tabular-nums">
-            {latestAmort
-              ? formatCurrency(latestAmort.ending_balance)
-              : formatCurrency(instrument.current_draw ?? instrument.original_amount)}
+            {formatCurrency(instrument.current_draw ?? instrument.original_amount)}
           </p>
         </div>
         <div>
@@ -1290,6 +1361,78 @@ export default function DebtDetailPage() {
               </DialogContent>
             </Dialog>
 
+            {/* Edit Transaction Dialog */}
+            <Dialog open={editTxnOpen} onOpenChange={setEditTxnOpen}>
+              <DialogContent className="max-w-lg">
+                <DialogHeader>
+                  <DialogTitle>Edit Transaction</DialogTitle>
+                </DialogHeader>
+                <div className="grid gap-4 py-2">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label>Transaction Type</Label>
+                      <Select value={editTxnForm.transaction_type} onValueChange={(v) => setEditTxnForm({ ...editTxnForm, transaction_type: v })}>
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          {Object.entries(TRANSACTION_TYPE_LABELS).map(([k, v]) => (
+                            <SelectItem key={k} value={k}>{v}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Effective Date *</Label>
+                      <Input type="date" value={editTxnForm.effective_date} onChange={(e) => setEditTxnForm({ ...editTxnForm, effective_date: e.target.value })} />
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Total Amount *</Label>
+                    <Input type="number" step="0.01" value={editTxnForm.amount} onChange={(e) => setEditTxnForm({ ...editTxnForm, amount: e.target.value })} placeholder="0.00" />
+                  </div>
+                  {["principal_payment", "interest_payment", "fee_payment", "payment_reversal"].includes(editTxnForm.transaction_type) && (
+                    <div className="grid grid-cols-3 gap-4">
+                      <div className="space-y-2">
+                        <Label>To Principal</Label>
+                        <Input type="number" step="0.01" value={editTxnForm.to_principal} onChange={(e) => setEditTxnForm({ ...editTxnForm, to_principal: e.target.value })} placeholder="0.00" />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>To Interest</Label>
+                        <Input type="number" step="0.01" value={editTxnForm.to_interest} onChange={(e) => setEditTxnForm({ ...editTxnForm, to_interest: e.target.value })} placeholder="0.00" />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>To Fees</Label>
+                        <Input type="number" step="0.01" value={editTxnForm.to_fees} onChange={(e) => setEditTxnForm({ ...editTxnForm, to_fees: e.target.value })} placeholder="0.00" />
+                      </div>
+                    </div>
+                  )}
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label>Running Balance</Label>
+                      <Input type="number" step="0.01" value={editTxnForm.running_balance} onChange={(e) => setEditTxnForm({ ...editTxnForm, running_balance: e.target.value })} placeholder="After this transaction" />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Reference #</Label>
+                      <Input value={editTxnForm.reference_number} onChange={(e) => setEditTxnForm({ ...editTxnForm, reference_number: e.target.value })} placeholder="Check #, wire ref, etc." />
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Description</Label>
+                    <Input value={editTxnForm.description} onChange={(e) => setEditTxnForm({ ...editTxnForm, description: e.target.value })} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Notes</Label>
+                    <Input value={editTxnForm.notes} onChange={(e) => setEditTxnForm({ ...editTxnForm, notes: e.target.value })} />
+                  </div>
+                  <div className="flex justify-end gap-2 pt-2">
+                    <Button variant="outline" onClick={() => setEditTxnOpen(false)}>Cancel</Button>
+                    <Button onClick={handleEditTransaction} disabled={editTxnSaving}>
+                      {editTxnSaving ? "Saving..." : "Save Changes"}
+                    </Button>
+                  </div>
+                </div>
+              </DialogContent>
+            </Dialog>
+
             <CardContent>
               {transactions.length === 0 ? (
                 <p className="text-sm text-muted-foreground py-8 text-center">
@@ -1329,7 +1472,12 @@ export default function DebtDetailPage() {
                           <TableCell className="text-right tabular-nums font-medium">{txn.running_balance != null ? formatCurrency(txn.running_balance) : "---"}</TableCell>
                           <TableCell className="text-xs text-muted-foreground font-mono">{txn.reference_number ?? ""}</TableCell>
                           <TableCell>
-                            {txn.is_reconciled && <Badge variant="secondary" className="text-xs">Reconciled</Badge>}
+                            <div className="flex items-center gap-1">
+                              {txn.is_reconciled && <Badge variant="secondary" className="text-xs">Reconciled</Badge>}
+                              <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => openEditTxn(txn)}>
+                                <Pencil className="h-3 w-3" />
+                              </Button>
+                            </div>
                           </TableCell>
                         </TableRow>
                       ))}

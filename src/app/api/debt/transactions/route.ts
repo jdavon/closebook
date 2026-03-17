@@ -91,33 +91,96 @@ export async function POST(request: NextRequest) {
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  // Update current_draw on the instrument if this is an advance or principal payment
+  // Recalculate current_draw from all transactions
   if (["advance", "principal_payment", "payoff"].includes(transaction_type)) {
-    // Fetch current instrument
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data: instrument } = await (supabase as any)
-      .from("debt_instruments")
-      .select("current_draw, original_amount")
-      .eq("id", debt_instrument_id)
-      .single();
-
-    if (instrument) {
-      let newDraw = instrument.current_draw ?? instrument.original_amount ?? 0;
-      if (transaction_type === "advance") {
-        newDraw += Math.abs(amount);
-      } else if (transaction_type === "principal_payment") {
-        newDraw -= Math.abs(to_principal ?? amount);
-      } else if (transaction_type === "payoff") {
-        newDraw = 0;
-      }
-
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (supabase as any)
-        .from("debt_instruments")
-        .update({ current_draw: Math.max(0, newDraw) })
-        .eq("id", debt_instrument_id);
-    }
+    await recalculateCurrentDraw(supabase, debt_instrument_id);
   }
 
   return NextResponse.json(data, { status: 201 });
+}
+
+/**
+ * PATCH /api/debt/transactions
+ * Update an existing transaction and recalculate the instrument's current_draw
+ * by replaying all balance-affecting transactions from scratch.
+ *
+ * Body: { id, ...fields_to_update }
+ */
+export async function PATCH(request: NextRequest) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const body = await request.json();
+  const { id, ...updates } = body;
+
+  if (!id) {
+    return NextResponse.json({ error: "Missing required field: id" }, { status: 400 });
+  }
+
+  // Fetch existing transaction to get debt_instrument_id
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: existing } = await (supabase as any)
+    .from("debt_transactions")
+    .select("debt_instrument_id")
+    .eq("id", id)
+    .single();
+
+  if (!existing) {
+    return NextResponse.json({ error: "Transaction not found" }, { status: 404 });
+  }
+
+  // Update the transaction
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await (supabase as any)
+    .from("debt_transactions")
+    .update(updates)
+    .eq("id", id)
+    .select()
+    .single();
+
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // Recalculate current_draw by replaying all transactions
+  await recalculateCurrentDraw(supabase, existing.debt_instrument_id);
+
+  return NextResponse.json(data);
+}
+
+/**
+ * Recalculate an instrument's current_draw by replaying all balance-affecting
+ * transactions from the original amount.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function recalculateCurrentDraw(supabase: any, debtInstrumentId: string) {
+  const { data: instrument } = await supabase
+    .from("debt_instruments")
+    .select("original_amount")
+    .eq("id", debtInstrumentId)
+    .single();
+
+  if (!instrument) return;
+
+  const { data: txns } = await supabase
+    .from("debt_transactions")
+    .select("transaction_type, amount, to_principal")
+    .eq("debt_instrument_id", debtInstrumentId)
+    .order("effective_date", { ascending: true })
+    .order("created_at", { ascending: true });
+
+  let balance = instrument.original_amount ?? 0;
+  for (const txn of txns ?? []) {
+    if (txn.transaction_type === "advance") {
+      balance += Math.abs(txn.amount);
+    } else if (txn.transaction_type === "principal_payment") {
+      balance -= Math.abs(txn.to_principal ?? txn.amount);
+    } else if (txn.transaction_type === "payoff") {
+      balance = 0;
+    }
+  }
+
+  await supabase
+    .from("debt_instruments")
+    .update({ current_draw: Math.max(0, balance) })
+    .eq("id", debtInstrumentId);
 }
