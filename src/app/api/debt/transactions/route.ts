@@ -91,10 +91,8 @@ export async function POST(request: NextRequest) {
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  // Recalculate current_draw from all transactions
-  if (["advance", "principal_payment", "payoff"].includes(transaction_type)) {
-    await recalculateCurrentDraw(supabase, debt_instrument_id);
-  }
+  // Recalculate current_draw and running balances for all transactions
+  await recalculateCurrentDraw(supabase, debt_instrument_id);
 
   return NextResponse.json(data, { status: 201 });
 }
@@ -163,7 +161,7 @@ async function recalculateCurrentDraw(supabase: any, debtInstrumentId: string) {
 
   const { data: txns } = await supabase
     .from("debt_transactions")
-    .select("transaction_type, amount, to_principal")
+    .select("id, transaction_type, amount, to_principal")
     .eq("debt_instrument_id", debtInstrumentId)
     .order("effective_date", { ascending: true })
     .order("created_at", { ascending: true });
@@ -177,6 +175,13 @@ async function recalculateCurrentDraw(supabase: any, debtInstrumentId: string) {
     } else if (txn.transaction_type === "payoff") {
       balance = 0;
     }
+    balance = Math.max(0, balance);
+
+    // Update running_balance on each transaction
+    await supabase
+      .from("debt_transactions")
+      .update({ running_balance: Math.round(balance * 100) / 100 })
+      .eq("id", txn.id);
   }
 
   await supabase
