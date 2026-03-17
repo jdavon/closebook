@@ -83,3 +83,40 @@ export async function POST(request: NextRequest) {
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json(data, { status: 201 });
 }
+
+/**
+ * PATCH /api/debt
+ * Update an existing debt instrument.
+ * Body: { id, ...fields_to_update }
+ */
+export async function PATCH(request: NextRequest) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const body = await request.json();
+  const { id, ...updates } = body;
+
+  if (!id) {
+    return NextResponse.json({ error: "Missing required field: id" }, { status: 400 });
+  }
+
+  // Normalize rates if passed as percentage
+  if (updates.interest_rate != null && updates.interest_rate > 1) {
+    updates.interest_rate = updates.interest_rate / 100;
+  }
+  if (updates.spread_margin != null && updates.spread_margin > 1) {
+    updates.spread_margin = updates.spread_margin / 100;
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await (supabase as any)
+    .from("debt_instruments")
+    .update(updates)
+    .eq("id", id)
+    .select()
+    .single();
+
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  return NextResponse.json(data);
+}

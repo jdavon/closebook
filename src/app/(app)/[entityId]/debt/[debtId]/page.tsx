@@ -30,6 +30,12 @@ import {
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { toast } from "sonner";
 import {
   ArrowLeft,
@@ -39,6 +45,8 @@ import {
   ArrowUpDown,
   History,
   FileText,
+  Pencil,
+  Plus,
 } from "lucide-react";
 import {
   formatCurrency,
@@ -153,6 +161,182 @@ export default function DebtDetailPage() {
   const [whatIfRate, setWhatIfRate] = useState("");
   const [whatIfTerm, setWhatIfTerm] = useState("");
   const [showWhatIf, setShowWhatIf] = useState(false);
+
+  // Edit instrument
+  const [editOpen, setEditOpen] = useState(false);
+  const [editSaving, setEditSaving] = useState(false);
+  const [editForm, setEditForm] = useState({
+    instrument_name: "",
+    lender_name: "",
+    loan_number: "",
+    debt_type: "term_loan",
+    payment_structure: "principal_and_interest",
+    original_amount: "",
+    interest_rate: "",
+    rate_type: "fixed",
+    index_rate_name: "",
+    spread_margin: "",
+    term_months: "",
+    start_date: "",
+    maturity_date: "",
+    payment_amount: "",
+    credit_limit: "",
+    current_draw: "",
+    day_count_convention: "30/360",
+    balloon_amount: "",
+    collateral_description: "",
+    notes: "",
+    status: "active",
+  });
+
+  function openEditDialog() {
+    if (!instrument) return;
+    setEditForm({
+      instrument_name: instrument.instrument_name ?? "",
+      lender_name: instrument.lender_name ?? "",
+      loan_number: instrument.loan_number ?? "",
+      debt_type: instrument.debt_type ?? "term_loan",
+      payment_structure: instrument.payment_structure ?? "principal_and_interest",
+      original_amount: String(instrument.original_amount ?? ""),
+      interest_rate: instrument.interest_rate ? String((instrument.interest_rate * 100).toFixed(4)).replace(/\.?0+$/, "") : "",
+      rate_type: instrument.rate_type ?? "fixed",
+      index_rate_name: instrument.index_rate_name ?? "",
+      spread_margin: instrument.spread_margin ? String((instrument.spread_margin * 100).toFixed(4)).replace(/\.?0+$/, "") : "",
+      term_months: instrument.term_months ? String(instrument.term_months) : "",
+      start_date: instrument.start_date ?? "",
+      maturity_date: instrument.maturity_date ?? "",
+      payment_amount: instrument.payment_amount ? String(instrument.payment_amount) : "",
+      credit_limit: instrument.credit_limit ? String(instrument.credit_limit) : "",
+      current_draw: instrument.current_draw ? String(instrument.current_draw) : "",
+      day_count_convention: instrument.day_count_convention ?? "30/360",
+      balloon_amount: instrument.balloon_amount ? String(instrument.balloon_amount) : "",
+      collateral_description: instrument.collateral_description ?? "",
+      notes: instrument.notes ?? "",
+      status: instrument.status ?? "active",
+    });
+    setEditOpen(true);
+  }
+
+  async function handleEditSave() {
+    if (!editForm.instrument_name || !editForm.original_amount || !editForm.start_date) {
+      toast.error("Name, original amount, and start date are required");
+      return;
+    }
+    setEditSaving(true);
+    try {
+      const res = await fetch("/api/debt", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: debtId,
+          instrument_name: editForm.instrument_name,
+          lender_name: editForm.lender_name || null,
+          loan_number: editForm.loan_number || null,
+          debt_type: editForm.debt_type,
+          payment_structure: editForm.payment_structure,
+          original_amount: parseFloat(editForm.original_amount),
+          interest_rate: parseFloat(editForm.interest_rate) || 0,
+          rate_type: editForm.rate_type,
+          index_rate_name: editForm.index_rate_name || null,
+          spread_margin: editForm.spread_margin ? parseFloat(editForm.spread_margin) : null,
+          term_months: editForm.term_months ? parseInt(editForm.term_months) : null,
+          start_date: editForm.start_date,
+          maturity_date: editForm.maturity_date || null,
+          payment_amount: editForm.payment_amount ? parseFloat(editForm.payment_amount) : null,
+          credit_limit: editForm.credit_limit ? parseFloat(editForm.credit_limit) : null,
+          current_draw: editForm.current_draw ? parseFloat(editForm.current_draw) : null,
+          day_count_convention: editForm.day_count_convention,
+          balloon_amount: editForm.balloon_amount ? parseFloat(editForm.balloon_amount) : null,
+          is_secured: !!editForm.collateral_description,
+          collateral_description: editForm.collateral_description || null,
+          notes: editForm.notes || null,
+          status: editForm.status,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        toast.error(json.error || "Failed to update instrument");
+      } else {
+        toast.success("Instrument updated");
+        setEditOpen(false);
+        loadData();
+      }
+    } catch {
+      toast.error("Network error");
+    }
+    setEditSaving(false);
+  }
+
+  // Add transaction
+  const [txnOpen, setTxnOpen] = useState(false);
+  const [txnSaving, setTxnSaving] = useState(false);
+  const [txnForm, setTxnForm] = useState({
+    transaction_type: "interest_payment",
+    effective_date: new Date().toISOString().split("T")[0],
+    amount: "",
+    to_principal: "",
+    to_interest: "",
+    to_fees: "",
+    running_balance: "",
+    reference_number: "",
+    description: "",
+    notes: "",
+  });
+
+  function resetTxnForm() {
+    setTxnForm({
+      transaction_type: "interest_payment",
+      effective_date: new Date().toISOString().split("T")[0],
+      amount: "",
+      to_principal: "",
+      to_interest: "",
+      to_fees: "",
+      running_balance: "",
+      reference_number: "",
+      description: "",
+      notes: "",
+    });
+  }
+
+  async function handleAddTransaction() {
+    if (!txnForm.effective_date || !txnForm.amount) {
+      toast.error("Date and amount are required");
+      return;
+    }
+    setTxnSaving(true);
+    try {
+      const res = await fetch("/api/debt/transactions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          debt_instrument_id: debtId,
+          transaction_date: txnForm.effective_date,
+          effective_date: txnForm.effective_date,
+          transaction_type: txnForm.transaction_type,
+          amount: parseFloat(txnForm.amount),
+          to_principal: txnForm.to_principal ? parseFloat(txnForm.to_principal) : 0,
+          to_interest: txnForm.to_interest ? parseFloat(txnForm.to_interest) : 0,
+          to_fees: txnForm.to_fees ? parseFloat(txnForm.to_fees) : 0,
+          running_balance: txnForm.running_balance ? parseFloat(txnForm.running_balance) : null,
+          reference_number: txnForm.reference_number || null,
+          description: txnForm.description || null,
+          notes: txnForm.notes || null,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        toast.error(json.error || "Failed to add transaction");
+      } else {
+        toast.success("Transaction added");
+        setTxnOpen(false);
+        resetTxnForm();
+        loadData();
+      }
+    } catch {
+      toast.error("Network error");
+    }
+    setTxnSaving(false);
+  }
 
   const loadData = useCallback(async () => {
     // Fetch instrument
@@ -341,7 +525,168 @@ export default function DebtDetailPage() {
             )}
           </div>
         </div>
+        <Button variant="outline" onClick={openEditDialog}>
+          <Pencil className="mr-2 h-4 w-4" />
+          Edit
+        </Button>
       </div>
+
+      {/* Edit Instrument Dialog */}
+      <Dialog open={editOpen} onOpenChange={setEditOpen}>
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Edit Instrument</DialogTitle>
+          </DialogHeader>
+          <div className="grid gap-4 py-2">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="edit_instrument_name">Instrument Name *</Label>
+                <Input id="edit_instrument_name" value={editForm.instrument_name} onChange={(e) => setEditForm({ ...editForm, instrument_name: e.target.value })} />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="edit_lender_name">Lender</Label>
+                <Input id="edit_lender_name" value={editForm.lender_name} onChange={(e) => setEditForm({ ...editForm, lender_name: e.target.value })} />
+              </div>
+            </div>
+            <div className="grid grid-cols-3 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="edit_loan_number">Loan / Account #</Label>
+                <Input id="edit_loan_number" value={editForm.loan_number} onChange={(e) => setEditForm({ ...editForm, loan_number: e.target.value })} />
+              </div>
+              <div className="space-y-2">
+                <Label>Debt Type</Label>
+                <Select value={editForm.debt_type} onValueChange={(v) => setEditForm({ ...editForm, debt_type: v })}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {Object.entries(TYPE_LABELS).map(([k, v]) => (
+                      <SelectItem key={k} value={k}>{v}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Payment Structure</Label>
+                <Select value={editForm.payment_structure} onValueChange={(v) => setEditForm({ ...editForm, payment_structure: v })}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {Object.entries(PAYMENT_STRUCTURE_LABELS).map(([k, v]) => (
+                      <SelectItem key={k} value={k}>{v}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="grid grid-cols-3 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="edit_original_amount">Original Amount *</Label>
+                <Input id="edit_original_amount" type="number" step="0.01" value={editForm.original_amount} onChange={(e) => setEditForm({ ...editForm, original_amount: e.target.value })} />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="edit_interest_rate">Interest Rate (%)</Label>
+                <Input id="edit_interest_rate" type="number" step="0.01" value={editForm.interest_rate} onChange={(e) => setEditForm({ ...editForm, interest_rate: e.target.value })} />
+              </div>
+              <div className="space-y-2">
+                <Label>Rate Type</Label>
+                <Select value={editForm.rate_type} onValueChange={(v) => setEditForm({ ...editForm, rate_type: v })}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="fixed">Fixed</SelectItem>
+                    <SelectItem value="variable">Variable</SelectItem>
+                    <SelectItem value="adjustable">Adjustable</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            {editForm.rate_type !== "fixed" && (
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="edit_index_rate_name">Index / Benchmark</Label>
+                  <Input id="edit_index_rate_name" value={editForm.index_rate_name} onChange={(e) => setEditForm({ ...editForm, index_rate_name: e.target.value })} placeholder="e.g. Prime, SOFR" />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit_spread_margin">Spread / Margin (%)</Label>
+                  <Input id="edit_spread_margin" type="number" step="0.01" value={editForm.spread_margin} onChange={(e) => setEditForm({ ...editForm, spread_margin: e.target.value })} />
+                </div>
+              </div>
+            )}
+            <div className="grid grid-cols-3 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="edit_start_date">Start Date *</Label>
+                <Input id="edit_start_date" type="date" value={editForm.start_date} onChange={(e) => setEditForm({ ...editForm, start_date: e.target.value })} />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="edit_maturity_date">Maturity Date</Label>
+                <Input id="edit_maturity_date" type="date" value={editForm.maturity_date} onChange={(e) => setEditForm({ ...editForm, maturity_date: e.target.value })} />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="edit_term_months">Term (months)</Label>
+                <Input id="edit_term_months" type="number" value={editForm.term_months} onChange={(e) => setEditForm({ ...editForm, term_months: e.target.value })} />
+              </div>
+            </div>
+            <div className="grid grid-cols-3 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="edit_payment_amount">Monthly Payment</Label>
+                <Input id="edit_payment_amount" type="number" step="0.01" value={editForm.payment_amount} onChange={(e) => setEditForm({ ...editForm, payment_amount: e.target.value })} />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="edit_credit_limit">Credit Limit</Label>
+                <Input id="edit_credit_limit" type="number" step="0.01" value={editForm.credit_limit} onChange={(e) => setEditForm({ ...editForm, credit_limit: e.target.value })} />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="edit_current_draw">Current Draw / Balance</Label>
+                <Input id="edit_current_draw" type="number" step="0.01" value={editForm.current_draw} onChange={(e) => setEditForm({ ...editForm, current_draw: e.target.value })} />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Day Count Convention</Label>
+                <Select value={editForm.day_count_convention} onValueChange={(v) => setEditForm({ ...editForm, day_count_convention: v })}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="30/360">30/360</SelectItem>
+                    <SelectItem value="actual/360">Actual/360</SelectItem>
+                    <SelectItem value="actual/365">Actual/365</SelectItem>
+                    <SelectItem value="actual/actual">Actual/Actual</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Status</Label>
+                <Select value={editForm.status} onValueChange={(v) => setEditForm({ ...editForm, status: v })}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="active">Active</SelectItem>
+                    <SelectItem value="paid_off">Paid Off</SelectItem>
+                    <SelectItem value="inactive">Inactive</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            {editForm.payment_structure === "balloon" && (
+              <div className="space-y-2">
+                <Label htmlFor="edit_balloon_amount">Balloon Amount</Label>
+                <Input id="edit_balloon_amount" type="number" step="0.01" value={editForm.balloon_amount} onChange={(e) => setEditForm({ ...editForm, balloon_amount: e.target.value })} />
+              </div>
+            )}
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="edit_collateral_description">Collateral Description</Label>
+                <Input id="edit_collateral_description" value={editForm.collateral_description} onChange={(e) => setEditForm({ ...editForm, collateral_description: e.target.value })} />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="edit_notes">Notes</Label>
+                <Input id="edit_notes" value={editForm.notes} onChange={(e) => setEditForm({ ...editForm, notes: e.target.value })} />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="outline" onClick={() => setEditOpen(false)}>Cancel</Button>
+              <Button onClick={handleEditSave} disabled={editSaving}>
+                {editSaving ? "Saving..." : "Save Changes"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Summary Bar */}
       <div className="flex items-center gap-6 p-4 rounded-lg border bg-muted/40 flex-wrap">
@@ -695,15 +1040,96 @@ export default function DebtDetailPage() {
         <TabsContent value="transactions">
           <Card>
             <CardHeader>
-              <CardTitle>Transaction Ledger</CardTitle>
-              <CardDescription>
-                {transactions.length} transaction{transactions.length !== 1 ? "s" : ""} — draws, payments, fees, and adjustments
-              </CardDescription>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle>Transaction Ledger</CardTitle>
+                  <CardDescription>
+                    {transactions.length} transaction{transactions.length !== 1 ? "s" : ""} — draws, payments, fees, and adjustments
+                  </CardDescription>
+                </div>
+                <Button onClick={() => setTxnOpen(true)}>
+                  <Plus className="mr-2 h-4 w-4" />
+                  Add Transaction
+                </Button>
+              </div>
             </CardHeader>
+
+            {/* Add Transaction Dialog */}
+            <Dialog open={txnOpen} onOpenChange={(open) => { setTxnOpen(open); if (!open) resetTxnForm(); }}>
+              <DialogContent className="max-w-lg">
+                <DialogHeader>
+                  <DialogTitle>Add Transaction</DialogTitle>
+                </DialogHeader>
+                <div className="grid gap-4 py-2">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label>Transaction Type</Label>
+                      <Select value={txnForm.transaction_type} onValueChange={(v) => setTxnForm({ ...txnForm, transaction_type: v })}>
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          {Object.entries(TRANSACTION_TYPE_LABELS).map(([k, v]) => (
+                            <SelectItem key={k} value={k}>{v}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="txn_date">Effective Date *</Label>
+                      <Input id="txn_date" type="date" value={txnForm.effective_date} onChange={(e) => setTxnForm({ ...txnForm, effective_date: e.target.value })} />
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="txn_amount">Total Amount *</Label>
+                    <Input id="txn_amount" type="number" step="0.01" value={txnForm.amount} onChange={(e) => setTxnForm({ ...txnForm, amount: e.target.value })} placeholder="0.00" />
+                  </div>
+                  {["principal_payment", "interest_payment", "fee_payment"].includes(txnForm.transaction_type) || txnForm.transaction_type === "payment_reversal" ? (
+                    <div className="grid grid-cols-3 gap-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="txn_to_principal">To Principal</Label>
+                        <Input id="txn_to_principal" type="number" step="0.01" value={txnForm.to_principal} onChange={(e) => setTxnForm({ ...txnForm, to_principal: e.target.value })} placeholder="0.00" />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="txn_to_interest">To Interest</Label>
+                        <Input id="txn_to_interest" type="number" step="0.01" value={txnForm.to_interest} onChange={(e) => setTxnForm({ ...txnForm, to_interest: e.target.value })} placeholder="0.00" />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="txn_to_fees">To Fees</Label>
+                        <Input id="txn_to_fees" type="number" step="0.01" value={txnForm.to_fees} onChange={(e) => setTxnForm({ ...txnForm, to_fees: e.target.value })} placeholder="0.00" />
+                      </div>
+                    </div>
+                  ) : null}
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="txn_running_balance">Running Balance</Label>
+                      <Input id="txn_running_balance" type="number" step="0.01" value={txnForm.running_balance} onChange={(e) => setTxnForm({ ...txnForm, running_balance: e.target.value })} placeholder="After this transaction" />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="txn_reference_number">Reference #</Label>
+                      <Input id="txn_reference_number" value={txnForm.reference_number} onChange={(e) => setTxnForm({ ...txnForm, reference_number: e.target.value })} placeholder="Check #, wire ref, etc." />
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="txn_description">Description</Label>
+                    <Input id="txn_description" value={txnForm.description} onChange={(e) => setTxnForm({ ...txnForm, description: e.target.value })} placeholder="e.g. Monthly interest payment" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="txn_notes">Notes</Label>
+                    <Input id="txn_notes" value={txnForm.notes} onChange={(e) => setTxnForm({ ...txnForm, notes: e.target.value })} />
+                  </div>
+                  <div className="flex justify-end gap-2 pt-2">
+                    <Button variant="outline" onClick={() => setTxnOpen(false)}>Cancel</Button>
+                    <Button onClick={handleAddTransaction} disabled={txnSaving}>
+                      {txnSaving ? "Adding..." : "Add Transaction"}
+                    </Button>
+                  </div>
+                </div>
+              </DialogContent>
+            </Dialog>
+
             <CardContent>
               {transactions.length === 0 ? (
                 <p className="text-sm text-muted-foreground py-8 text-center">
-                  No transactions recorded yet.
+                  No transactions recorded yet. Click &quot;Add Transaction&quot; to record a payment, draw, or fee.
                 </p>
               ) : (
                 <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
