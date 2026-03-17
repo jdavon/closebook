@@ -663,19 +663,24 @@ export default function DebtDetailPage() {
       const dayChanges = monthlyDayChanges[key] ?? [];
       const monthRate = getRateForMonth(cy, cm);
 
-      // Calculate interest using day-weighted average balance when mid-month transactions exist
+      // Calculate interest — pro-rate first month from instrument start day
       let interest: number;
       const totalDays = new Date(cy, cm, 0).getDate(); // days in this month
+      const isFirstMonth = i === 0;
+      const startDay = isFirstMonth ? startDate.getDate() : 1;
+      const accrualDays = totalDays - startDay + 1; // days of interest in this period
+      const fullFactor = interestFactor(cy, cm, convention);
+      const factor = isFirstMonth ? fullFactor * (accrualDays / totalDays) : fullFactor;
 
-      if (dayChanges.length > 0) {
-        // Sort changes by day, compute weighted balance
+      if (dayChanges.length > 0 || (isFirstMonth && startDay > 1)) {
+        // Day-weighted average balance for mid-month transactions or partial first month
         const sorted = [...dayChanges].sort((a, b) => a.day - b.day);
         let runBal = balance;
         let weightedSum = 0;
-        let prevDay = 1;
+        let prevDay = startDay;
 
         for (const dc of sorted) {
-          // Days at the previous balance (from prevDay to dc.day - 1)
+          if (dc.day < startDay) continue; // skip transactions before start day in first month
           const daysAtBal = Math.max(0, dc.day - prevDay);
           weightedSum += runBal * daysAtBal;
           runBal = Math.max(0, runBal + dc.amount);
@@ -684,11 +689,9 @@ export default function DebtDetailPage() {
         // Remaining days at the final balance
         weightedSum += runBal * (totalDays - prevDay + 1);
 
-        const avgBalance = weightedSum / totalDays;
-        const factor = interestFactor(cy, cm, convention);
+        const avgBalance = accrualDays > 0 ? weightedSum / accrualDays : 0;
         interest = Math.round(avgBalance * monthRate * factor * 100) / 100;
       } else {
-        const factor = interestFactor(cy, cm, convention);
         interest = Math.round(balance * monthRate * factor * 100) / 100;
       }
 
