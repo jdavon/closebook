@@ -121,6 +121,7 @@ const TRANSACTION_TYPE_LABELS: Record<string, string> = {
   annual_fee: "Annual Fee",
   payment_reversal: "Payment Reversal",
   note_renewal: "Note Renewal",
+  vehicle_payoff: "Vehicle Payoff",
   payoff: "Payoff",
   adjustment: "Adjustment",
 };
@@ -134,6 +135,7 @@ const TRANSACTION_TYPE_COLORS: Record<string, string> = {
   misc_fee: "text-red-500",
   payment_reversal: "text-red-600",
   note_renewal: "text-blue-600",
+  vehicle_payoff: "text-green-700",
   payoff: "text-green-700",
   adjustment: "text-muted-foreground",
 };
@@ -610,7 +612,7 @@ export default function DebtDetailPage() {
       if (!monthlyChanges[key]) monthlyChanges[key] = 0;
       if (txn.transaction_type === "advance") {
         monthlyChanges[key] += Math.abs(txn.amount);
-      } else if (txn.transaction_type === "principal_payment") {
+      } else if (txn.transaction_type === "principal_payment" || txn.transaction_type === "vehicle_payoff") {
         monthlyChanges[key] -= Math.abs(txn.to_principal ?? txn.amount);
       } else if (txn.transaction_type === "payoff") {
         monthlyChanges[key] -= Math.abs(txn.amount);
@@ -1334,7 +1336,7 @@ export default function DebtDetailPage() {
                     <Label htmlFor="txn_amount">Total Amount *</Label>
                     <Input id="txn_amount" type="number" step="0.01" value={txnForm.amount} onChange={(e) => setTxnForm({ ...txnForm, amount: e.target.value })} placeholder="0.00" />
                   </div>
-                  {["principal_payment", "interest_payment", "fee_payment"].includes(txnForm.transaction_type) || txnForm.transaction_type === "payment_reversal" ? (
+                  {["principal_payment", "interest_payment", "fee_payment", "vehicle_payoff", "payment_reversal"].includes(txnForm.transaction_type) ? (
                     <div className="grid grid-cols-3 gap-4">
                       <div className="space-y-2">
                         <Label htmlFor="txn_to_principal">To Principal</Label>
@@ -1406,7 +1408,7 @@ export default function DebtDetailPage() {
                     <Label>Total Amount *</Label>
                     <Input type="number" step="0.01" value={editTxnForm.amount} onChange={(e) => setEditTxnForm({ ...editTxnForm, amount: e.target.value })} placeholder="0.00" />
                   </div>
-                  {["principal_payment", "interest_payment", "fee_payment", "payment_reversal"].includes(editTxnForm.transaction_type) && (
+                  {["principal_payment", "interest_payment", "fee_payment", "vehicle_payoff", "payment_reversal"].includes(editTxnForm.transaction_type) && (
                     <div className="grid grid-cols-3 gap-4">
                       <div className="space-y-2">
                         <Label>To Principal</Label>

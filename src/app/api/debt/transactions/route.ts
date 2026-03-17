@@ -210,7 +210,7 @@ async function recalculateCurrentDraw(supabase: any, debtInstrumentId: string) {
   for (const txn of txns ?? []) {
     if (txn.transaction_type === "advance") {
       balance += Math.abs(txn.amount);
-    } else if (txn.transaction_type === "principal_payment") {
+    } else if (txn.transaction_type === "principal_payment" || txn.transaction_type === "vehicle_payoff") {
       balance -= Math.abs(txn.to_principal ?? txn.amount);
     } else if (txn.transaction_type === "payoff") {
       balance = 0;
