@@ -1,3 +1,4 @@
+import { createHash } from "crypto";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -65,12 +66,21 @@ async function refreshTokenIfNeeded(
 }
 
 export async function POST(request: Request) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // Allow cron/service calls authenticated via CRON_SECRET header
+  const cronSecret = request.headers.get("x-cron-secret");
+  const isCronCall =
+    cronSecret && process.env.CRON_SECRET && cronSecret === process.env.CRON_SECRET;
 
-  if (!user) {
+  let user: { id: string } | null = null;
+  if (!isCronCall) {
+    const supabase = await createClient();
+    const {
+      data: { user: authUser },
+    } = await supabase.auth.getUser();
+    user = authUser;
+  }
+
+  if (!user && !isCronCall) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -359,13 +369,34 @@ export async function POST(request: Request) {
         const matchedNames: string[] = [];
         const matchedAccountIds: string[] = [];
 
+        let dataChanged = false;
+
         if (tbResponse.ok) {
           const tbData = await tbResponse.json();
 
-          // Store raw trial balance
+          // Compute content hash to detect actual data changes
+          const contentHash = createHash("sha256")
+            .update(JSON.stringify(tbData))
+            .digest("hex");
+
+          // Check if data actually changed since last sync
+          const { data: existingTb } = await adminClient
+            .from("trial_balances")
+            .select("content_hash")
+            .eq("entity_id", entityId)
+            .eq("period_year", targetYear)
+            .eq("period_month", targetMonth)
+            .eq("status", "draft")
+            .maybeSingle();
+
+          dataChanged = !existingTb || existingTb.content_hash !== contentHash;
+
+          // Store raw trial balance (only update data_changed_at when data actually changed)
           send({
             step: "trial_balance",
-            detail: "Saving raw trial balance report...",
+            detail: dataChanged
+              ? "Data changed — saving updated trial balance report..."
+              : "No changes detected — updating sync timestamp...",
             progress: 55,
           });
 
@@ -376,6 +407,10 @@ export async function POST(request: Request) {
               period_month: targetMonth,
               report_data: tbData,
               synced_at: new Date().toISOString(),
+              content_hash: contentHash,
+              ...(dataChanged
+                ? { data_changed_at: new Date().toISOString() }
+                : {}),
             },
             {
               onConflict: "entity_id,period_year,period_month,status",
@@ -1079,6 +1114,7 @@ export async function POST(request: Request) {
             unmatchedRows.length > 0 ? unmatchedRows.map((r) => r.name) : undefined,
           periodYear: targetYear,
           periodMonth: targetMonth,
+          dataChanged,
         });
       } catch (err) {
         const errorMessage =

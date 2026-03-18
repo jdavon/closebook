@@ -1165,6 +1165,8 @@ export type Database = {
           report_data: Json
           status: string
           created_at: string
+          content_hash: string | null
+          data_changed_at: string | null
         }
         Insert: {
           id?: string
@@ -1175,6 +1177,8 @@ export type Database = {
           report_data: Json
           status?: string
           created_at?: string
+          content_hash?: string | null
+          data_changed_at?: string | null
         }
         Update: {
           id?: string
@@ -1185,6 +1189,8 @@ export type Database = {
           report_data?: Json
           status?: string
           created_at?: string
+          content_hash?: string | null
+          data_changed_at?: string | null
         }
         Relationships: []
       }

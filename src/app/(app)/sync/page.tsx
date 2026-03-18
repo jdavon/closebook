@@ -150,6 +150,10 @@ export default function SyncManagementPage() {
   const [syncedMonthsByEntity, setSyncedMonthsByEntity] = useState<
     Record<string, Set<number>>
   >({});
+  // Per-entity per-month change tracking: entityId -> month -> { synced_at, data_changed_at }
+  const [periodMetaByEntity, setPeriodMetaByEntity] = useState<
+    Record<string, Record<number, { synced_at: string | null; data_changed_at: string | null }>>
+  >({});
   const [loadingSyncedMonths, setLoadingSyncedMonths] = useState(false);
 
   // Selected periods for targeted sync
@@ -333,9 +337,11 @@ export default function SyncManagementPage() {
     setLoadingSyncedMonths(true);
     const year = parseInt(syncYear);
     const result: Record<string, Set<number>> = {};
+    const metaResult: Record<string, Record<number, { synced_at: string | null; data_changed_at: string | null }>> = {};
 
     for (const entity of entities) {
       const months = new Set<number>();
+      metaResult[entity.id] = {};
 
       // Fire all 12 month checks in parallel for speed
       const checks = Array.from({ length: 12 }, (_, i) => {
@@ -351,11 +357,33 @@ export default function SyncManagementPage() {
           });
       });
 
-      await Promise.all(checks);
+      // Also fetch trial_balances metadata for change tracking
+      const metaQuery = supabase
+        .from("trial_balances")
+        .select("period_month, synced_at, data_changed_at")
+        .eq("entity_id", entity.id)
+        .eq("period_year", year)
+        .eq("status", "draft");
+
+      const [, metaResponse] = await Promise.all([
+        Promise.all(checks),
+        metaQuery,
+      ]);
+
+      if (metaResponse.data) {
+        for (const row of metaResponse.data) {
+          metaResult[entity.id][row.period_month] = {
+            synced_at: row.synced_at,
+            data_changed_at: row.data_changed_at,
+          };
+        }
+      }
+
       result[entity.id] = months;
     }
 
     setSyncedMonthsByEntity(result);
+    setPeriodMetaByEntity(metaResult);
     setLoadingSyncedMonths(false);
   }, [supabase, entities, syncYear]);
 
@@ -920,6 +948,7 @@ export default function SyncManagementPage() {
                                   {Array.from({ length: 12 }, (_, i) => i + 1).map((month) => {
                                     const isSynced = synced.has(month);
                                     const isSelected = selectedPeriods.has(`${entity.id}:${month}`);
+                                    const periodMeta = periodMetaByEntity[entity.id]?.[month];
 
                                     return (
                                       <Tooltip key={month}>
@@ -957,10 +986,22 @@ export default function SyncManagementPage() {
                                             )}
                                           </button>
                                         </TooltipTrigger>
-                                        <TooltipContent side="bottom" className="text-xs">
-                                          {isSynced
-                                            ? `${MONTH_NAMES[month - 1]} ${syncYear} — Synced`
-                                            : isSelected
+                                        <TooltipContent side="bottom" className="text-xs max-w-[220px]">
+                                          {isSynced ? (
+                                            <div>
+                                              <div className="font-medium">{MONTH_NAMES[month - 1]} {syncYear} — Synced</div>
+                                              {periodMeta?.synced_at && (
+                                                <div className="text-muted-foreground mt-0.5">
+                                                  Last synced: {new Date(periodMeta.synced_at).toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                                                </div>
+                                              )}
+                                              {periodMeta?.data_changed_at && (
+                                                <div className="text-muted-foreground">
+                                                  Last modified: {new Date(periodMeta.data_changed_at).toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                                                </div>
+                                              )}
+                                            </div>
+                                          ) : isSelected
                                             ? `${MONTH_NAMES[month - 1]} ${syncYear} — Selected for sync`
                                             : `${MONTH_NAMES[month - 1]} ${syncYear} — Click to select`}
                                         </TooltipContent>
