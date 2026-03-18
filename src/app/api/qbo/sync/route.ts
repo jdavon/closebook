@@ -1,6 +1,8 @@
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 
+export const maxDuration = 120; // Single entity sync with accounts, classes, TB, and P&L by class
+
 async function refreshTokenIfNeeded(
   connection: {
     id: string;

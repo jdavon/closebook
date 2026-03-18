@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 
+export const maxDuration = 300; // 7 entities synced sequentially can take several minutes
+
 /**
  * POST /api/qbo/sync-all
  *
