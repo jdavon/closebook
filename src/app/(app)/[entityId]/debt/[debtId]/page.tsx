@@ -944,6 +944,39 @@ export default function DebtDetailPage() {
     return entries;
   }, [instrument, transactions, rateHistory]);
 
+  // Current vs long-term portion — derived from next 12 months of projected principal paydown
+  const { currentPortion, longTermPortion } = useMemo(() => {
+    if (dynamicAmortization.length === 0 || !instrument) {
+      return { currentPortion: 0, longTermPortion: 0 };
+    }
+
+    const now = new Date();
+    const nowY = now.getFullYear();
+    const nowM = now.getMonth() + 1;
+
+    // Find the current month's entry to get the starting balance
+    const currentIdx = dynamicAmortization.findIndex(
+      (r) => r.period_year === nowY && r.period_month === nowM
+    );
+    if (currentIdx < 0) {
+      // If current month not in schedule, loan may already be paid off or not started
+      const lastEntry = dynamicAmortization[dynamicAmortization.length - 1];
+      return { currentPortion: 0, longTermPortion: lastEntry?.ending_balance ?? 0 };
+    }
+
+    // Sum principal paid in the next 12 months (current month + 11 more)
+    let principalNext12 = 0;
+    for (let i = currentIdx; i < Math.min(currentIdx + 12, dynamicAmortization.length); i++) {
+      principalNext12 += dynamicAmortization[i].to_principal;
+    }
+
+    const currentBalance = dynamicAmortization[currentIdx].beginning_balance;
+    const current = Math.round(Math.min(principalNext12, currentBalance) * 100) / 100;
+    const longTerm = Math.round(Math.max(0, currentBalance - current) * 100) / 100;
+
+    return { currentPortion: current, longTermPortion: longTerm };
+  }, [dynamicAmortization, instrument]);
+
   // Daily interest based on current outstanding balance (from transactions, not amortization)
   const dailyInterest = useMemo(() => {
     if (!instrument) return 0;
@@ -1415,17 +1448,18 @@ export default function DebtDetailPage() {
                   </div>
                 )}
 
-                {(instrument.current_portion != null && instrument.current_portion > 0) && (
+                {(currentPortion > 0 || longTermPortion > 0) && (
                   <div className="mt-4 pt-4 border-t">
                     <p className="text-sm font-medium mb-2">Balance Sheet Classification</p>
+                    <p className="text-xs text-muted-foreground mb-2">Based on projected principal paydown over the next 12 months</p>
                     <div className="grid grid-cols-2 gap-4 text-sm">
                       <div>
                         <span className="text-muted-foreground">Current Portion</span>
-                        <p className="font-medium tabular-nums">{formatCurrency(instrument.current_portion ?? 0)}</p>
+                        <p className="font-medium tabular-nums">{formatCurrency(currentPortion)}</p>
                       </div>
                       <div>
                         <span className="text-muted-foreground">Long-Term Portion</span>
-                        <p className="font-medium tabular-nums">{formatCurrency(instrument.long_term_portion ?? 0)}</p>
+                        <p className="font-medium tabular-nums">{formatCurrency(longTermPortion)}</p>
                       </div>
                     </div>
                   </div>
