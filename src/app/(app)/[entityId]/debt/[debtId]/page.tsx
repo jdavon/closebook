@@ -801,17 +801,22 @@ export default function DebtDetailPage() {
       return effective;
     }
 
-    // Build monthly totals from actual transactions
+    // Build monthly totals from actual transactions, preserving actual allocations
     const sortedTxns = [...transactions].sort(
       (a, b) => new Date(a.effective_date).getTime() - new Date(b.effective_date).getTime()
     );
 
-    // Total payments per month (principal_payment, interest_payment, vehicle_payoff, payoff)
-    const monthlyTotalPayments: Record<string, number> = {};
+    interface MonthlyActuals {
+      totalPayment: number;
+      toPrincipal: number;
+      toInterest: number;
+    }
+    const monthlyActuals: Record<string, MonthlyActuals> = {};
     // Advances (draws) per month
     const monthlyAdvances: Record<string, number> = {};
-    // Track which months had any payment-type transactions
-    const monthsWithPayments = new Set<string>();
+
+    const principalTypes = ["principal_payment", "vehicle_payoff", "payoff"];
+    const interestTypes = ["interest_payment"];
 
     for (const txn of sortedTxns) {
       const d = new Date(txn.effective_date);
@@ -819,14 +824,25 @@ export default function DebtDetailPage() {
 
       if (txn.transaction_type === "advance") {
         monthlyAdvances[key] = (monthlyAdvances[key] ?? 0) + Math.abs(txn.amount);
-      } else if (
-        ["principal_payment", "interest_payment", "vehicle_payoff", "payoff"].includes(
-          txn.transaction_type
-        )
-      ) {
-        monthsWithPayments.add(key);
-        monthlyTotalPayments[key] =
-          (monthlyTotalPayments[key] ?? 0) + Math.abs(txn.amount);
+        continue;
+      }
+
+      // Skip non-payment transaction types (fees, adjustments, etc.)
+      if (![...principalTypes, ...interestTypes].includes(txn.transaction_type)) continue;
+
+      if (!monthlyActuals[key]) monthlyActuals[key] = { totalPayment: 0, toPrincipal: 0, toInterest: 0 };
+      const ma = monthlyActuals[key];
+      const amt = Math.abs(txn.amount);
+      ma.totalPayment += amt;
+
+      // Use explicit breakdown if available, otherwise infer from transaction type
+      if ((txn.to_principal ?? 0) !== 0 || (txn.to_interest ?? 0) !== 0) {
+        ma.toPrincipal += Math.abs(txn.to_principal ?? 0);
+        ma.toInterest += Math.abs(txn.to_interest ?? 0);
+      } else if (principalTypes.includes(txn.transaction_type)) {
+        ma.toPrincipal += amt;
+      } else if (interestTypes.includes(txn.transaction_type)) {
+        ma.toInterest += amt;
       }
     }
 
@@ -872,25 +888,25 @@ export default function DebtDetailPage() {
       let toPrincipal = 0;
 
       if (isPast) {
-        // Past month — use actual transaction data
-        if (monthsWithPayments.has(key)) {
-          payment = monthlyTotalPayments[key] ?? 0;
+        // Past month — use actual transaction breakdowns
+        const ma = monthlyActuals[key];
+        if (ma) {
+          payment = ma.totalPayment;
+          toInterest = ma.toInterest;
+          toPrincipal = Math.min(ma.toPrincipal, balance); // cap at current balance
         }
         // else payment = 0 (no payment made)
       } else {
-        // Current or future month — assume scheduled payment
+        // Current or future month — assume scheduled payment, interest-first allocation
         if (scheduledPayment > 0) {
           const totalOwed = balance + unpaidInterest + monthInterest;
           payment = Math.min(scheduledPayment, Math.round(totalOwed * 100) / 100);
-        }
-      }
 
-      // Allocate payment: unpaid interest first, then current month interest, then principal
-      if (payment > 0) {
-        const totalInterestOwed = unpaidInterest + monthInterest;
-        toInterest = Math.round(Math.min(payment, totalInterestOwed) * 100) / 100;
-        const remainder = Math.round((payment - toInterest) * 100) / 100;
-        toPrincipal = Math.round(Math.min(remainder, balance) * 100) / 100;
+          const totalInterestOwed = unpaidInterest + monthInterest;
+          toInterest = Math.round(Math.min(payment, totalInterestOwed) * 100) / 100;
+          const remainder = Math.round((payment - toInterest) * 100) / 100;
+          toPrincipal = Math.round(Math.min(remainder, balance) * 100) / 100;
+        }
       }
 
       const newUnpaidInterest = Math.round(
