@@ -334,6 +334,33 @@ export async function POST(request: Request) {
             (sum, cid) => sum + (currentClassMap[`${a.account_id}__${cid}`] ?? 0),
             0
           );
+
+          // Warn if include filter found no data
+          if (netChange === 0) {
+            const hasAnyClassData = Object.keys(currentClassMap).some(
+              (key) => key.startsWith(`${a.account_id}__`)
+            );
+            const acctLabel = accountNameMap[a.account_id] ?? a.account_id;
+            const classLabels = a.qbo_class_ids
+              .map((cid) => classNameMap[cid] ?? cid)
+              .join(", ");
+            if (!hasAnyClassData) {
+              warnings.push(
+                `${profile.name}: No class-level GL data found for "${acctLabel}" — include filter for class(es) [${classLabels}] returned $0. Sync P&L by Class from QBO.`
+              );
+            } else {
+              // Account has class data but not for the selected classes
+              const existingClasses = Object.keys(currentClassMap)
+                .filter((key) => key.startsWith(`${a.account_id}__`))
+                .map((key) => {
+                  const cid = key.split("__")[1];
+                  return classNameMap[cid] ?? cid;
+                });
+              warnings.push(
+                `${profile.name}: "${acctLabel}" has class data for [${existingClasses.join(", ")}] but NOT for [${classLabels}]. Check class assignment in QBO.`
+              );
+            }
+          }
         } else if (a.class_filter_mode === "exclude" && a.qbo_class_ids.length > 0) {
           // Exclude mode: standalone total minus excluded class balances.
           // gl_balances is cumulative YTD → derive standalone via prior subtraction.

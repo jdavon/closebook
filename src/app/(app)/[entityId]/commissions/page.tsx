@@ -397,10 +397,9 @@ export default function CommissionsPage() {
       const data = await res.json();
       if (data.success) {
         if (data.warnings?.length > 0) {
-          toast.warning(
-            data.warnings[0],
-            { duration: 15000 }
-          );
+          for (const w of data.warnings) {
+            toast.warning(w, { duration: 15000 });
+          }
         } else {
           const diag = data.diagnostics;
           toast.success(
