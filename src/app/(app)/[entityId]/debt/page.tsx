@@ -38,6 +38,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Upload,
   Landmark,
@@ -48,6 +49,7 @@ import {
   CreditCard,
   Plus,
 } from "lucide-react";
+import { DebtReconciliationTab } from "./reconciliation-tab";
 import {
   formatCurrency,
   formatPercentage,
@@ -452,6 +454,16 @@ export default function DebtPage() {
             Track loans, lines of credit, and amortization schedules
           </p>
         </div>
+      </div>
+
+      <Tabs defaultValue="schedule" className="space-y-6">
+        <TabsList>
+          <TabsTrigger value="schedule">Schedule</TabsTrigger>
+          <TabsTrigger value="reconciliation">Reconciliation</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="schedule" className="space-y-6">
+      <div className="flex items-center justify-end">
         <div className="flex items-center gap-2">
           <input
             ref={fileInputRef}
@@ -956,6 +968,12 @@ export default function DebtPage() {
           )}
         </CardContent>
       </Card>
+        </TabsContent>
+
+        <TabsContent value="reconciliation">
+          <DebtReconciliationTab entityId={entityId} />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

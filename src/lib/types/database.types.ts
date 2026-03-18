@@ -4208,6 +4208,81 @@ export type Database = {
         }
         Relationships: []
       }
+      debt_reconciliation_accounts: {
+        Row: {
+          id: string
+          entity_id: string
+          gl_account_group: string
+          account_id: string
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          entity_id: string
+          gl_account_group: string
+          account_id: string
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          entity_id?: string
+          gl_account_group?: string
+          account_id?: string
+          created_at?: string
+        }
+        Relationships: []
+      }
+      debt_reconciliations: {
+        Row: {
+          id: string
+          entity_id: string
+          period_year: number
+          period_month: number
+          gl_account_group: string
+          gl_balance: number | null
+          subledger_balance: number | null
+          variance: number | null
+          is_reconciled: boolean
+          reconciled_by: string | null
+          reconciled_at: string | null
+          notes: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          entity_id: string
+          period_year: number
+          period_month: number
+          gl_account_group: string
+          gl_balance?: number | null
+          subledger_balance?: number | null
+          variance?: number | null
+          is_reconciled?: boolean
+          reconciled_by?: string | null
+          reconciled_at?: string | null
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          entity_id?: string
+          period_year?: number
+          period_month?: number
+          gl_account_group?: string
+          gl_balance?: number | null
+          subledger_balance?: number | null
+          variance?: number | null
+          is_reconciled?: boolean
+          reconciled_by?: string | null
+          reconciled_at?: string | null
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       asset_reconciliations: {
         Row: {
           id: string

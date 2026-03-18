@@ -1,0 +1,774 @@
+"use client";
+
+import { useState, useEffect, useCallback } from "react";
+import { createClient } from "@/lib/supabase/client";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  CheckCircle2,
+  AlertTriangle,
+  ChevronDown,
+  ChevronRight,
+  Plus,
+  X,
+} from "lucide-react";
+import { formatCurrency } from "@/lib/utils/dates";
+import { DEBT_GL_ACCOUNT_GROUPS } from "@/lib/utils/debt-gl-groups";
+import { toast } from "sonner";
+
+interface DebtReconciliationTabProps {
+  entityId: string;
+}
+
+interface EntityAccount {
+  id: string;
+  account_number: string | null;
+  name: string;
+  classification: string;
+  account_type: string;
+}
+
+interface InstrumentSummary {
+  id: string;
+  instrument_name: string;
+  lender_name: string | null;
+  debt_type: string;
+  current_draw: number | null;
+  original_amount: number;
+  current_portion: number | null;
+  long_term_portion: number | null;
+  ending_balance: number | null;
+  status: string;
+}
+
+interface ReconciliationRecord {
+  id: string;
+  gl_account_group: string;
+  gl_balance: number | null;
+  subledger_balance: number | null;
+  variance: number | null;
+  is_reconciled: boolean;
+  reconciled_at: string | null;
+  notes: string | null;
+}
+
+const MONTHS = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
+
+const LOC_TYPES = new Set(["line_of_credit", "revolving_credit"]);
+
+export function DebtReconciliationTab({ entityId }: DebtReconciliationTabProps) {
+  const supabase = createClient();
+  const now = new Date();
+  const [periodYear, setPeriodYear] = useState(now.getFullYear());
+  const [periodMonth, setPeriodMonth] = useState(now.getMonth() + 1);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState<string | null>(null);
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [notes, setNotes] = useState<Record<string, string>>({});
+
+  // Data
+  const [entityAccounts, setEntityAccounts] = useState<EntityAccount[]>([]);
+  const [mappedAccounts, setMappedAccounts] = useState<
+    Record<string, { id: string; account_id: string }[]>
+  >({});
+  const [glBalances, setGlBalances] = useState<Record<string, number>>({});
+  const [subledgerBalances, setSubledgerBalances] = useState<
+    Record<string, { total: number; instruments: InstrumentSummary[] }>
+  >({});
+  const [reconciliations, setReconciliations] = useState<
+    Record<string, ReconciliationRecord>
+  >({});
+  const [unlinkedInstruments, setUnlinkedInstruments] = useState<InstrumentSummary[]>([]);
+
+  // Account picker state
+  const [addingToGroup, setAddingToGroup] = useState<string | null>(null);
+  const [selectedAccountId, setSelectedAccountId] = useState<string>("");
+
+  const loadData = useCallback(async () => {
+    setLoading(true);
+
+    // 1. Fetch all entity accounts (for the picker)
+    const { data: acctData } = await supabase
+      .from("accounts")
+      .select("id, account_number, name, classification, account_type")
+      .eq("entity_id", entityId)
+      .eq("is_active", true)
+      .order("account_number");
+
+    setEntityAccounts((acctData ?? []) as EntityAccount[]);
+
+    // 2. Fetch configured account mappings for this entity
+    const { data: mappingData } = await supabase
+      .from("debt_reconciliation_accounts")
+      .select("id, gl_account_group, account_id")
+      .eq("entity_id", entityId);
+
+    const mapped: Record<string, { id: string; account_id: string }[]> = {};
+    for (const group of DEBT_GL_ACCOUNT_GROUPS) {
+      mapped[group.key] = [];
+    }
+    for (const m of (mappingData ?? []) as { id: string; gl_account_group: string; account_id: string }[]) {
+      if (!mapped[m.gl_account_group]) mapped[m.gl_account_group] = [];
+      mapped[m.gl_account_group].push({ id: m.id, account_id: m.account_id });
+    }
+    setMappedAccounts(mapped);
+
+    // 3. Fetch GL balances for all mapped accounts
+    const allAccountIds = Object.values(mapped).flat().map((m) => m.account_id);
+    const balances: Record<string, number> = {};
+
+    if (allAccountIds.length > 0) {
+      const { data: glData } = await supabase
+        .from("gl_balances")
+        .select("account_id, ending_balance")
+        .eq("entity_id", entityId)
+        .eq("period_year", periodYear)
+        .eq("period_month", periodMonth)
+        .in("account_id", allAccountIds);
+
+      const glMap: Record<string, number> = {};
+      for (const row of (glData ?? []) as { account_id: string; ending_balance: number }[]) {
+        glMap[row.account_id] = Number(row.ending_balance ?? 0);
+      }
+
+      for (const group of DEBT_GL_ACCOUNT_GROUPS) {
+        const groupAcctIds = mapped[group.key]?.map((m) => m.account_id) ?? [];
+        // Liability accounts typically have credit (negative) balances in the GL.
+        // We take the absolute value so the comparison with the subledger is intuitive.
+        balances[group.key] = groupAcctIds.reduce(
+          (sum, id) => sum + Math.abs(glMap[id] ?? 0),
+          0
+        );
+      }
+    }
+    setGlBalances(balances);
+
+    // 4. Fetch debt instruments and compute subledger balances per group
+    // current_portion and long_term_portion are v2 columns not in base types — use select("*")
+    const { data: instrData } = await supabase
+      .from("debt_instruments")
+      .select("*")
+      .eq("entity_id", entityId);
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const instruments = (instrData ?? []) as any[];
+
+    // Fetch amortization ending balances for the period
+    const instrIds = instruments.map((i) => i.id);
+    let amortMap: Record<string, number> = {};
+    if (instrIds.length > 0) {
+      const { data: amortData } = await supabase
+        .from("debt_amortization")
+        .select("debt_instrument_id, ending_balance")
+        .in("debt_instrument_id", instrIds)
+        .eq("period_year", periodYear)
+        .eq("period_month", periodMonth);
+
+      for (const row of (amortData ?? []) as { debt_instrument_id: string; ending_balance: number }[]) {
+        amortMap[row.debt_instrument_id] = Number(row.ending_balance ?? 0);
+      }
+    }
+
+    // Build subledger totals per group
+    const grouped: Record<string, { total: number; instruments: InstrumentSummary[] }> = {};
+    for (const group of DEBT_GL_ACCOUNT_GROUPS) {
+      grouped[group.key] = { total: 0, instruments: [] };
+    }
+
+    const unlinked: InstrumentSummary[] = [];
+
+    for (const instr of instruments) {
+      if (instr.status === "inactive") continue;
+
+      const endingBal = amortMap[instr.id] ?? instr.current_draw ?? instr.original_amount ?? 0;
+      const instrWithBal = { ...instr, ending_balance: endingBal };
+
+      if (LOC_TYPES.has(instr.debt_type)) {
+        // LOCs go to loc_payable
+        const balance = instr.current_draw ?? 0;
+        grouped["loc_payable"].total += balance;
+        grouped["loc_payable"].instruments.push({ ...instrWithBal, ending_balance: balance });
+      } else {
+        // Term debt splits into current and long-term
+        const currentPortion = instr.current_portion ?? 0;
+        const longTermPortion = instr.long_term_portion ?? 0;
+
+        if (currentPortion > 0) {
+          grouped["notes_payable_current"].total += currentPortion;
+          grouped["notes_payable_current"].instruments.push({
+            ...instrWithBal,
+            ending_balance: currentPortion,
+          });
+        }
+        if (longTermPortion > 0) {
+          grouped["notes_payable_long_term"].total += longTermPortion;
+          grouped["notes_payable_long_term"].instruments.push({
+            ...instrWithBal,
+            ending_balance: longTermPortion,
+          });
+        }
+
+        // If no current/LT split computed, put full balance in long-term
+        if (currentPortion === 0 && longTermPortion === 0 && endingBal > 0) {
+          grouped["notes_payable_long_term"].total += endingBal;
+          grouped["notes_payable_long_term"].instruments.push(instrWithBal);
+        }
+      }
+
+      // Interest payable: use period interest from amortization
+      // (handled separately below)
+
+      // Track unlinked instruments (no liability_account_id set)
+      if (!instr.liability_account_id && instr.status === "active") {
+        unlinked.push(instrWithBal);
+      }
+    }
+
+    // Fetch period interest for interest_payable group
+    if (instrIds.length > 0) {
+      const { data: amortInterest } = await supabase
+        .from("debt_amortization")
+        .select("debt_instrument_id, interest")
+        .in("debt_instrument_id", instrIds)
+        .eq("period_year", periodYear)
+        .eq("period_month", periodMonth);
+
+      let totalInterest = 0;
+      const interestInstruments: InstrumentSummary[] = [];
+      for (const row of (amortInterest ?? []) as { debt_instrument_id: string; interest: number }[]) {
+        const interest = Number(row.interest ?? 0);
+        if (interest > 0) {
+          totalInterest += interest;
+          const instr = instruments.find((i) => i.id === row.debt_instrument_id);
+          if (instr) {
+            interestInstruments.push({ ...instr, ending_balance: interest });
+          }
+        }
+      }
+      grouped["interest_payable"] = { total: totalInterest, instruments: interestInstruments };
+    }
+
+    setSubledgerBalances(grouped);
+    setUnlinkedInstruments(unlinked);
+
+    // 5. Fetch existing reconciliation records
+    const { data: reconData } = await supabase
+      .from("debt_reconciliations")
+      .select("*")
+      .eq("entity_id", entityId)
+      .eq("period_year", periodYear)
+      .eq("period_month", periodMonth);
+
+    const reconMap: Record<string, ReconciliationRecord> = {};
+    const notesMap: Record<string, string> = {};
+    for (const r of (reconData ?? []) as ReconciliationRecord[]) {
+      reconMap[r.gl_account_group] = r;
+      notesMap[r.gl_account_group] = r.notes ?? "";
+    }
+    setReconciliations(reconMap);
+    setNotes(notesMap);
+
+    setLoading(false);
+  }, [supabase, entityId, periodYear, periodMonth]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  const handleAddAccount = async (groupKey: string) => {
+    if (!selectedAccountId) return;
+    setSaving(groupKey);
+
+    const { error } = await supabase.from("debt_reconciliation_accounts").insert({
+      entity_id: entityId,
+      gl_account_group: groupKey,
+      account_id: selectedAccountId,
+    });
+
+    if (error) {
+      toast.error(error.message.includes("duplicate")
+        ? "Account already mapped to this group"
+        : error.message
+      );
+    } else {
+      toast.success("Account linked");
+      setAddingToGroup(null);
+      setSelectedAccountId("");
+      loadData();
+    }
+    setSaving(null);
+  };
+
+  const handleRemoveAccount = async (mappingId: string, groupKey: string) => {
+    setSaving(groupKey);
+    await supabase.from("debt_reconciliation_accounts").delete().eq("id", mappingId);
+    loadData();
+    setSaving(null);
+  };
+
+  const handleReconcile = async (groupKey: string) => {
+    setSaving(groupKey);
+    const glBal = glBalances[groupKey] ?? 0;
+    const subBal = subledgerBalances[groupKey]?.total ?? 0;
+    const variance = glBal - subBal;
+
+    const { data: userData } = await supabase.auth.getUser();
+
+    await supabase.from("debt_reconciliations").upsert(
+      {
+        entity_id: entityId,
+        period_year: periodYear,
+        period_month: periodMonth,
+        gl_account_group: groupKey,
+        gl_balance: glBal,
+        subledger_balance: subBal,
+        variance,
+        is_reconciled: true,
+        reconciled_by: userData?.user?.id ?? null,
+        reconciled_at: new Date().toISOString(),
+        notes: notes[groupKey] || null,
+      },
+      { onConflict: "entity_id,period_year,period_month,gl_account_group" }
+    );
+
+    setSaving(null);
+    loadData();
+  };
+
+  const handleUnreconcile = async (groupKey: string) => {
+    setSaving(groupKey);
+    const recon = reconciliations[groupKey];
+    if (recon) {
+      await supabase
+        .from("debt_reconciliations")
+        .update({ is_reconciled: false, reconciled_at: null, reconciled_by: null })
+        .eq("id", recon.id);
+    }
+    setSaving(null);
+    loadData();
+  };
+
+  const toggleGroup = (key: string) => {
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  // Build a lookup for entity accounts by ID
+  const accountsById = Object.fromEntries(entityAccounts.map((a) => [a.id, a]));
+
+  // Accounts already mapped (to exclude from picker)
+  const allMappedAccountIds = new Set(
+    Object.values(mappedAccounts).flat().map((m) => m.account_id)
+  );
+
+  const years = Array.from({ length: 5 }, (_, i) => now.getFullYear() - i);
+
+  return (
+    <div className="space-y-6">
+      {/* Period Selector */}
+      <div className="flex items-center gap-4">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-medium">Period:</span>
+          <Select
+            value={String(periodMonth)}
+            onValueChange={(v) => setPeriodMonth(Number(v))}
+          >
+            <SelectTrigger className="w-[150px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {MONTHS.map((m, i) => (
+                <SelectItem key={i + 1} value={String(i + 1)}>
+                  {m}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select
+            value={String(periodYear)}
+            onValueChange={(v) => setPeriodYear(Number(v))}
+          >
+            <SelectTrigger className="w-[100px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {years.map((y) => (
+                <SelectItem key={y} value={String(y)}>
+                  {y}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+
+      {loading ? (
+        <p className="text-sm text-muted-foreground">Loading reconciliation data...</p>
+      ) : (
+        <div className="space-y-6">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {DEBT_GL_ACCOUNT_GROUPS.map((group) => {
+              const glBal = glBalances[group.key] ?? 0;
+              const subBal = subledgerBalances[group.key]?.total ?? 0;
+              const variance = glBal - subBal;
+              const recon = reconciliations[group.key];
+              const isReconciled = recon?.is_reconciled ?? false;
+              const instrumentList = subledgerBalances[group.key]?.instruments ?? [];
+              const isExpanded = expandedGroups.has(group.key);
+              const groupMappings = mappedAccounts[group.key] ?? [];
+              const isAdding = addingToGroup === group.key;
+
+              return (
+                <Card key={group.key}>
+                  <CardHeader className="pb-3">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <CardTitle className="text-lg">{group.displayName}</CardTitle>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          {group.description}
+                        </p>
+                      </div>
+                      {isReconciled ? (
+                        <Badge className="bg-green-100 text-green-800 hover:bg-green-100">
+                          <CheckCircle2 className="mr-1 h-3.5 w-3.5" />
+                          Reconciled
+                        </Badge>
+                      ) : Math.abs(variance) > 0.01 && groupMappings.length > 0 ? (
+                        <Badge variant="destructive">
+                          <AlertTriangle className="mr-1 h-3.5 w-3.5" />
+                          Variance
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline">
+                          {groupMappings.length === 0 ? "No Accounts" : "Pending"}
+                        </Badge>
+                      )}
+                    </div>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    {/* Mapped GL Accounts */}
+                    <div className="space-y-2">
+                      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                        GL Accounts
+                      </p>
+                      {groupMappings.length === 0 ? (
+                        <p className="text-sm text-muted-foreground italic">
+                          No GL accounts linked yet
+                        </p>
+                      ) : (
+                        <div className="flex flex-wrap gap-2">
+                          {groupMappings.map((mapping) => {
+                            const acct = accountsById[mapping.account_id];
+                            return (
+                              <Badge
+                                key={mapping.id}
+                                variant="secondary"
+                                className="text-xs font-mono gap-1"
+                              >
+                                {acct
+                                  ? `${acct.account_number ?? ""} ${acct.name}`.trim()
+                                  : mapping.account_id.slice(0, 8)}
+                                <button
+                                  onClick={() => handleRemoveAccount(mapping.id, group.key)}
+                                  className="ml-1 hover:text-destructive"
+                                >
+                                  <X className="h-3 w-3" />
+                                </button>
+                              </Badge>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {/* Add account picker */}
+                      {isAdding ? (
+                        <div className="flex items-center gap-2">
+                          <Select
+                            value={selectedAccountId}
+                            onValueChange={setSelectedAccountId}
+                          >
+                            <SelectTrigger className="w-full text-sm">
+                              <SelectValue placeholder="Select account..." />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {entityAccounts
+                                .filter((a) => !allMappedAccountIds.has(a.id))
+                                .map((a) => (
+                                  <SelectItem key={a.id} value={a.id}>
+                                    {a.account_number ? `${a.account_number} — ` : ""}
+                                    {a.name}
+                                    <span className="text-muted-foreground ml-2 text-xs">
+                                      ({a.account_type})
+                                    </span>
+                                  </SelectItem>
+                                ))}
+                            </SelectContent>
+                          </Select>
+                          <Button
+                            size="sm"
+                            onClick={() => handleAddAccount(group.key)}
+                            disabled={!selectedAccountId || saving === group.key}
+                          >
+                            Add
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => {
+                              setAddingToGroup(null);
+                              setSelectedAccountId("");
+                            }}
+                          >
+                            Cancel
+                          </Button>
+                        </div>
+                      ) : (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => {
+                            setAddingToGroup(group.key);
+                            setSelectedAccountId("");
+                          }}
+                        >
+                          <Plus className="mr-1 h-3.5 w-3.5" />
+                          Link Account
+                        </Button>
+                      )}
+                    </div>
+
+                    {/* Summary - only show if accounts are mapped */}
+                    {groupMappings.length > 0 && (
+                      <div className="grid grid-cols-3 gap-4">
+                        <div>
+                          <p className="text-xs text-muted-foreground uppercase tracking-wider">
+                            GL Balance
+                          </p>
+                          <p className="text-lg font-semibold tabular-nums">
+                            {formatCurrency(glBal)}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-muted-foreground uppercase tracking-wider">
+                            Subledger
+                          </p>
+                          <p className="text-lg font-semibold tabular-nums">
+                            {formatCurrency(subBal)}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-muted-foreground uppercase tracking-wider">
+                            Variance
+                          </p>
+                          <p
+                            className={`text-lg font-semibold tabular-nums ${
+                              Math.abs(variance) > 0.01
+                                ? "text-red-600"
+                                : "text-green-600"
+                            }`}
+                          >
+                            {formatCurrency(variance)}
+                          </p>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Instrument Detail Expandable */}
+                    {instrumentList.length > 0 && (
+                      <Collapsible
+                        open={isExpanded}
+                        onOpenChange={() => toggleGroup(group.key)}
+                      >
+                        <CollapsibleTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="w-full justify-start"
+                          >
+                            {isExpanded ? (
+                              <ChevronDown className="mr-2 h-4 w-4" />
+                            ) : (
+                              <ChevronRight className="mr-2 h-4 w-4" />
+                            )}
+                            {instrumentList.length} instrument
+                            {instrumentList.length !== 1 ? "s" : ""} in group
+                          </Button>
+                        </CollapsibleTrigger>
+                        <CollapsibleContent>
+                          <div className="mt-2 max-h-60 overflow-auto">
+                            <Table>
+                              <TableHeader>
+                                <TableRow>
+                                  <TableHead>Instrument</TableHead>
+                                  <TableHead>Lender</TableHead>
+                                  <TableHead className="text-right">
+                                    Balance
+                                  </TableHead>
+                                </TableRow>
+                              </TableHeader>
+                              <TableBody>
+                                {instrumentList.map((instr) => (
+                                  <TableRow key={`${group.key}-${instr.id}`}>
+                                    <TableCell className="text-sm">
+                                      {instr.instrument_name}
+                                    </TableCell>
+                                    <TableCell className="text-sm text-muted-foreground">
+                                      {instr.lender_name ?? "---"}
+                                    </TableCell>
+                                    <TableCell className="text-right tabular-nums text-sm">
+                                      {formatCurrency(instr.ending_balance ?? 0)}
+                                    </TableCell>
+                                  </TableRow>
+                                ))}
+                              </TableBody>
+                            </Table>
+                          </div>
+                        </CollapsibleContent>
+                      </Collapsible>
+                    )}
+
+                    {/* Notes */}
+                    <Textarea
+                      placeholder="Reconciliation notes..."
+                      value={notes[group.key] ?? ""}
+                      onChange={(e) =>
+                        setNotes((prev) => ({
+                          ...prev,
+                          [group.key]: e.target.value,
+                        }))
+                      }
+                      className="text-sm"
+                      rows={2}
+                    />
+
+                    {/* Actions */}
+                    <div className="flex items-center justify-between">
+                      {recon?.reconciled_at && (
+                        <p className="text-xs text-muted-foreground">
+                          Reconciled{" "}
+                          {new Date(recon.reconciled_at).toLocaleDateString()}
+                        </p>
+                      )}
+                      <div className="ml-auto flex gap-2">
+                        {isReconciled ? (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleUnreconcile(group.key)}
+                            disabled={saving === group.key}
+                          >
+                            {saving === group.key ? "Saving..." : "Unreconcile"}
+                          </Button>
+                        ) : (
+                          <Button
+                            size="sm"
+                            onClick={() => handleReconcile(group.key)}
+                            disabled={
+                              saving === group.key || groupMappings.length === 0
+                            }
+                          >
+                            {saving === group.key
+                              ? "Saving..."
+                              : "Mark Reconciled"}
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
+
+          {/* Unlinked Instruments Warning */}
+          {unlinkedInstruments.length > 0 && (
+            <Card className="border-amber-300 bg-amber-50/40">
+              <CardHeader className="pb-3">
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-lg">
+                    Unlinked Instruments
+                  </CardTitle>
+                  <Badge
+                    variant="outline"
+                    className="border-amber-500 text-amber-700 bg-amber-100"
+                  >
+                    <AlertTriangle className="mr-1 h-3.5 w-3.5" />
+                    Needs GL Account
+                  </Badge>
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  These active instruments have no liability GL account assigned.
+                  Edit each instrument to link it to a GL account.
+                </p>
+              </CardHeader>
+              <CardContent>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Instrument</TableHead>
+                      <TableHead>Lender</TableHead>
+                      <TableHead>Type</TableHead>
+                      <TableHead className="text-right">Balance</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {unlinkedInstruments.map((instr) => (
+                      <TableRow key={instr.id}>
+                        <TableCell className="text-sm">
+                          {instr.instrument_name}
+                        </TableCell>
+                        <TableCell className="text-sm text-muted-foreground">
+                          {instr.lender_name ?? "---"}
+                        </TableCell>
+                        <TableCell className="text-sm">
+                          {instr.debt_type}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums text-sm">
+                          {formatCurrency(
+                            instr.ending_balance ??
+                              instr.current_draw ??
+                              instr.original_amount ??
+                              0
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
