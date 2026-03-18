@@ -49,6 +49,7 @@ import {
   Plus,
   DollarSign,
   Trash2,
+  Download,
 } from "lucide-react";
 import {
   formatCurrency,
@@ -60,6 +61,7 @@ import {
   summarizeSchedule,
   interestFactor,
 } from "@/lib/utils/amortization";
+import * as XLSX from "xlsx";
 import type { DebtStatus } from "@/lib/types/database";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -451,6 +453,36 @@ export default function DebtDetailPage() {
     } catch {
       toast.error("Network error");
     }
+  }
+
+  function exportTransactionsToXlsx() {
+    if (transactions.length === 0) {
+      toast.error("No transactions to export");
+      return;
+    }
+    const rows = transactions.map((txn: AnyRow) => ({
+      Date: txn.effective_date ? txn.effective_date.split("T")[0] : "",
+      Type: TRANSACTION_TYPE_LABELS[txn.transaction_type] ?? txn.transaction_type,
+      Description: txn.description ?? "",
+      Amount: txn.amount != null ? Number(txn.amount) : "",
+      "To Principal": txn.to_principal != null ? Number(txn.to_principal) : "",
+      "To Interest": txn.to_interest != null ? Number(txn.to_interest) : "",
+      "To Fees": txn.to_fees != null ? Number(txn.to_fees) : "",
+      Balance: txn.running_balance != null ? Number(txn.running_balance) : "",
+      "Ref #": txn.reference_number ?? "",
+      Reconciled: txn.is_reconciled ? "Yes" : "No",
+    }));
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const colKeys = Object.keys(rows[0]);
+    ws["!cols"] = colKeys.map((key) => {
+      const maxDataLen = rows.reduce((mx, r) => Math.max(mx, String(r[key as keyof typeof r] ?? "").length), 0);
+      return { wch: Math.max(key.length, maxDataLen) + 2 };
+    });
+    const wb = XLSX.utils.book_new();
+    const sheetName = (instrument?.instrument_name || "Transactions").slice(0, 31);
+    XLSX.utils.book_append_sheet(wb, ws, sheetName);
+    const safeName = (instrument?.instrument_name || "transactions").replace(/[^a-zA-Z0-9_-]/g, "_");
+    XLSX.writeFile(wb, `${safeName}_transactions.xlsx`);
   }
 
   const loadData = useCallback(async () => {
@@ -1618,10 +1650,16 @@ export default function DebtDetailPage() {
                     {transactions.length} transaction{transactions.length !== 1 ? "s" : ""} — draws, payments, fees, and adjustments
                   </CardDescription>
                 </div>
-                <Button onClick={() => setTxnOpen(true)}>
-                  <Plus className="mr-2 h-4 w-4" />
-                  Add Transaction
-                </Button>
+                <div className="flex items-center gap-2">
+                  <Button variant="outline" onClick={exportTransactionsToXlsx} disabled={transactions.length === 0}>
+                    <Download className="mr-2 h-4 w-4" />
+                    Export
+                  </Button>
+                  <Button onClick={() => setTxnOpen(true)}>
+                    <Plus className="mr-2 h-4 w-4" />
+                    Add Transaction
+                  </Button>
+                </div>
               </div>
             </CardHeader>
 
