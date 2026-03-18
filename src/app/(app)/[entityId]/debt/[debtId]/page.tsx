@@ -582,6 +582,9 @@ export default function DebtDetailPage() {
     endingBalance: number;
     cumulativeInterest: number;
     balanceChanges: number; // net draws/paydowns in the month
+    interestPaid: number; // interest payments from transactions this month
+    interestPayableBeg: number; // beginning interest payable balance
+    interestPayableEnd: number; // ending interest payable balance (beg + accrued - paid)
   }
 
   const interestAccrualSchedule = useMemo((): AccrualEntry[] => {
@@ -626,6 +629,22 @@ export default function DebtDetailPage() {
       }
     }
 
+    // Build a map of interest payments by month (for interest payable roll forward)
+    const monthlyInterestPaid: Record<string, number> = {};
+    for (const txn of sortedTxns) {
+      const d = new Date(txn.effective_date);
+      const key = `${d.getFullYear()}-${d.getMonth() + 1}`;
+      let intPaid = 0;
+      if ((txn.to_interest ?? 0) !== 0) {
+        intPaid = Math.abs(txn.to_interest);
+      } else if (txn.transaction_type === "interest_payment" && (txn.to_principal ?? 0) === 0 && (txn.to_fees ?? 0) === 0) {
+        intPaid = Math.abs(txn.amount);
+      }
+      if (intPaid > 0) {
+        monthlyInterestPaid[key] = (monthlyInterestPaid[key] ?? 0) + intPaid;
+      }
+    }
+
     // Also check rate history for variable-rate instruments
     const rateChangesSorted = [...rateHistory].sort(
       (a, b) => new Date(a.effective_date).getTime() - new Date(b.effective_date).getTime()
@@ -649,6 +668,7 @@ export default function DebtDetailPage() {
     balance = isLOCType ? (instrument.current_draw ?? instrument.original_amount) : instrument.original_amount;
 
     let cumInterest = 0;
+    let interestPayable = 0; // running interest payable balance
 
     // Generate up to 24 months past current, but at least through today
     const maxMonths = 240; // 20 years max
@@ -700,6 +720,11 @@ export default function DebtDetailPage() {
       const adjustedBalance = Math.max(0, balance + changes);
       cumInterest += interest;
 
+      // Interest payable roll forward
+      const intPaid = monthlyInterestPaid[key] ?? 0;
+      const intPayableBeg = Math.round(interestPayable * 100) / 100;
+      interestPayable = Math.round((interestPayable + interest - intPaid) * 100) / 100;
+
       entries.push({
         year: cy,
         month: cm,
@@ -709,6 +734,9 @@ export default function DebtDetailPage() {
         endingBalance: Math.round(adjustedBalance * 100) / 100,
         cumulativeInterest: Math.round(cumInterest * 100) / 100,
         balanceChanges: Math.round(changes * 100) / 100,
+        interestPaid: intPaid,
+        interestPayableBeg: intPayableBeg,
+        interestPayableEnd: interestPayable,
       });
 
       balance = adjustedBalance;
@@ -1075,7 +1103,7 @@ export default function DebtDetailPage() {
           <TabsTrigger value="amortization">Amortization ({amortization.length})</TabsTrigger>
           <TabsTrigger value="accrual">
             <DollarSign className="h-4 w-4 mr-1" />
-            Interest Accrual ({interestAccrualSchedule.length})
+            Interest Roll Forward ({interestAccrualSchedule.length})
           </TabsTrigger>
           <TabsTrigger value="whatif">
             <Calculator className="h-4 w-4 mr-1" />
@@ -1636,23 +1664,37 @@ export default function DebtDetailPage() {
           </Card>
         </TabsContent>
 
-        {/* TAB: Interest Accrual */}
+        {/* TAB: Interest Roll Forward */}
         <TabsContent value="accrual">
           <Card>
             <CardHeader>
               <div className="flex items-center justify-between">
                 <div>
-                  <CardTitle>Monthly Interest Accrual Schedule</CardTitle>
+                  <CardTitle>Interest Roll Forward</CardTitle>
                   <CardDescription>
-                    Interest expense recognition per month — adjusts dynamically with draws and paydowns
+                    Monthly interest accrued vs. paid, with running interest payable balance
                   </CardDescription>
                 </div>
                 {interestAccrualSchedule.length > 0 && (
-                  <div className="text-right">
-                    <span className="text-sm text-muted-foreground">Total Accrued Interest</span>
-                    <p className="text-lg font-semibold tabular-nums">
-                      {formatCurrency(interestAccrualSchedule[interestAccrualSchedule.length - 1].cumulativeInterest)}
-                    </p>
+                  <div className="flex gap-6 text-right">
+                    <div>
+                      <span className="text-sm text-muted-foreground">Total Accrued</span>
+                      <p className="text-lg font-semibold tabular-nums text-amber-600">
+                        {formatCurrency(interestAccrualSchedule.reduce((s, r) => s + r.interestAccrued, 0))}
+                      </p>
+                    </div>
+                    <div>
+                      <span className="text-sm text-muted-foreground">Total Paid</span>
+                      <p className="text-lg font-semibold tabular-nums text-green-600">
+                        {formatCurrency(interestAccrualSchedule.reduce((s, r) => s + r.interestPaid, 0))}
+                      </p>
+                    </div>
+                    <div>
+                      <span className="text-sm text-muted-foreground">Interest Payable</span>
+                      <p className="text-lg font-semibold tabular-nums">
+                        {formatCurrency(interestAccrualSchedule[interestAccrualSchedule.length - 1].interestPayableEnd)}
+                      </p>
+                    </div>
                   </div>
                 )}
               </div>
@@ -1668,12 +1710,12 @@ export default function DebtDetailPage() {
                     <TableHeader>
                       <TableRow>
                         <TableHead>Period</TableHead>
-                        <TableHead className="text-right">Beg Balance</TableHead>
-                        <TableHead className="text-right">Draws / Paydowns</TableHead>
-                        <TableHead className="text-right">Adj Balance</TableHead>
+                        <TableHead className="text-right">Principal Balance</TableHead>
                         <TableHead className="text-right">Rate</TableHead>
+                        <TableHead className="text-right border-l">Beg Int Payable</TableHead>
                         <TableHead className="text-right">Interest Accrued</TableHead>
-                        <TableHead className="text-right">Cumulative Interest</TableHead>
+                        <TableHead className="text-right">Interest Paid</TableHead>
+                        <TableHead className="text-right">End Int Payable</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -1690,14 +1732,23 @@ export default function DebtDetailPage() {
                               {getPeriodShortLabel(row.year, row.month)}
                               {isCurrent && <Badge variant="outline" className="ml-2 text-xs">Current</Badge>}
                             </TableCell>
-                            <TableCell className="text-right tabular-nums">{formatCurrency(row.beginningBalance)}</TableCell>
-                            <TableCell className={`text-right tabular-nums ${row.balanceChanges > 0 ? "text-red-600" : row.balanceChanges < 0 ? "text-green-600" : "text-muted-foreground"}`}>
-                              {row.balanceChanges !== 0 ? (row.balanceChanges > 0 ? "+" : "") + formatCurrency(row.balanceChanges) : "---"}
+                            <TableCell className="text-right tabular-nums">
+                              {formatCurrency(row.endingBalance)}
+                              {row.balanceChanges !== 0 && (
+                                <span className={`ml-1 text-xs ${row.balanceChanges > 0 ? "text-red-500" : "text-green-500"}`}>
+                                  ({row.balanceChanges > 0 ? "+" : ""}{formatCurrency(row.balanceChanges)})
+                                </span>
+                              )}
                             </TableCell>
-                            <TableCell className="text-right tabular-nums font-medium">{formatCurrency(row.endingBalance)}</TableCell>
                             <TableCell className="text-right tabular-nums text-muted-foreground">{formatPercentage(row.rate, 2)}</TableCell>
+                            <TableCell className="text-right tabular-nums border-l">{formatCurrency(row.interestPayableBeg)}</TableCell>
                             <TableCell className="text-right tabular-nums font-medium text-amber-600">{formatCurrency(row.interestAccrued)}</TableCell>
-                            <TableCell className="text-right tabular-nums">{formatCurrency(row.cumulativeInterest)}</TableCell>
+                            <TableCell className={`text-right tabular-nums ${row.interestPaid > 0 ? "font-medium text-green-600" : "text-muted-foreground"}`}>
+                              {row.interestPaid > 0 ? `(${formatCurrency(row.interestPaid)})` : "---"}
+                            </TableCell>
+                            <TableCell className={`text-right tabular-nums font-medium ${row.interestPayableEnd > 0 ? "" : "text-muted-foreground"}`}>
+                              {formatCurrency(row.interestPayableEnd)}
+                            </TableCell>
                           </TableRow>
                         );
                       })}
@@ -1705,10 +1756,12 @@ export default function DebtDetailPage() {
                         <TableCell>Total</TableCell>
                         <TableCell />
                         <TableCell />
-                        <TableCell />
-                        <TableCell />
+                        <TableCell className="border-l" />
                         <TableCell className="text-right tabular-nums text-amber-600">
                           {formatCurrency(interestAccrualSchedule.reduce((s, r) => s + r.interestAccrued, 0))}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums text-green-600">
+                          {formatCurrency(interestAccrualSchedule.reduce((s, r) => s + r.interestPaid, 0))}
                         </TableCell>
                         <TableCell />
                       </TableRow>
