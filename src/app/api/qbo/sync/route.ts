@@ -742,7 +742,7 @@ export async function POST(request: Request) {
                 // Track section from Header
                 let section = currentSection;
                 const header = row.Header as
-                  | { ColData?: Array<{ value?: string }> }
+                  | { ColData?: Array<{ value?: string; id?: string }> }
                   | undefined;
                 if (header?.ColData?.[0]?.value) {
                   section = header.ColData[0].value;
@@ -753,6 +753,25 @@ export async function POST(request: Request) {
                   | { Row?: Array<Record<string, unknown>> }
                   | undefined;
                 if (nested?.Row) {
+                  // For parent accounts with direct activity AND sub-accounts:
+                  // QBO puts the parent's own data in the Header ColData.
+                  // Extract it before recursing into children.
+                  if (header?.ColData && header.ColData.length > 1) {
+                    const accountName = header.ColData[0]?.value ?? "";
+                    const qboId = (header.ColData[0] as { id?: string })?.id ?? null;
+                    // Check if there are any numeric values (not just the account name)
+                    const hasValues = header.ColData.slice(1).some((c) => {
+                      const v = parseFloat(c.value ?? "");
+                      return !isNaN(v) && v !== 0;
+                    });
+                    if (accountName && hasValues) {
+                      const values = header.ColData.map((c) => {
+                        const v = parseFloat(c.value ?? "");
+                        return isNaN(v) ? null : v;
+                      });
+                      result.push({ accountName, qboId, values, section: currentSection });
+                    }
+                  }
                   result.push(...extractPLRows(nested.Row, section));
                   continue;
                 }
@@ -806,6 +825,7 @@ export async function POST(request: Request) {
             let classBalancesUpserted = 0;
             let classBalanceErrors = 0;
             let accountsNotMatched = 0;
+            const unmatchedAccountNames: string[] = [];
             let valuesSkippedNull = 0;
 
             for (const row of plAccountRows) {
@@ -841,6 +861,9 @@ export async function POST(request: Request) {
               }
               if (!account) {
                 accountsNotMatched++;
+                if (unmatchedAccountNames.length < 10) {
+                  unmatchedAccountNames.push(`"${row.accountName}" (qboId=${row.qboId})`);
+                }
                 continue;
               }
 
@@ -904,7 +927,8 @@ export async function POST(request: Request) {
 
             send({
               step: "pl_by_class",
-              detail: `Class balance results: ${classBalancesUpserted} upserted, ${classBalanceErrors} errors, ${accountsNotMatched} accounts unmatched, ${valuesSkippedNull} null values skipped`,
+              detail: `Class balance results: ${classBalancesUpserted} upserted, ${classBalanceErrors} errors, ${accountsNotMatched} accounts unmatched, ${valuesSkippedNull} null values skipped` +
+                (unmatchedAccountNames.length > 0 ? `. Unmatched: ${unmatchedAccountNames.join(", ")}` : ""),
               progress: 93,
             });
 
