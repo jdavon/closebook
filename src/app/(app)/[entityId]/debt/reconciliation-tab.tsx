@@ -208,37 +208,14 @@ export function DebtReconciliationTab({ entityId }: DebtReconciliationTabProps) 
       const endingBal = amortMap[instr.id] ?? instr.current_draw ?? instr.original_amount ?? 0;
       const instrWithBal = { ...instr, ending_balance: endingBal };
 
-      if (LOC_TYPES.has(instr.debt_type)) {
-        // LOCs go to loc_payable
-        const balance = instr.current_draw ?? 0;
-        grouped["loc_payable"].total += balance;
-        grouped["loc_payable"].instruments.push({ ...instrWithBal, ending_balance: balance });
-      } else {
-        // Term debt splits into current and long-term
-        const currentPortion = instr.current_portion ?? 0;
-        const longTermPortion = instr.long_term_portion ?? 0;
+      // Determine which group this instrument belongs to based on debt type
+      const groupKey = LOC_TYPES.has(instr.debt_type)
+        ? "loc_payable"
+        : "notes_payable_long_term";
 
-        if (currentPortion > 0) {
-          grouped["notes_payable_current"].total += currentPortion;
-          grouped["notes_payable_current"].instruments.push({
-            ...instrWithBal,
-            ending_balance: currentPortion,
-          });
-        }
-        if (longTermPortion > 0) {
-          grouped["notes_payable_long_term"].total += longTermPortion;
-          grouped["notes_payable_long_term"].instruments.push({
-            ...instrWithBal,
-            ending_balance: longTermPortion,
-          });
-        }
-
-        // If no current/LT split computed, put full balance in long-term
-        if (currentPortion === 0 && longTermPortion === 0 && endingBal > 0) {
-          grouped["notes_payable_long_term"].total += endingBal;
-          grouped["notes_payable_long_term"].instruments.push(instrWithBal);
-        }
-      }
+      // Use the total outstanding balance at end of month (from amortization schedule)
+      grouped[groupKey].total += endingBal;
+      grouped[groupKey].instruments.push(instrWithBal);
 
       // Interest payable: use period interest from amortization
       // (handled separately below)

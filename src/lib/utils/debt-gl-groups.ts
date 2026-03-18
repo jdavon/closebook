@@ -8,22 +8,20 @@ export interface DebtGLAccountGroup {
  * GL account groups for debt reconciliation.
  * Each group maps to one or more entity-level GL accounts
  * configured in debt_reconciliation_accounts.
+ *
+ * Subledger balances = total outstanding balance at end of month
+ * from the debt amortization schedule (no current/LT split).
  */
 export const DEBT_GL_ACCOUNT_GROUPS: DebtGLAccountGroup[] = [
   {
-    key: "notes_payable_current",
-    displayName: "Notes Payable - Current",
-    description: "Current portion of long-term debt (due within 12 months)",
-  },
-  {
     key: "notes_payable_long_term",
-    displayName: "Notes Payable - Long Term",
-    description: "Long-term portion of debt (due after 12 months)",
+    displayName: "Notes Payable",
+    description: "Total outstanding balance on term debt instruments at end of period",
   },
   {
     key: "loc_payable",
     displayName: "Line of Credit",
-    description: "Revolving lines of credit and revolving credit facilities",
+    description: "Total outstanding balance on revolving lines of credit at end of period",
   },
   {
     key: "interest_payable",
@@ -35,16 +33,9 @@ export const DEBT_GL_ACCOUNT_GROUPS: DebtGLAccountGroup[] = [
 const LOC_TYPES = new Set(["line_of_credit", "revolving_credit"]);
 
 /**
- * Determine which GL account group a debt instrument's balance belongs to.
- * LOC-type instruments go to "loc_payable".
- * Term-type instruments split between "notes_payable_current" and "notes_payable_long_term".
+ * Determine which GL account group a debt instrument belongs to.
  */
-export function getDebtGLGroup(
-  debtType: string,
-  portion: "current" | "long_term"
-): string {
+export function getDebtGLGroup(debtType: string): string {
   if (LOC_TYPES.has(debtType)) return "loc_payable";
-  return portion === "current"
-    ? "notes_payable_current"
-    : "notes_payable_long_term";
+  return "notes_payable_long_term";
 }
