@@ -399,6 +399,8 @@ export async function POST(request: Request) {
         currentGlAccounts: Object.keys(currentGlMap).length,
         priorGlAccounts: priorGlCount,
         currentClassEntries: Object.keys(currentClassMap).length,
+        classMapKeys: Object.keys(currentClassMap).slice(0, 20),
+        totalClassRows: currentClassRows?.length ?? 0,
       },
       ...(warnings.length > 0 ? { warnings } : {}),
     });
