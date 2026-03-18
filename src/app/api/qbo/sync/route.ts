@@ -753,26 +753,62 @@ export async function POST(request: Request) {
                   | { Row?: Array<Record<string, unknown>> }
                   | undefined;
                 if (nested?.Row) {
-                  // For parent accounts with direct activity AND sub-accounts:
-                  // QBO puts the parent's own data in the Header ColData.
-                  // Extract it before recursing into children.
-                  if (header?.ColData && header.ColData.length > 1) {
-                    const accountName = header.ColData[0]?.value ?? "";
-                    const qboId = (header.ColData[0] as { id?: string })?.id ?? null;
-                    // Check if there are any numeric values (not just the account name)
-                    const hasValues = header.ColData.slice(1).some((c) => {
+                  const childRows = extractPLRows(nested.Row, section);
+                  result.push(...childRows);
+
+                  // Derive parent account direct activity from Summary - children.
+                  // QBO doesn't include parent accounts with sub-accounts as data
+                  // rows — their direct activity only appears in the Summary total.
+                  const summary = row.Summary as
+                    | { ColData?: Array<{ value?: string; id?: string }> }
+                    | undefined;
+                  if (
+                    summary?.ColData &&
+                    summary.ColData.length > 1 &&
+                    header?.ColData?.[0]?.value
+                  ) {
+                    // Parse Summary values (index 0 is "Total ..." label)
+                    const summaryValues = summary.ColData.map((c) => {
                       const v = parseFloat(c.value ?? "");
-                      return !isNaN(v) && v !== 0;
+                      return isNaN(v) ? 0 : v;
                     });
-                    if (accountName && hasValues) {
-                      const values = header.ColData.map((c) => {
-                        const v = parseFloat(c.value ?? "");
-                        return isNaN(v) ? null : v;
+
+                    // Sum all children's values per column index
+                    const childSums = new Array(summaryValues.length).fill(0);
+                    for (const child of childRows) {
+                      for (
+                        let i = 1;
+                        i < child.values.length && i < childSums.length;
+                        i++
+                      ) {
+                        childSums[i] += child.values[i] ?? 0;
+                      }
+                    }
+
+                    // Parent direct = Summary - children
+                    const parentValues: (number | null)[] = summaryValues.map(
+                      (sv, i) => {
+                        if (i === 0) return null; // Skip label column
+                        const diff = sv - childSums[i];
+                        return Math.abs(diff) < 0.005 ? null : diff;
+                      }
+                    );
+
+                    const hasParentActivity = parentValues.some(
+                      (v) => v !== null && v !== 0
+                    );
+                    if (hasParentActivity) {
+                      const accountName = header.ColData[0].value;
+                      const qboId =
+                        (header.ColData[0] as { id?: string }).id ?? null;
+                      result.push({
+                        accountName,
+                        qboId,
+                        values: parentValues,
+                        section: currentSection,
                       });
-                      result.push({ accountName, qboId, values, section: currentSection });
                     }
                   }
-                  result.push(...extractPLRows(nested.Row, section));
                   continue;
                 }
 
@@ -858,6 +894,23 @@ export async function POST(request: Request) {
                   .eq("name", row.accountName)
                   .maybeSingle();
                 account = nameMatch;
+              }
+              // 4th tier: P&L rows show "49000 Production Supplies Rental"
+              // but DB stores account_number="49000" and name="Production Supplies Rental".
+              // Try matching by stripping leading account number from the row name.
+              if (!account) {
+                const numMatch = row.accountName.match(/^(\d+)\s+(.+)$/);
+                if (numMatch) {
+                  const [, acctNum, acctName] = numMatch;
+                  const { data: numNameMatch } = await adminClient
+                    .from("accounts")
+                    .select("id, classification")
+                    .eq("entity_id", entityId)
+                    .eq("account_number", acctNum)
+                    .eq("name", acctName)
+                    .maybeSingle();
+                  account = numNameMatch;
+                }
               }
               if (!account) {
                 accountsNotMatched++;
