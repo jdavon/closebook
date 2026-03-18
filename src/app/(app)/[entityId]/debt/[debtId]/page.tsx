@@ -875,7 +875,13 @@ export default function DebtDetailPage() {
       if (balance <= 0.005 && unpaidInterest <= 0.005) break;
 
       const rate = getDynRateForMonth(cy, cm);
-      const factor = interestFactor(cy, cm, convention);
+      const fullFactor = interestFactor(cy, cm, convention);
+      // Pro-rate the first period based on the actual start day within the month
+      const isFirstPeriod = i === 0;
+      const startDay = isFirstPeriod ? Number(instrument.start_date.split("T")[0].split("-")[2]) : 1;
+      const totalDays = new Date(cy, cm, 0).getDate();
+      const accrualDays = totalDays - startDay + 1;
+      const factor = isFirstPeriod ? fullFactor * (accrualDays / totalDays) : fullFactor;
       const monthInterest = Math.round(balance * rate * factor * 100) / 100;
 
       const isPast = cy < nowY || (cy === nowY && cm < nowM);
