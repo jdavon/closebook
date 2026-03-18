@@ -216,6 +216,27 @@ export async function POST(request: Request) {
     const results = [];
     const warnings: string[] = [];
 
+    // ── Batch-fetch lookup maps for human-readable names ────────────
+    const { data: allAccounts } = await adminClient
+      .from("accounts")
+      .select("id, account_number, name")
+      .eq("entity_id", entityId);
+    const accountNameMap: Record<string, string> = {};
+    for (const acct of allAccounts ?? []) {
+      accountNameMap[acct.id] = acct.account_number
+        ? `${acct.account_number} ${acct.name}`
+        : acct.name;
+    }
+
+    const { data: allClasses } = await adminClient
+      .from("qbo_classes")
+      .select("id, name")
+      .eq("entity_id", entityId);
+    const classNameMap: Record<string, string> = {};
+    for (const cls of allClasses ?? []) {
+      classNameMap[cls.id] = cls.name;
+    }
+
     // ── Batch-fetch GL data for current AND prior months ──────────────
     // This avoids N+1 queries per assignment and makes diagnostics easy.
 
@@ -330,9 +351,12 @@ export async function POST(request: Request) {
 
           // Warn if class data is missing — exclude filter has no effect
           if (excludedStandalone === 0 && a.qbo_class_ids.length > 0) {
-            const classNames = a.qbo_class_ids.join(", ");
+            const acctLabel = accountNameMap[a.account_id] ?? a.account_id;
+            const classLabels = a.qbo_class_ids
+              .map((cid) => classNameMap[cid] ?? cid)
+              .join(", ");
             warnings.push(
-              `${profile.name}: No class-level GL data found for account ${a.account_id} — exclude filter for class(es) [${classNames}] had no effect. Sync P&L by Class from QBO.`
+              `${profile.name}: No class-level GL data found for "${acctLabel}" — exclude filter for class(es) [${classLabels}] had no effect. Sync P&L by Class from QBO.`
             );
           }
 
@@ -399,8 +423,6 @@ export async function POST(request: Request) {
         currentGlAccounts: Object.keys(currentGlMap).length,
         priorGlAccounts: priorGlCount,
         currentClassEntries: Object.keys(currentClassMap).length,
-        classMapKeys: Object.keys(currentClassMap).slice(0, 20),
-        totalClassRows: currentClassRows?.length ?? 0,
       },
       ...(warnings.length > 0 ? { warnings } : {}),
     });

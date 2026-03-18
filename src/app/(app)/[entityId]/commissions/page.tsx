@@ -397,10 +397,8 @@ export default function CommissionsPage() {
       const data = await res.json();
       if (data.success) {
         if (data.warnings?.length > 0) {
-          const diag = data.diagnostics;
           toast.warning(
-            data.warnings[0] +
-            (diag ? ` [classRows=${diag.totalClassRows}, classEntries=${diag.currentClassEntries}, keys=${(diag.classMapKeys ?? []).slice(0, 5).join(" | ")}]` : ""),
+            data.warnings[0],
             { duration: 15000 }
           );
         } else {
