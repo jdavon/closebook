@@ -748,6 +748,186 @@ export default function DebtDetailPage() {
     return entries;
   }, [instrument, transactions, rateHistory]);
 
+  // ---------------------------------------------------------------------------
+  // Dynamic amortization schedule — replays actual transactions for past months,
+  // assumes scheduled payment for current + future, interest-first allocation,
+  // continues until balance reaches zero
+  // ---------------------------------------------------------------------------
+  interface DynamicAmortEntry {
+    period_year: number;
+    period_month: number;
+    beginning_balance: number;
+    interest_accrued: number;
+    unpaid_interest_beg: number;
+    payment: number;
+    to_interest: number;
+    to_principal: number;
+    ending_balance: number;
+    unpaid_interest_end: number;
+    interest_rate: number;
+    is_actual: boolean; // true = past month with known data
+    is_current: boolean;
+    cumulative_principal: number;
+    cumulative_interest: number;
+  }
+
+  const dynamicAmortization = useMemo((): DynamicAmortEntry[] => {
+    if (!instrument || !instrument.start_date) return [];
+
+    const convention = instrument.day_count_convention ?? "30/360";
+    const baseRate = instrument.interest_rate ?? 0;
+
+    // Parse start date (local, not UTC)
+    const [sdY, sdM] = instrument.start_date.split("T")[0].split("-").map(Number);
+
+    // Current month
+    const now = new Date();
+    const nowY = now.getFullYear();
+    const nowM = now.getMonth() + 1;
+
+    // Rate history
+    const rateChangesSorted = [...rateHistory].sort(
+      (a, b) => new Date(a.effective_date).getTime() - new Date(b.effective_date).getTime()
+    );
+    function getDynRateForMonth(y: number, m: number): number {
+      if (rateChangesSorted.length === 0) return baseRate;
+      const periodStart = new Date(y, m - 1, 1);
+      let effective = baseRate;
+      for (const rc of rateChangesSorted) {
+        if (new Date(rc.effective_date) <= periodStart) {
+          effective = rc.interest_rate;
+        }
+      }
+      return effective;
+    }
+
+    // Build monthly totals from actual transactions
+    const sortedTxns = [...transactions].sort(
+      (a, b) => new Date(a.effective_date).getTime() - new Date(b.effective_date).getTime()
+    );
+
+    // Total payments per month (principal_payment, interest_payment, vehicle_payoff, payoff)
+    const monthlyTotalPayments: Record<string, number> = {};
+    // Advances (draws) per month
+    const monthlyAdvances: Record<string, number> = {};
+    // Track which months had any payment-type transactions
+    const monthsWithPayments = new Set<string>();
+
+    for (const txn of sortedTxns) {
+      const d = new Date(txn.effective_date);
+      const key = `${d.getFullYear()}-${d.getMonth() + 1}`;
+
+      if (txn.transaction_type === "advance") {
+        monthlyAdvances[key] = (monthlyAdvances[key] ?? 0) + Math.abs(txn.amount);
+      } else if (
+        ["principal_payment", "interest_payment", "vehicle_payoff", "payoff"].includes(
+          txn.transaction_type
+        )
+      ) {
+        monthsWithPayments.add(key);
+        monthlyTotalPayments[key] =
+          (monthlyTotalPayments[key] ?? 0) + Math.abs(txn.amount);
+      }
+    }
+
+    // Determine the scheduled payment amount for projections
+    let scheduledPayment = instrument.payment_amount ?? 0;
+    if (scheduledPayment <= 0 && instrument.term_months && baseRate > 0) {
+      // Calculate from standard amortization formula using current balance would be wrong —
+      // we need original parameters. Use original_amount + term_months.
+      const r = baseRate / 12;
+      const n = instrument.term_months;
+      const factor = Math.pow(1 + r, n);
+      scheduledPayment = Math.round(instrument.original_amount * (r * factor) / (factor - 1) * 100) / 100;
+    } else if (scheduledPayment <= 0 && instrument.term_months && baseRate === 0) {
+      scheduledPayment = Math.round(instrument.original_amount / instrument.term_months * 100) / 100;
+    }
+
+    const entries: DynamicAmortEntry[] = [];
+    const isLOC = ["line_of_credit", "revolving_credit"].includes(instrument.debt_type);
+    let balance = isLOC ? (instrument.current_draw ?? instrument.original_amount) : instrument.original_amount;
+    let unpaidInterest = 0;
+    let cumPrincipal = 0;
+    let cumInterest = 0;
+
+    const maxPeriods = 600; // 50-year safety cap
+
+    for (let i = 0; i < maxPeriods; i++) {
+      const cy = sdY + Math.floor((sdM - 1 + i) / 12);
+      const cm = ((sdM - 1 + i) % 12) + 1;
+
+      if (balance <= 0.005 && unpaidInterest <= 0.005) break;
+
+      const rate = getDynRateForMonth(cy, cm);
+      const factor = interestFactor(cy, cm, convention);
+      const monthInterest = Math.round(balance * rate * factor * 100) / 100;
+
+      const isPast = cy < nowY || (cy === nowY && cm < nowM);
+      const isCurrent = cy === nowY && cm === nowM;
+      const key = `${cy}-${cm}`;
+      const advance = monthlyAdvances[key] ?? 0;
+
+      let payment = 0;
+      let toInterest = 0;
+      let toPrincipal = 0;
+
+      if (isPast) {
+        // Past month — use actual transaction data
+        if (monthsWithPayments.has(key)) {
+          payment = monthlyTotalPayments[key] ?? 0;
+        }
+        // else payment = 0 (no payment made)
+      } else {
+        // Current or future month — assume scheduled payment
+        if (scheduledPayment > 0) {
+          const totalOwed = balance + unpaidInterest + monthInterest;
+          payment = Math.min(scheduledPayment, Math.round(totalOwed * 100) / 100);
+        }
+      }
+
+      // Allocate payment: unpaid interest first, then current month interest, then principal
+      if (payment > 0) {
+        const totalInterestOwed = unpaidInterest + monthInterest;
+        toInterest = Math.round(Math.min(payment, totalInterestOwed) * 100) / 100;
+        const remainder = Math.round((payment - toInterest) * 100) / 100;
+        toPrincipal = Math.round(Math.min(remainder, balance) * 100) / 100;
+      }
+
+      const newUnpaidInterest = Math.round(
+        Math.max(0, unpaidInterest + monthInterest - toInterest) * 100
+      ) / 100;
+      const endingBalance = Math.round(
+        Math.max(0, balance - toPrincipal + advance) * 100
+      ) / 100;
+
+      cumPrincipal += toPrincipal;
+      cumInterest += toInterest;
+
+      entries.push({
+        period_year: cy,
+        period_month: cm,
+        beginning_balance: Math.round(balance * 100) / 100,
+        interest_accrued: monthInterest,
+        unpaid_interest_beg: Math.round(unpaidInterest * 100) / 100,
+        payment: Math.round(payment * 100) / 100,
+        to_interest: Math.round(toInterest * 100) / 100,
+        to_principal: Math.round(toPrincipal * 100) / 100,
+        ending_balance: endingBalance,
+        unpaid_interest_end: newUnpaidInterest,
+        interest_rate: rate,
+        is_actual: isPast,
+        is_current: isCurrent,
+        cumulative_principal: Math.round(cumPrincipal * 100) / 100,
+        cumulative_interest: Math.round(cumInterest * 100) / 100,
+      });
+
+      balance = endingBalance;
+      unpaidInterest = newUnpaidInterest;
+    }
+
+    return entries;
+  }, [instrument, transactions, rateHistory]);
+
   // Daily interest based on current outstanding balance (from transactions, not amortization)
   const dailyInterest = useMemo(() => {
     if (!instrument) return 0;
@@ -1100,7 +1280,7 @@ export default function DebtDetailPage() {
             <ArrowUpDown className="h-4 w-4 mr-1" />
             Transactions ({transactions.length})
           </TabsTrigger>
-          <TabsTrigger value="amortization">Amortization ({amortization.length})</TabsTrigger>
+          <TabsTrigger value="amortization">Amortization ({dynamicAmortization.length})</TabsTrigger>
           <TabsTrigger value="accrual">
             <DollarSign className="h-4 w-4 mr-1" />
             Interest Roll Forward ({interestAccrualSchedule.length})
@@ -1592,29 +1772,58 @@ export default function DebtDetailPage() {
           </Card>
         </TabsContent>
 
-        {/* TAB: Amortization Schedule */}
+        {/* TAB: Amortization Schedule (Dynamic) */}
         <TabsContent value="amortization">
           <Card>
             <CardHeader>
               <div className="flex items-center justify-between">
                 <div>
                   <CardTitle>Amortization Schedule</CardTitle>
-                  <CardDescription>{amortization.length} period{amortization.length !== 1 ? "s" : ""} generated</CardDescription>
+                  <CardDescription>
+                    {dynamicAmortization.length > 0
+                      ? `${dynamicAmortization.filter(r => r.is_actual).length} actual + ${dynamicAmortization.filter(r => !r.is_actual).length} projected periods`
+                      : "Requires start date and balance to generate"}
+                  </CardDescription>
                 </div>
-                <Button
-                  variant={amortization.length === 0 ? "default" : "outline"}
-                  onClick={handleRegenerate}
-                  disabled={regenerating}
-                >
-                  <Calculator className="mr-2 h-4 w-4" />
-                  {regenerating ? "Generating..." : amortization.length === 0 ? "Generate Schedule" : "Regenerate"}
-                </Button>
+                {dynamicAmortization.length > 0 && (
+                  <div className="flex gap-6 text-right">
+                    <div>
+                      <span className="text-sm text-muted-foreground">Total Principal</span>
+                      <p className="text-lg font-semibold tabular-nums text-green-600">
+                        {formatCurrency(dynamicAmortization.reduce((s, r) => s + r.to_principal, 0))}
+                      </p>
+                    </div>
+                    <div>
+                      <span className="text-sm text-muted-foreground">Total Interest</span>
+                      <p className="text-lg font-semibold tabular-nums text-amber-600">
+                        {formatCurrency(dynamicAmortization.reduce((s, r) => s + r.to_interest, 0))}
+                      </p>
+                    </div>
+                    {dynamicAmortization.some(r => r.unpaid_interest_end > 0.005) && (
+                      <div>
+                        <span className="text-sm text-muted-foreground">Unpaid Interest</span>
+                        <p className="text-lg font-semibold tabular-nums text-red-600">
+                          {formatCurrency(dynamicAmortization[dynamicAmortization.length - 1]?.unpaid_interest_end ?? 0)}
+                        </p>
+                      </div>
+                    )}
+                    <div>
+                      <span className="text-sm text-muted-foreground">Payoff</span>
+                      <p className="text-lg font-semibold tabular-nums">
+                        {getPeriodShortLabel(
+                          dynamicAmortization[dynamicAmortization.length - 1]?.period_year ?? 0,
+                          dynamicAmortization[dynamicAmortization.length - 1]?.period_month ?? 0
+                        )}
+                      </p>
+                    </div>
+                  </div>
+                )}
               </div>
             </CardHeader>
             <CardContent>
-              {amortization.length === 0 ? (
+              {dynamicAmortization.length === 0 ? (
                 <p className="text-sm text-muted-foreground py-8 text-center">
-                  No amortization entries. Click &quot;Generate Schedule&quot; to create the amortization table from current instrument parameters.
+                  No schedule available. Ensure the instrument has a start date, balance, and interest rate.
                 </p>
               ) : (
                 <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
@@ -1623,38 +1832,77 @@ export default function DebtDetailPage() {
                       <TableRow>
                         <TableHead>Period</TableHead>
                         <TableHead className="text-right">Beg Balance</TableHead>
+                        <TableHead className="text-right">Interest Accrued</TableHead>
                         <TableHead className="text-right">Payment</TableHead>
-                        <TableHead className="text-right">Principal</TableHead>
-                        <TableHead className="text-right">Interest</TableHead>
+                        <TableHead className="text-right">To Interest</TableHead>
+                        <TableHead className="text-right">To Principal</TableHead>
                         <TableHead className="text-right">End Balance</TableHead>
+                        {dynamicAmortization.some(r => r.unpaid_interest_end > 0.005) && (
+                          <TableHead className="text-right">Unpaid Int</TableHead>
+                        )}
                         <TableHead className="text-right">Rate</TableHead>
-                        <TableHead></TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {amortization.map((row: AnyRow) => (
-                        <TableRow key={row.id}>
-                          <TableCell className="font-medium">{getPeriodShortLabel(row.period_year, row.period_month)}</TableCell>
-                          <TableCell className="text-right tabular-nums">{formatCurrency(row.beginning_balance)}</TableCell>
-                          <TableCell className="text-right tabular-nums">{formatCurrency(row.payment)}</TableCell>
-                          <TableCell className="text-right tabular-nums">{formatCurrency(row.principal)}</TableCell>
-                          <TableCell className="text-right tabular-nums">{formatCurrency(row.interest)}</TableCell>
-                          <TableCell className="text-right tabular-nums font-medium">{formatCurrency(row.ending_balance)}</TableCell>
-                          <TableCell className="text-right tabular-nums text-muted-foreground">
-                            {row.interest_rate != null ? formatPercentage(row.interest_rate, 2) : "---"}
-                          </TableCell>
-                          <TableCell>
-                            {row.is_manual_override && <Badge variant="secondary" className="text-xs">Override</Badge>}
-                          </TableCell>
-                        </TableRow>
-                      ))}
+                      {dynamicAmortization.map((row, idx) => {
+                        const hasUnpaidCol = dynamicAmortization.some(r => r.unpaid_interest_end > 0.005);
+                        return (
+                          <TableRow
+                            key={idx}
+                            className={
+                              row.is_current
+                                ? "bg-blue-50 dark:bg-blue-950/20"
+                                : !row.is_actual && !row.is_current
+                                ? "text-muted-foreground"
+                                : ""
+                            }
+                          >
+                            <TableCell className="font-medium whitespace-nowrap">
+                              {getPeriodShortLabel(row.period_year, row.period_month)}
+                              {row.is_current && <Badge variant="outline" className="ml-2 text-xs">Current</Badge>}
+                              {row.is_actual && row.payment === 0 && (
+                                <Badge variant="secondary" className="ml-2 text-xs text-red-600">No Payment</Badge>
+                              )}
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums">{formatCurrency(row.beginning_balance)}</TableCell>
+                            <TableCell className="text-right tabular-nums text-amber-600">{formatCurrency(row.interest_accrued)}</TableCell>
+                            <TableCell className="text-right tabular-nums font-medium">
+                              {row.payment > 0 ? formatCurrency(row.payment) : "---"}
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums">
+                              {row.to_interest > 0 ? formatCurrency(row.to_interest) : "---"}
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums text-green-600">
+                              {row.to_principal > 0 ? formatCurrency(row.to_principal) : "---"}
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums font-medium">{formatCurrency(row.ending_balance)}</TableCell>
+                            {hasUnpaidCol && (
+                              <TableCell className={`text-right tabular-nums ${row.unpaid_interest_end > 0.005 ? "text-red-600 font-medium" : "text-muted-foreground"}`}>
+                                {row.unpaid_interest_end > 0.005 ? formatCurrency(row.unpaid_interest_end) : "---"}
+                              </TableCell>
+                            )}
+                            <TableCell className="text-right tabular-nums text-muted-foreground">
+                              {formatPercentage(row.interest_rate, 2)}
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
                       <TableRow className="font-semibold border-t-2">
                         <TableCell>Totals</TableCell>
                         <TableCell />
-                        <TableCell className="text-right tabular-nums">{formatCurrency(amortization.reduce((s: number, r: AnyRow) => s + r.payment, 0))}</TableCell>
-                        <TableCell className="text-right tabular-nums">{formatCurrency(totalPrincipal)}</TableCell>
-                        <TableCell className="text-right tabular-nums">{formatCurrency(totalInterest)}</TableCell>
-                        <TableCell colSpan={3} />
+                        <TableCell className="text-right tabular-nums text-amber-600">
+                          {formatCurrency(dynamicAmortization.reduce((s, r) => s + r.interest_accrued, 0))}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {formatCurrency(dynamicAmortization.reduce((s, r) => s + r.payment, 0))}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {formatCurrency(dynamicAmortization.reduce((s, r) => s + r.to_interest, 0))}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums text-green-600">
+                          {formatCurrency(dynamicAmortization.reduce((s, r) => s + r.to_principal, 0))}
+                        </TableCell>
+                        <TableCell colSpan={dynamicAmortization.some(r => r.unpaid_interest_end > 0.005) ? 3 : 2} />
                       </TableRow>
                     </TableBody>
                   </Table>
