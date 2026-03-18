@@ -349,15 +349,22 @@ export async function POST(request: Request) {
             0
           );
 
-          // Warn if class data is missing — exclude filter has no effect
+          // Only warn if there's NO class data at all for this account
+          // (real sync issue). If the account simply has no activity in the
+          // excluded classes, that's normal — not a warning.
           if (excludedStandalone === 0 && a.qbo_class_ids.length > 0) {
-            const acctLabel = accountNameMap[a.account_id] ?? a.account_id;
-            const classLabels = a.qbo_class_ids
-              .map((cid) => classNameMap[cid] ?? cid)
-              .join(", ");
-            warnings.push(
-              `${profile.name}: No class-level GL data found for "${acctLabel}" — exclude filter for class(es) [${classLabels}] had no effect. Sync P&L by Class from QBO.`
+            const hasAnyClassData = Object.keys(currentClassMap).some(
+              (key) => key.startsWith(`${a.account_id}__`)
             );
+            if (!hasAnyClassData) {
+              const acctLabel = accountNameMap[a.account_id] ?? a.account_id;
+              const classLabels = a.qbo_class_ids
+                .map((cid) => classNameMap[cid] ?? cid)
+                .join(", ");
+              warnings.push(
+                `${profile.name}: No class-level GL data found for "${acctLabel}" — exclude filter for class(es) [${classLabels}] had no effect. Sync P&L by Class from QBO.`
+              );
+            }
           }
 
           netChange = totalStandalone - excludedStandalone;
