@@ -169,7 +169,7 @@ export function DebtReconciliationTab({ entityId }: DebtReconciliationTabProps) 
     setGlBalances(balances);
 
     // 4. Fetch debt instruments and compute subledger balances per group
-    // current_portion and long_term_portion are v2 columns not in base types — use select("*")
+    // Subledger = original_amount + actual transactions through end of selected period
     const { data: instrData } = await supabase
       .from("debt_instruments")
       .select("*")
@@ -177,21 +177,43 @@ export function DebtReconciliationTab({ entityId }: DebtReconciliationTabProps) 
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const instruments = (instrData ?? []) as any[];
-
-    // Fetch amortization ending balances for the period
     const instrIds = instruments.map((i) => i.id);
-    let amortMap: Record<string, number> = {};
-    if (instrIds.length > 0) {
-      const { data: amortData } = await supabase
-        .from("debt_amortization")
-        .select("debt_instrument_id, ending_balance")
-        .in("debt_instrument_id", instrIds)
-        .eq("period_year", periodYear)
-        .eq("period_month", periodMonth);
 
-      for (const row of (amortData ?? []) as { debt_instrument_id: string; ending_balance: number }[]) {
-        amortMap[row.debt_instrument_id] = Number(row.ending_balance ?? 0);
+    // Fetch ALL transactions for these instruments up through end of selected period
+    const periodEnd = `${periodYear}-${String(periodMonth).padStart(2, "0")}-31`;
+    let txnsByInstrument: Record<string, { transaction_type: string; amount: number; to_principal: number }[]> = {};
+
+    if (instrIds.length > 0) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: txnData } = await (supabase as any)
+        .from("debt_transactions")
+        .select("debt_instrument_id, transaction_type, amount, to_principal")
+        .in("debt_instrument_id", instrIds)
+        .lte("effective_date", periodEnd)
+        .order("effective_date", { ascending: true })
+        .order("created_at", { ascending: true });
+
+      for (const txn of (txnData ?? []) as { debt_instrument_id: string; transaction_type: string; amount: number; to_principal: number }[]) {
+        if (!txnsByInstrument[txn.debt_instrument_id]) txnsByInstrument[txn.debt_instrument_id] = [];
+        txnsByInstrument[txn.debt_instrument_id].push(txn);
       }
+    }
+
+    // Replay transactions from original_amount to get ending balance per instrument
+    function computeEndingBalance(instr: { id: string; original_amount: number }) {
+      let balance = instr.original_amount ?? 0;
+      const txns = txnsByInstrument[instr.id] ?? [];
+      for (const txn of txns) {
+        if (txn.transaction_type === "advance") {
+          balance += Math.abs(txn.amount);
+        } else if (txn.transaction_type === "principal_payment" || txn.transaction_type === "vehicle_payoff") {
+          balance -= Math.abs(txn.to_principal ?? txn.amount);
+        } else if (txn.transaction_type === "payoff") {
+          balance = 0;
+        }
+        balance = Math.max(0, balance);
+      }
+      return Math.round(balance * 100) / 100;
     }
 
     // Build subledger totals per group
@@ -205,7 +227,7 @@ export function DebtReconciliationTab({ entityId }: DebtReconciliationTabProps) 
     for (const instr of instruments) {
       if (instr.status === "inactive") continue;
 
-      const endingBal = amortMap[instr.id] ?? instr.current_draw ?? instr.original_amount ?? 0;
+      const endingBal = computeEndingBalance(instr);
       const instrWithBal = { ...instr, ending_balance: endingBal };
 
       // Determine which group this instrument belongs to based on debt type
@@ -213,12 +235,8 @@ export function DebtReconciliationTab({ entityId }: DebtReconciliationTabProps) 
         ? "loc_payable"
         : "notes_payable_long_term";
 
-      // Use the total outstanding balance at end of month (from amortization schedule)
       grouped[groupKey].total += endingBal;
       grouped[groupKey].instruments.push(instrWithBal);
-
-      // Interest payable: use period interest from amortization
-      // (handled separately below)
 
       // Track unlinked instruments (no liability_account_id set)
       if (!instr.liability_account_id && instr.status === "active") {
@@ -226,7 +244,7 @@ export function DebtReconciliationTab({ entityId }: DebtReconciliationTabProps) 
       }
     }
 
-    // Fetch period interest for interest_payable group
+    // Interest payable: use period interest from amortization (theoretical accrual)
     if (instrIds.length > 0) {
       const { data: amortInterest } = await supabase
         .from("debt_amortization")

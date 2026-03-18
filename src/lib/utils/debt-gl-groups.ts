@@ -9,8 +9,8 @@ export interface DebtGLAccountGroup {
  * Each group maps to one or more entity-level GL accounts
  * configured in debt_reconciliation_accounts.
  *
- * Subledger balances = total outstanding balance at end of month
- * from the debt amortization schedule (no current/LT split).
+ * Subledger balances = original_amount + actual transactions through
+ * end of period (NOT amortization schedule assumptions).
  */
 export const DEBT_GL_ACCOUNT_GROUPS: DebtGLAccountGroup[] = [
   {
