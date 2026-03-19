@@ -43,7 +43,7 @@ interface AccruedInterestRow {
   annualRate: number;
   dayCountConvention: string;
   dailyRate: number;
-  balanceAtYearEnd: number;
+  beginningBalance: number;
 
   // For pro-rata: if start_date is in the report year, accrued from start through 12/31
   accruedDays: number;
@@ -214,20 +214,6 @@ export default function AccruedInterestPage() {
         ? Number(instr.original_amount ?? 0)
         : Math.round(balancePreDecMap[instr.id] * 100) / 100;
 
-      // Replay December transactions to get the year-end balance for display
-      let balanceAtYearEnd = balanceEnteringDec;
-      for (const txn of decTxnsMap[instr.id] || []) {
-        if (txn.transaction_type === "advance") {
-          balanceAtYearEnd += Math.abs(txn.amount);
-        } else if (txn.transaction_type === "principal_payment" || txn.transaction_type === "vehicle_payoff") {
-          balanceAtYearEnd -= Math.abs(txn.to_principal ?? txn.amount);
-        } else if (txn.transaction_type === "payoff") {
-          balanceAtYearEnd = 0;
-        }
-        balanceAtYearEnd = Math.max(0, balanceAtYearEnd);
-      }
-      balanceAtYearEnd = Math.round(balanceAtYearEnd * 100) / 100;
-
       // Accrued interest: use beginning-of-period balance for the full accrual
       // period, consistent with the amortization schedule (interest accrues on the
       // opening balance; payments reduce principal but don't change the period's
@@ -238,7 +224,7 @@ export default function AccruedInterestPage() {
       ) / 100;
 
       // Skip instruments with no balance and no accrual
-      if (balanceAtYearEnd <= 0 && accruedInterest <= 0) continue;
+      if (balanceEnteringDec <= 0 && accruedInterest <= 0) continue;
 
       result.push({
         instrumentId: instr.id,
@@ -251,7 +237,7 @@ export default function AccruedInterestPage() {
         annualRate,
         dayCountConvention: convention,
         dailyRate,
-        balanceAtYearEnd,
+        beginningBalance: balanceEnteringDec,
         accruedDays,
         accruedInterest,
         status: instr.status,
@@ -267,7 +253,7 @@ export default function AccruedInterestPage() {
   }, [loadData]);
 
   const totalAccruedInterest = rows.reduce((s, r) => s + r.accruedInterest, 0);
-  const totalBalance = rows.reduce((s, r) => s + r.balanceAtYearEnd, 0);
+  const totalBalance = rows.reduce((s, r) => s + r.beginningBalance, 0);
 
   // ── Excel Export ──────────────────────────────────────────────────────
   function exportToExcel() {
@@ -282,7 +268,7 @@ export default function AccruedInterestPage() {
       "Annual Rate": r.annualRate,
       "Day Count": DAY_COUNT_LABELS[r.dayCountConvention] ?? r.dayCountConvention,
       "Daily Rate": r.dailyRate,
-      [`Balance 12/31/${year}`]: r.balanceAtYearEnd,
+      ["Beginning Balance"]: r.beginningBalance,
       "Accrued Days": r.accruedDays,
       [`Accrued Interest 12/31/${year}`]: r.accruedInterest,
     }));
@@ -297,7 +283,7 @@ export default function AccruedInterestPage() {
       "Annual Rate": 0,
       "Day Count": "",
       "Daily Rate": 0,
-      [`Balance 12/31/${year}`]: totalBalance,
+      ["Beginning Balance"]: totalBalance,
       "Accrued Days": 0,
       [`Accrued Interest 12/31/${year}`]: totalAccruedInterest,
     });
@@ -375,7 +361,7 @@ export default function AccruedInterestPage() {
         "Annual Rate",
         "Day Count",
         "Daily Rate",
-        `Balance\n12/31/${year}`,
+        "Beginning\nBalance",
         "Accrued\nDays",
         `Accrued Interest\n12/31/${year}`,
       ],
@@ -389,7 +375,7 @@ export default function AccruedInterestPage() {
       formatPct(r.annualRate),
       DAY_COUNT_LABELS[r.dayCountConvention] ?? r.dayCountConvention,
       formatDailyRate(r.dailyRate),
-      formatCurrency(r.balanceAtYearEnd),
+      formatCurrency(r.beginningBalance),
       String(r.accruedDays),
       formatCurrency(r.accruedInterest),
     ]);
@@ -512,7 +498,7 @@ export default function AccruedInterestPage() {
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">
-              Total Outstanding Balance
+              Total Beginning Balance
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -559,7 +545,7 @@ export default function AccruedInterestPage() {
                     <TableHead>Day Count</TableHead>
                     <TableHead className="text-right">Daily Rate</TableHead>
                     <TableHead className="text-right">
-                      Balance 12/31/{year}
+                      Beginning Balance
                     </TableHead>
                     <TableHead className="text-center">
                       Accrued Days
@@ -593,7 +579,7 @@ export default function AccruedInterestPage() {
                         {formatDailyRate(r.dailyRate)}
                       </TableCell>
                       <TableCell className="text-right">
-                        {formatCurrency(r.balanceAtYearEnd)}
+                        {formatCurrency(r.beginningBalance)}
                       </TableCell>
                       <TableCell className="text-center">
                         {r.accruedDays}
