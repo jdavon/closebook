@@ -327,11 +327,11 @@ export function DebtReconciliationTab({ entityId }: DebtReconciliationTabProps) 
         let balance = isLOC ? (instr.current_draw ?? instr.original_amount) : instr.original_amount;
         let unpaidInt = 0;
 
-        // Parse start date
-        const sd = new Date(instr.start_date);
-        let cy = sd.getFullYear();
-        let cm = sd.getMonth() + 1;
-        const startDay = sd.getDate();
+        // Parse start date (string split to avoid UTC timezone shift)
+        const [sdY, sdM, sdD] = (instr.start_date as string).split("T")[0].split("-").map(Number);
+        let cy = sdY;
+        let cm = sdM;
+        const startDay = sdD;
 
         // Scheduled payment for projections
         let scheduledPayment = instr.payment_amount ?? 0;
