@@ -1046,7 +1046,7 @@ export default function RevenueProjectionPage() {
 
         {/* Accruals Tab — JE Schedule */}
         <TabsContent value="accruals" className="space-y-6">
-          <AccrualSchedule monthlyData={data.monthlyData} />
+          <AccrualSchedule monthlyData={data.monthlyData} invoices={data.closedInvoices} />
         </TabsContent>
       </Tabs>
     </div>
@@ -1055,8 +1055,126 @@ export default function RevenueProjectionPage() {
 
 // ─── Sub-components ─────────────────────────────────────────────────────────
 
-function AccrualSchedule({ monthlyData }: { monthlyData: MonthlyRevenue[] }) {
+function getMonthKeyLocal(dateStr: string | null | undefined): string {
+  if (!dateStr) return "";
+  // Parse ISO "2026-03-01" or "2026-03-01T..."
+  const iso = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return `${iso[1]}-${iso[2]}`;
+  // Parse US slash "03/01/2026"
+  const slash = dateStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (slash) return `${slash[3]}-${slash[1].padStart(2, "0")}`;
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return "";
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+/** Client-side pro-rata allocation matching server logic */
+function allocateToMonthsLocal(
+  startStr: string | null | undefined,
+  endStr: string | null | undefined,
+  amount: number,
+  fallbackStr: string | null | undefined,
+): Map<string, number> {
+  const result = new Map<string, number>();
+  if (amount === 0) return result;
+
+  const parse = (s: string) => {
+    const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (iso) return { y: +iso[1], m: +iso[2] - 1, d: +iso[3] };
+    const slash = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    if (slash) return { y: +slash[3], m: +slash[1] - 1, d: +slash[2] };
+    return null;
+  };
+
+  const sp = startStr ? parse(startStr) : null;
+  const ep = endStr ? parse(endStr) : null;
+  if (!sp || !ep) {
+    const mk = getMonthKeyLocal(fallbackStr);
+    if (mk) result.set(mk, amount);
+    return result;
+  }
+
+  const MS = 86400000;
+  const startMs = Date.UTC(sp.y, sp.m, sp.d);
+  const endMs = Date.UTC(ep.y, ep.m, ep.d);
+  if (endMs < startMs) {
+    const mk = getMonthKeyLocal(fallbackStr);
+    if (mk) result.set(mk, amount);
+    return result;
+  }
+
+  const totalDays = (endMs - startMs) / MS + 1;
+  const dailyRate = amount / totalDays;
+  let allocated = 0;
+  let cY = sp.y, cM = sp.m;
+
+  while (cY < ep.y || (cY === ep.y && cM <= ep.m)) {
+    const mStart = Date.UTC(cY, cM, 1);
+    const mEnd = Date.UTC(cY, cM + 1, 0);
+    const oStart = Math.max(startMs, mStart);
+    const oEnd = Math.min(endMs, mEnd);
+    const days = oEnd >= oStart ? (oEnd - oStart) / MS + 1 : 0;
+    if (days > 0) {
+      const mk = `${cY}-${String(cM + 1).padStart(2, "0")}`;
+      const isLast = cY === ep.y && cM === ep.m;
+      const amt = isLast
+        ? Math.round((amount - allocated) * 100) / 100
+        : Math.round(dailyRate * days * 100) / 100;
+      result.set(mk, amt);
+      if (!isLast) allocated += amt;
+    }
+    cM++;
+    if (cM > 11) { cM = 0; cY++; }
+  }
+  return result;
+}
+
+interface InvoiceMonthDetail {
+  invoiceId: string;
+  invoiceNumber: string;
+  customer: string;
+  orderDescription: string;
+  invoiceDate: string;
+  billingStartDate: string;
+  billingEndDate: string;
+  subTotal: number;
+  billedInMonth: number;
+  earnedInMonth: number;
+  diff: number; // positive = accrual, negative = deferral
+}
+
+function getInvoiceDetailsForMonth(month: string, invoices: ClosedInvoice[]): InvoiceMonthDetail[] {
+  const details: InvoiceMonthDetail[] = [];
+  for (const inv of invoices) {
+    const billedMonth = getMonthKeyLocal(inv.invoiceDate);
+    const billedInMonth = billedMonth === month ? inv.subTotal : 0;
+    const earnedMap = allocateToMonthsLocal(
+      inv.billingStartDate, inv.billingEndDate, inv.subTotal, inv.invoiceDate,
+    );
+    const earnedInMonth = earnedMap.get(month) ?? 0;
+    // Only include if this invoice touches this month AND has a mismatch
+    if ((billedInMonth > 0 || earnedInMonth > 0) && Math.abs(earnedInMonth - billedInMonth) > 0.01) {
+      details.push({
+        invoiceId: inv.invoiceId,
+        invoiceNumber: inv.invoiceNumber,
+        customer: inv.customer,
+        orderDescription: inv.orderDescription || inv.orderNumber,
+        invoiceDate: inv.invoiceDate,
+        billingStartDate: inv.billingStartDate,
+        billingEndDate: inv.billingEndDate,
+        subTotal: inv.subTotal,
+        billedInMonth,
+        earnedInMonth,
+        diff: Math.round((earnedInMonth - billedInMonth) * 100) / 100,
+      });
+    }
+  }
+  return details.sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff));
+}
+
+function AccrualSchedule({ monthlyData, invoices }: { monthlyData: MonthlyRevenue[]; invoices: ClosedInvoice[] }) {
   const activeMonths = monthlyData.filter((m) => m.billed > 0 || m.earned > 0);
+  const [expandedMonth, setExpandedMonth] = useState<string | null>(null);
 
   const totals = activeMonths.reduce(
     (acc, m) => ({
@@ -1068,6 +1186,11 @@ function AccrualSchedule({ monthlyData }: { monthlyData: MonthlyRevenue[] }) {
     { billed: 0, earned: 0, accrued: 0, deferred: 0 },
   );
 
+  const invoiceDetails = useMemo(() => {
+    if (!expandedMonth) return [];
+    return getInvoiceDetailsForMonth(expandedMonth, invoices);
+  }, [expandedMonth, invoices]);
+
   return (
     <>
       {/* Monthly Summary Table */}
@@ -1075,7 +1198,7 @@ function AccrualSchedule({ monthlyData }: { monthlyData: MonthlyRevenue[] }) {
         <CardHeader>
           <CardTitle>Accrual & Deferral Schedule</CardTitle>
           <CardDescription>
-            Monthly earned vs billed revenue — use for QuickBooks journal entries
+            Monthly earned vs billed revenue — click a month to see invoice details
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -1088,6 +1211,7 @@ function AccrualSchedule({ monthlyData }: { monthlyData: MonthlyRevenue[] }) {
               <Table>
                 <TableHeader>
                   <TableRow>
+                    <TableHead className="w-8" />
                     <TableHead>Month</TableHead>
                     <TableHead className="text-right">Billed</TableHead>
                     <TableHead className="text-right">Earned</TableHead>
@@ -1100,42 +1224,141 @@ function AccrualSchedule({ monthlyData }: { monthlyData: MonthlyRevenue[] }) {
                 <TableBody>
                   {activeMonths.map((m) => {
                     const netAdj = m.accrued - m.deferred;
+                    const hasAdj = m.accrued > 0 || m.deferred > 0;
+                    const isExpanded = expandedMonth === m.month;
                     return (
-                      <TableRow key={m.month}>
-                        <TableCell className="font-medium">{m.label}</TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {formatCurrency(m.billed)}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {formatCurrency(m.earned)}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums text-teal-700">
-                          {m.accrued > 0 ? formatCurrency(m.accrued) : "—"}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums text-amber-700">
-                          {m.deferred > 0 ? formatCurrency(m.deferred) : "—"}
-                        </TableCell>
-                        <TableCell className={`text-right tabular-nums font-medium ${netAdj > 0 ? "text-teal-700" : netAdj < 0 ? "text-amber-700" : ""}`}>
-                          {netAdj === 0 ? "—" : formatCurrency(netAdj)}
-                        </TableCell>
-                        <TableCell>
-                          {m.accrued > 0 && m.deferred === 0 && (
-                            <Badge className="bg-teal-100 text-teal-800 hover:bg-teal-100">Accrual</Badge>
-                          )}
-                          {m.deferred > 0 && m.accrued === 0 && (
-                            <Badge className="bg-amber-100 text-amber-800 hover:bg-amber-100">Deferral</Badge>
-                          )}
-                          {m.accrued > 0 && m.deferred > 0 && (
-                            <Badge variant="outline">Mixed</Badge>
-                          )}
-                          {m.accrued === 0 && m.deferred === 0 && (
-                            <Badge variant="secondary">Matched</Badge>
-                          )}
-                        </TableCell>
-                      </TableRow>
+                      <React.Fragment key={m.month}>
+                        <TableRow
+                          className={hasAdj ? "hover:bg-muted/50 cursor-pointer" : ""}
+                          onClick={() => hasAdj && setExpandedMonth(isExpanded ? null : m.month)}
+                        >
+                          <TableCell className="w-8 px-2">
+                            {hasAdj && (
+                              <ChevronRight
+                                className={`h-4 w-4 text-muted-foreground transition-transform ${isExpanded ? "rotate-90" : ""}`}
+                              />
+                            )}
+                          </TableCell>
+                          <TableCell className="font-medium">{m.label}</TableCell>
+                          <TableCell className="text-right tabular-nums">
+                            {formatCurrency(m.billed)}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums">
+                            {formatCurrency(m.earned)}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums text-teal-700">
+                            {m.accrued > 0 ? formatCurrency(m.accrued) : "—"}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums text-amber-700">
+                            {m.deferred > 0 ? formatCurrency(m.deferred) : "—"}
+                          </TableCell>
+                          <TableCell className={`text-right tabular-nums font-medium ${netAdj > 0 ? "text-teal-700" : netAdj < 0 ? "text-amber-700" : ""}`}>
+                            {netAdj === 0 ? "—" : formatCurrency(netAdj)}
+                          </TableCell>
+                          <TableCell>
+                            {m.accrued > 0 && m.deferred === 0 && (
+                              <Badge className="bg-teal-100 text-teal-800 hover:bg-teal-100">Accrual</Badge>
+                            )}
+                            {m.deferred > 0 && m.accrued === 0 && (
+                              <Badge className="bg-amber-100 text-amber-800 hover:bg-amber-100">Deferral</Badge>
+                            )}
+                            {m.accrued > 0 && m.deferred > 0 && (
+                              <Badge variant="outline">Mixed</Badge>
+                            )}
+                            {m.accrued === 0 && m.deferred === 0 && (
+                              <Badge variant="secondary">Matched</Badge>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                        {/* Expanded invoice details */}
+                        {isExpanded && invoiceDetails.length > 0 && (
+                          <TableRow>
+                            <TableCell colSpan={8} className="p-0">
+                              <div className="bg-muted/30 border-y px-6 py-3">
+                                <p className="text-sm font-medium mb-2 text-muted-foreground">
+                                  {invoiceDetails.length} invoice{invoiceDetails.length !== 1 ? "s" : ""} with timing differences in {m.label}
+                                </p>
+                                <Table>
+                                  <TableHeader>
+                                    <TableRow>
+                                      <TableHead>Invoice #</TableHead>
+                                      <TableHead>Customer</TableHead>
+                                      <TableHead>Description</TableHead>
+                                      <TableHead className="whitespace-nowrap">Billing Period</TableHead>
+                                      <TableHead className="text-right">Invoice Total</TableHead>
+                                      <TableHead className="text-right">Billed in Mo.</TableHead>
+                                      <TableHead className="text-right">Earned in Mo.</TableHead>
+                                      <TableHead className="text-right">Adjustment</TableHead>
+                                      <TableHead>Type</TableHead>
+                                    </TableRow>
+                                  </TableHeader>
+                                  <TableBody>
+                                    {invoiceDetails.map((d) => (
+                                      <TableRow key={d.invoiceId}>
+                                        <TableCell className="font-medium">{d.invoiceNumber}</TableCell>
+                                        <TableCell className="max-w-[140px] truncate">{d.customer}</TableCell>
+                                        <TableCell className="max-w-[180px] truncate text-muted-foreground text-sm">
+                                          {d.orderDescription}
+                                        </TableCell>
+                                        <TableCell className="text-muted-foreground whitespace-nowrap text-xs">
+                                          {d.billingStartDate || d.billingEndDate
+                                            ? `${formatDate(d.billingStartDate)} – ${formatDate(d.billingEndDate)}`
+                                            : "—"}
+                                        </TableCell>
+                                        <TableCell className="text-right tabular-nums text-muted-foreground">
+                                          {formatCurrency(d.subTotal)}
+                                        </TableCell>
+                                        <TableCell className="text-right tabular-nums">
+                                          {d.billedInMonth > 0 ? formatCurrency(d.billedInMonth) : "—"}
+                                        </TableCell>
+                                        <TableCell className="text-right tabular-nums">
+                                          {d.earnedInMonth > 0 ? formatCurrency(d.earnedInMonth) : "—"}
+                                        </TableCell>
+                                        <TableCell className={`text-right tabular-nums font-medium ${d.diff > 0 ? "text-teal-700" : "text-amber-700"}`}>
+                                          {formatCurrency(d.diff)}
+                                        </TableCell>
+                                        <TableCell>
+                                          {d.diff > 0 ? (
+                                            <Badge className="bg-teal-100 text-teal-800 hover:bg-teal-100 text-[10px] px-1.5">Accrual</Badge>
+                                          ) : (
+                                            <Badge className="bg-amber-100 text-amber-800 hover:bg-amber-100 text-[10px] px-1.5">Deferral</Badge>
+                                          )}
+                                        </TableCell>
+                                      </TableRow>
+                                    ))}
+                                    <TableRow className="border-t font-semibold">
+                                      <TableCell colSpan={5}>
+                                        Total ({invoiceDetails.length} invoices)
+                                      </TableCell>
+                                      <TableCell className="text-right tabular-nums">
+                                        {formatCurrency(invoiceDetails.reduce((s, d) => s + d.billedInMonth, 0))}
+                                      </TableCell>
+                                      <TableCell className="text-right tabular-nums">
+                                        {formatCurrency(invoiceDetails.reduce((s, d) => s + d.earnedInMonth, 0))}
+                                      </TableCell>
+                                      <TableCell className={`text-right tabular-nums ${invoiceDetails.reduce((s, d) => s + d.diff, 0) > 0 ? "text-teal-700" : "text-amber-700"}`}>
+                                        {formatCurrency(invoiceDetails.reduce((s, d) => s + d.diff, 0))}
+                                      </TableCell>
+                                      <TableCell />
+                                    </TableRow>
+                                  </TableBody>
+                                </Table>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        )}
+                        {isExpanded && invoiceDetails.length === 0 && (
+                          <TableRow>
+                            <TableCell colSpan={8} className="bg-muted/30 text-center text-sm text-muted-foreground py-4">
+                              No individual invoice timing differences found for this month.
+                            </TableCell>
+                          </TableRow>
+                        )}
+                      </React.Fragment>
                     );
                   })}
                   <TableRow className="border-t-2 font-semibold">
+                    <TableCell />
                     <TableCell>Total</TableCell>
                     <TableCell className="text-right tabular-nums">
                       {formatCurrency(totals.billed)}
