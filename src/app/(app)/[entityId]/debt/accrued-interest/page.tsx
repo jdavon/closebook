@@ -128,40 +128,35 @@ export default function AccruedInterestPage() {
 
     const instrIds = instruments.map((i: AnyRow) => i.id);
 
-    // Fetch December amortization for the selected year (gives us balance + interest)
-    const { data: decAmort } = await supabase
-      .from("debt_amortization")
-      .select("debt_instrument_id, beginning_balance, ending_balance, interest")
+    // Fetch all transactions through year-end to replay balances as of 12/31
+    const { data: txnData } = await supabase
+      .from("debt_transactions")
+      .select("debt_instrument_id, transaction_type, amount, to_principal, effective_date")
       .in("debt_instrument_id", instrIds)
-      .eq("period_year", year)
-      .eq("period_month", 12);
+      .lte("effective_date", `${year}-12-31`)
+      .order("effective_date", { ascending: true })
+      .order("created_at", { ascending: true });
 
-    const decMap: Record<string, AnyRow> = {};
-    if (decAmort) {
-      for (const row of decAmort) {
-        decMap[row.debt_instrument_id] = row;
-      }
+    // Replay transactions per instrument to get balance as of 12/31
+    const balanceAsOfMap: Record<string, number> = {};
+    const origAmountMap: Record<string, number> = {};
+    for (const instr of instruments as AnyRow[]) {
+      origAmountMap[instr.id] = Number(instr.original_amount ?? 0);
     }
-
-    // Also fetch November amortization to get ending balance going into December
-    // (in case December amort doesn't exist, we need to find the last available period)
-    const { data: allAmort } = await supabase
-      .from("debt_amortization")
-      .select("debt_instrument_id, period_year, period_month, ending_balance")
-      .in("debt_instrument_id", instrIds)
-      .lte("period_year", year)
-      .order("period_year", { ascending: false })
-      .order("period_month", { ascending: false });
-
-    // Build a map of last known balance per instrument as of year-end
-    const lastBalanceMap: Record<string, number> = {};
-    if (allAmort) {
-      for (const row of allAmort as AnyRow[]) {
-        const id = row.debt_instrument_id;
-        if (!(id in lastBalanceMap)) {
-          // First row is the most recent period (ordered desc)
-          lastBalanceMap[id] = Number(row.ending_balance);
+    if (txnData) {
+      for (const txn of txnData as AnyRow[]) {
+        const id = txn.debt_instrument_id;
+        if (!(id in balanceAsOfMap)) {
+          balanceAsOfMap[id] = origAmountMap[id] ?? 0;
         }
+        if (txn.transaction_type === "advance") {
+          balanceAsOfMap[id] += Math.abs(txn.amount);
+        } else if (txn.transaction_type === "principal_payment" || txn.transaction_type === "vehicle_payoff") {
+          balanceAsOfMap[id] -= Math.abs(txn.to_principal ?? txn.amount);
+        } else if (txn.transaction_type === "payoff") {
+          balanceAsOfMap[id] = 0;
+        }
+        balanceAsOfMap[id] = Math.max(0, balanceAsOfMap[id]);
       }
     }
 
@@ -173,41 +168,22 @@ export default function AccruedInterestPage() {
       .lte("effective_date", `${year}-12-31`)
       .order("effective_date", { ascending: false });
 
-    // Build rate at origination map (first rate, or instrument base rate)
-    const originRateMap: Record<string, number> = {};
-    if (rateHistory) {
-      for (const r of rateHistory as AnyRow[]) {
-        // Last one processed (earliest date since sorted desc) wins as origination rate
-        originRateMap[r.debt_instrument_id] = Number(r.interest_rate);
-      }
-    }
-
     // Build accrued interest rows
     const result: AccruedInterestRow[] = [];
 
     for (const instr of instruments as AnyRow[]) {
-      // Skip paid-off instruments that were paid off before this year
-      if (instr.status === "paid_off" || instr.status === "inactive") {
-        // Check if they had any balance in the selected year
-        const lastBal = lastBalanceMap[instr.id];
-        if (lastBal == null || lastBal <= 0) continue;
-      }
-
       const convention = instr.day_count_convention || "30/360";
       const annualRate = Number(instr.interest_rate ?? 0);
       const denominator = getDayCountDenominator(convention, year);
       const dailyRate = annualRate / denominator;
 
-      const dec = decMap[instr.id];
-      const lastBal = lastBalanceMap[instr.id];
+      // Balance as of 12/31: replayed from original_amount + transactions through year-end
+      const balanceAtYearEnd = Math.round(
+        (balanceAsOfMap[instr.id] ?? Number(instr.original_amount ?? 0)) * 100
+      ) / 100;
 
-      // Balance at year-end: use the instrument's actual current_draw (derived from
-      // real transactions) as the authoritative balance. The amortization schedule's
-      // ending_balance is a projection that may include payments not yet made.
-      const balanceAtYearEnd = Number(instr.current_draw ?? instr.original_amount);
-
-      // December interest from amortization schedule
-      const decemberInterest = dec ? Number(dec.interest) : 0;
+      // Skip instruments with no balance at year-end
+      if (balanceAtYearEnd <= 0) continue;
 
       // Calculate accrued interest at year-end
       // This is the interest accrued in December based on the ending balance
