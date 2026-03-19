@@ -84,6 +84,14 @@ export interface PipelineQuote {
   warehouse: string;
 }
 
+export interface MonthAllocation {
+  month: string; // "2026-01"
+  label: string; // "Jan 26"
+  amount: number;
+  percentage: number;
+  days: number;
+}
+
 export interface ClosedInvoice {
   invoiceId: string;
   invoiceNumber: string;
@@ -99,7 +107,8 @@ export interface ClosedInvoice {
   subTotal: number;
   tax: number;
   equipmentType: string;
-  month: string; // month key the revenue is assigned to (based on billing date)
+  month: string; // primary month key (start month for rental_period, group date otherwise)
+  allocations?: MonthAllocation[]; // per-month breakdown (rental_period mode only)
 }
 
 export interface EquipmentBreakdown {
@@ -196,9 +205,14 @@ function generateMonthKeys(startMonthsAgo: number, endMonthsAhead: number): stri
   return keys;
 }
 
+interface AllocationEntry {
+  amount: number;
+  days: number;
+}
+
 /**
  * Pro-rata allocate an amount across months based on rental period days.
- * Returns a Map of monthKey → allocated amount.
+ * Returns a Map of monthKey → { amount, days }.
  * If dates are missing/invalid, falls back to a single-month assignment using fallbackDate.
  */
 function allocateToMonths(
@@ -206,8 +220,8 @@ function allocateToMonths(
   endDateStr: string | null | undefined,
   amount: number,
   fallbackDateStr: string | null | undefined,
-): Map<string, number> {
-  const result = new Map<string, number>();
+): Map<string, AllocationEntry> {
+  const result = new Map<string, AllocationEntry>();
   if (amount === 0) return result;
 
   const startDate = startDateStr ? new Date(startDateStr) : null;
@@ -216,7 +230,7 @@ function allocateToMonths(
   // If either date is missing/invalid, fall back to single-month assignment
   if (!startDate || !endDate || isNaN(startDate.getTime()) || isNaN(endDate.getTime()) || endDate < startDate) {
     const mk = getMonthKey(fallbackDateStr);
-    if (mk) result.set(mk, amount);
+    if (mk) result.set(mk, { amount, days: 1 });
     return result;
   }
 
@@ -224,7 +238,7 @@ function allocateToMonths(
   const totalDays = Math.round((endDate.getTime() - startDate.getTime()) / 86400000) + 1;
   if (totalDays <= 0) {
     const mk = getMonthKey(fallbackDateStr);
-    if (mk) result.set(mk, amount);
+    if (mk) result.set(mk, { amount, days: 1 });
     return result;
   }
 
@@ -248,10 +262,10 @@ function allocateToMonths(
       const mk = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}`;
       // For the last month in the range, assign remainder to avoid rounding drift
       if (cursor.getTime() === lastMonthStart.getTime()) {
-        result.set(mk, Math.round((amount - allocated) * 100) / 100);
+        result.set(mk, { amount: Math.round((amount - allocated) * 100) / 100, days: daysInMonth });
       } else {
         const monthAmount = Math.round(dailyRate * daysInMonth * 100) / 100;
-        result.set(mk, monthAmount);
+        result.set(mk, { amount: monthAmount, days: daysInMonth });
         allocated += monthAmount;
       }
     }
@@ -345,8 +359,8 @@ export function processRevenueData(
         inv.BillingStartDate, inv.BillingEndDate,
         toNum(inv.InvoiceSubTotal), inv.InvoiceDate,
       );
-      for (const [mk, amt] of allocations) {
-        if (monthMap.has(mk)) monthMap.get(mk)!.closed += amt;
+      for (const [mk, entry] of allocations) {
+        if (monthMap.has(mk)) monthMap.get(mk)!.closed += entry.amount;
       }
     } else {
       const mk = getMonthKey(getInvoiceGroupDate(inv));
@@ -363,8 +377,8 @@ export function processRevenueData(
         inv.BillingStartDate, inv.BillingEndDate,
         toNum(inv.InvoiceSubTotal), inv.InvoiceDate,
       );
-      for (const [mk, amt] of allocations) {
-        if (monthMap.has(mk)) monthMap.get(mk)!.pending += amt;
+      for (const [mk, entry] of allocations) {
+        if (monthMap.has(mk)) monthMap.get(mk)!.pending += entry.amount;
       }
     } else {
       const mk = getMonthKey(getInvoiceGroupDate(inv));
@@ -462,9 +476,9 @@ export function processRevenueData(
         inv.BillingStartDate, inv.BillingEndDate,
         toNum(inv.InvoiceSubTotal), inv.InvoiceDate,
       );
-      for (const [mk, amt] of allocations) {
+      for (const [mk, entry] of allocations) {
         if (mk.startsWith(String(currentYear))) {
-          equipTotals[type] = (equipTotals[type] || 0) + amt;
+          equipTotals[type] = (equipTotals[type] || 0) + entry.amount;
         }
       }
     } else {
@@ -504,13 +518,29 @@ export function processRevenueData(
   const closedInvoiceRows: ClosedInvoice[] = closedInvoices
     .map((inv) => {
       let month: string;
+      let allocations: MonthAllocation[] | undefined;
+
       if (useRentalPeriod) {
-        // Use billing start date as the primary month for display;
-        // fall back to invoice date if missing
         month = getMonthKey(inv.BillingStartDate) || getMonthKey(inv.InvoiceDate);
+        const allocationMap = allocateToMonths(
+          inv.BillingStartDate, inv.BillingEndDate,
+          toNum(inv.InvoiceSubTotal), inv.InvoiceDate,
+        );
+        // Only include allocations if the invoice spans multiple months
+        if (allocationMap.size > 1) {
+          const total = toNum(inv.InvoiceSubTotal);
+          allocations = Array.from(allocationMap.entries()).map(([mk, entry]) => ({
+            month: mk,
+            label: getMonthLabel(mk),
+            amount: entry.amount,
+            percentage: total > 0 ? Math.round((entry.amount / total) * 1000) / 10 : 0,
+            days: entry.days,
+          }));
+        }
       } else {
         month = getMonthKey(getInvoiceGroupDate(inv));
       }
+
       return {
         invoiceId: inv.InvoiceId,
         invoiceNumber: inv.InvoiceNumber,
@@ -529,6 +559,7 @@ export function processRevenueData(
           inv.OrderDescription || inv.InvoiceDescription || "",
         ),
         month,
+        allocations,
       };
     })
     .sort((a, b) => {

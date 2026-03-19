@@ -182,16 +182,25 @@ export default function RevenueProjectionPage() {
   }, [entityId]);
 
   // Derive unique months from invoices for filter dropdown
+  // In rental_period mode, include all months that any invoice spans via allocations
   const invoiceMonths = useMemo(() => {
     if (!data) return [];
     const monthSet = new Map<string, string>();
+    const toLabel = (mk: string) =>
+      mk.replace(/^(\d{4})-(\d{2})$/, (_, y, m) => {
+        const names = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+        return `${names[Number(m) - 1]} ${y}`;
+      });
     for (const inv of data.closedInvoices) {
-      if (inv.month && !monthSet.has(inv.month)) {
-        const label = inv.month.replace(/^(\d{4})-(\d{2})$/, (_, y, m) => {
-          const names = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-          return `${names[Number(m) - 1]} ${y}`;
-        });
-        monthSet.set(inv.month, label);
+      // Add all allocation months if present
+      if (inv.allocations) {
+        for (const alloc of inv.allocations) {
+          if (!monthSet.has(alloc.month)) {
+            monthSet.set(alloc.month, toLabel(alloc.month));
+          }
+        }
+      } else if (inv.month && !monthSet.has(inv.month)) {
+        monthSet.set(inv.month, toLabel(inv.month));
       }
     }
     return Array.from(monthSet.entries())
@@ -199,10 +208,17 @@ export default function RevenueProjectionPage() {
       .map(([key, label]) => ({ key, label }));
   }, [data]);
 
+  // Filter invoices — in rental_period mode, include invoices that have
+  // allocations touching the selected month
   const filteredInvoices = useMemo(() => {
     if (!data) return [];
     if (invoiceMonthFilter === "all") return data.closedInvoices;
-    return data.closedInvoices.filter((inv) => inv.month === invoiceMonthFilter);
+    return data.closedInvoices.filter((inv) => {
+      if (inv.allocations) {
+        return inv.allocations.some((a) => a.month === invoiceMonthFilter);
+      }
+      return inv.month === invoiceMonthFilter;
+    });
   }, [data, invoiceMonthFilter]);
 
 
@@ -554,120 +570,188 @@ export default function RevenueProjectionPage() {
                 </p>
               ) : (
                 <div className="overflow-x-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Invoice #</TableHead>
-                        <TableHead>Customer</TableHead>
-                        <TableHead>Order</TableHead>
-                        <TableHead>Invoice Date</TableHead>
-                        <TableHead>Billing Period</TableHead>
-                        <TableHead>Month</TableHead>
-                        <TableHead className="text-right">
-                          Revenue
-                        </TableHead>
-                        <TableHead className="text-right">
-                          Tax
-                        </TableHead>
-                        <TableHead className="text-right">
-                          Total
-                        </TableHead>
-                        <TableHead>Type</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {filteredInvoices.map((inv) => (
-                        <TableRow key={inv.invoiceId}>
-                          <TableCell className="font-medium">
-                            {inv.invoiceNumber}
-                          </TableCell>
-                          <TableCell>{inv.customer}</TableCell>
-                          <TableCell className="max-w-[180px] truncate">
-                            {inv.orderDescription || inv.orderNumber}
-                          </TableCell>
-                          <TableCell className="text-muted-foreground whitespace-nowrap">
-                            {formatDate(inv.invoiceDate)}
-                          </TableCell>
-                          <TableCell className="text-muted-foreground whitespace-nowrap text-xs">
-                            {inv.billingStartDate || inv.billingEndDate
-                              ? `${formatDate(inv.billingStartDate)} – ${formatDate(inv.billingEndDate)}`
-                              : "—"}
-                          </TableCell>
-                          <TableCell>
-                            <Badge variant="outline">
-                              {inv.month
-                                ? inv.month.replace(
-                                    /^(\d{4})-(\d{2})$/,
-                                    (_, y, m) => {
-                                      const months = [
-                                        "Jan",
-                                        "Feb",
-                                        "Mar",
-                                        "Apr",
-                                        "May",
-                                        "Jun",
-                                        "Jul",
-                                        "Aug",
-                                        "Sep",
-                                        "Oct",
-                                        "Nov",
-                                        "Dec",
-                                      ];
-                                      return `${months[Number(m) - 1]} ${y.slice(2)}`;
-                                    },
-                                  )
-                                : "—"}
-                            </Badge>
-                          </TableCell>
-                          <TableCell className="text-right font-medium tabular-nums">
-                            {formatCurrency(inv.subTotal)}
-                          </TableCell>
-                          <TableCell className="text-muted-foreground text-right tabular-nums">
-                            {formatCurrency(inv.tax)}
-                          </TableCell>
-                          <TableCell className="text-right tabular-nums">
-                            {formatCurrency(inv.grossTotal)}
-                          </TableCell>
-                          <TableCell>
-                            <Badge variant="secondary">
-                              {EQUIPMENT_TYPE_LABELS[inv.equipmentType] ||
-                                inv.equipmentType}
-                            </Badge>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                      <TableRow className="border-t-2 font-semibold">
-                        <TableCell colSpan={6}>
-                          Total ({filteredInvoices.length} invoices)
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {formatCurrency(
-                            filteredInvoices.reduce(
-                              (s, i) => s + i.subTotal,
-                              0,
-                            ),
-                          )}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {formatCurrency(
-                            filteredInvoices.reduce(
-                              (s, i) => s + i.tax,
-                              0,
-                            ),
-                          )}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {formatCurrency(
-                            filteredInvoices.reduce(
-                              (s, i) => s + i.grossTotal,
-                              0,
-                            ),
-                          )}
-                        </TableCell>
-                        <TableCell />
-                      </TableRow>
-                    </TableBody>
-                  </Table>
+                  {(() => {
+                    // Show allocation column when in rental_period mode and filtering a specific month
+                    const showAllocation = dateMode === "rental_period" && invoiceMonthFilter !== "all";
+                    // Helper to get the allocation for the filtered month
+                    const getAlloc = (inv: ClosedInvoice) =>
+                      inv.allocations?.find((a) => a.month === invoiceMonthFilter);
+                    return (
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Invoice #</TableHead>
+                            <TableHead>Customer</TableHead>
+                            <TableHead>Order</TableHead>
+                            <TableHead>Invoice Date</TableHead>
+                            <TableHead>Billing Period</TableHead>
+                            {showAllocation ? (
+                              <>
+                                <TableHead className="text-right">
+                                  Invoice Total
+                                </TableHead>
+                                <TableHead className="text-right">
+                                  Allocated
+                                </TableHead>
+                                <TableHead className="text-right">
+                                  %
+                                </TableHead>
+                                <TableHead className="text-right">
+                                  Days
+                                </TableHead>
+                              </>
+                            ) : (
+                              <>
+                                <TableHead>Month</TableHead>
+                                <TableHead className="text-right">
+                                  Revenue
+                                </TableHead>
+                                <TableHead className="text-right">
+                                  Tax
+                                </TableHead>
+                                <TableHead className="text-right">
+                                  Total
+                                </TableHead>
+                              </>
+                            )}
+                            <TableHead>Type</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {filteredInvoices.map((inv) => {
+                            const alloc = showAllocation ? getAlloc(inv) : null;
+                            return (
+                              <TableRow key={inv.invoiceId}>
+                                <TableCell className="font-medium">
+                                  {inv.invoiceNumber}
+                                </TableCell>
+                                <TableCell>{inv.customer}</TableCell>
+                                <TableCell className="max-w-[180px] truncate">
+                                  {inv.orderDescription || inv.orderNumber}
+                                </TableCell>
+                                <TableCell className="text-muted-foreground whitespace-nowrap">
+                                  {formatDate(inv.invoiceDate)}
+                                </TableCell>
+                                <TableCell className="text-muted-foreground whitespace-nowrap text-xs">
+                                  {inv.billingStartDate || inv.billingEndDate
+                                    ? `${formatDate(inv.billingStartDate)} – ${formatDate(inv.billingEndDate)}`
+                                    : "—"}
+                                </TableCell>
+                                {showAllocation ? (
+                                  <>
+                                    <TableCell className="text-muted-foreground text-right tabular-nums">
+                                      {formatCurrency(inv.subTotal)}
+                                    </TableCell>
+                                    <TableCell className="text-right font-medium tabular-nums">
+                                      {alloc ? formatCurrency(alloc.amount) : formatCurrency(inv.subTotal)}
+                                    </TableCell>
+                                    <TableCell className="text-right tabular-nums">
+                                      {alloc ? `${alloc.percentage}%` : "100%"}
+                                    </TableCell>
+                                    <TableCell className="text-muted-foreground text-right tabular-nums">
+                                      {alloc ? alloc.days : "—"}
+                                    </TableCell>
+                                  </>
+                                ) : (
+                                  <>
+                                    <TableCell>
+                                      <Badge variant="outline">
+                                        {inv.month
+                                          ? inv.month.replace(
+                                              /^(\d{4})-(\d{2})$/,
+                                              (_, y, m) => {
+                                                const months = [
+                                                  "Jan","Feb","Mar","Apr","May","Jun",
+                                                  "Jul","Aug","Sep","Oct","Nov","Dec",
+                                                ];
+                                                return `${months[Number(m) - 1]} ${y.slice(2)}`;
+                                              },
+                                            )
+                                          : "—"}
+                                      </Badge>
+                                      {dateMode === "rental_period" && inv.allocations && (
+                                        <div className="mt-1 flex flex-wrap gap-1">
+                                          {inv.allocations.map((a) => (
+                                            <span
+                                              key={a.month}
+                                              className="bg-muted text-muted-foreground rounded px-1.5 py-0.5 text-[10px]"
+                                            >
+                                              {a.label}: {a.percentage}%
+                                            </span>
+                                          ))}
+                                        </div>
+                                      )}
+                                    </TableCell>
+                                    <TableCell className="text-right font-medium tabular-nums">
+                                      {formatCurrency(inv.subTotal)}
+                                    </TableCell>
+                                    <TableCell className="text-muted-foreground text-right tabular-nums">
+                                      {formatCurrency(inv.tax)}
+                                    </TableCell>
+                                    <TableCell className="text-right tabular-nums">
+                                      {formatCurrency(inv.grossTotal)}
+                                    </TableCell>
+                                  </>
+                                )}
+                                <TableCell>
+                                  <Badge variant="secondary">
+                                    {EQUIPMENT_TYPE_LABELS[inv.equipmentType] ||
+                                      inv.equipmentType}
+                                  </Badge>
+                                </TableCell>
+                              </TableRow>
+                            );
+                          })}
+                          <TableRow className="border-t-2 font-semibold">
+                            {showAllocation ? (
+                              <>
+                                <TableCell colSpan={5}>
+                                  Total ({filteredInvoices.length} invoices)
+                                </TableCell>
+                                <TableCell className="text-muted-foreground text-right tabular-nums">
+                                  {formatCurrency(
+                                    filteredInvoices.reduce((s, i) => s + i.subTotal, 0),
+                                  )}
+                                </TableCell>
+                                <TableCell className="text-right tabular-nums">
+                                  {formatCurrency(
+                                    filteredInvoices.reduce((s, inv) => {
+                                      const alloc = getAlloc(inv);
+                                      return s + (alloc ? alloc.amount : inv.subTotal);
+                                    }, 0),
+                                  )}
+                                </TableCell>
+                                <TableCell />
+                                <TableCell />
+                              </>
+                            ) : (
+                              <>
+                                <TableCell colSpan={6}>
+                                  Total ({filteredInvoices.length} invoices)
+                                </TableCell>
+                                <TableCell className="text-right tabular-nums">
+                                  {formatCurrency(
+                                    filteredInvoices.reduce((s, i) => s + i.subTotal, 0),
+                                  )}
+                                </TableCell>
+                                <TableCell className="text-right tabular-nums">
+                                  {formatCurrency(
+                                    filteredInvoices.reduce((s, i) => s + i.tax, 0),
+                                  )}
+                                </TableCell>
+                                <TableCell className="text-right tabular-nums">
+                                  {formatCurrency(
+                                    filteredInvoices.reduce((s, i) => s + i.grossTotal, 0),
+                                  )}
+                                </TableCell>
+                              </>
+                            )}
+                            <TableCell />
+                          </TableRow>
+                        </TableBody>
+                      </Table>
+                    );
+                  })()}
                 </div>
               )}
             </CardContent>
