@@ -211,6 +211,22 @@ interface AllocationEntry {
 }
 
 /**
+ * Normalize a date string to a local-midnight Date, stripping any time/timezone
+ * component. This prevents off-by-one errors when RW returns ISO-UTC dates
+ * (e.g. "2026-03-01" parsed as UTC midnight shifts to Feb 28 in US timezones).
+ */
+function toLocalDate(dateStr: string): Date | null {
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return null;
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+
+/** Integer day difference between two local-midnight dates (b - a). */
+function dayDiff(a: Date, b: Date): number {
+  return Math.round((b.getTime() - a.getTime()) / 86400000);
+}
+
+/**
  * Pro-rata allocate an amount across months based on rental period days.
  * Returns a Map of monthKey → { amount, days }.
  * If dates are missing/invalid, falls back to a single-month assignment using fallbackDate.
@@ -224,18 +240,18 @@ function allocateToMonths(
   const result = new Map<string, AllocationEntry>();
   if (amount === 0) return result;
 
-  const startDate = startDateStr ? new Date(startDateStr) : null;
-  const endDate = endDateStr ? new Date(endDateStr) : null;
+  const startDate = startDateStr ? toLocalDate(startDateStr) : null;
+  const endDate = endDateStr ? toLocalDate(endDateStr) : null;
 
   // If either date is missing/invalid, fall back to single-month assignment
-  if (!startDate || !endDate || isNaN(startDate.getTime()) || isNaN(endDate.getTime()) || endDate < startDate) {
+  if (!startDate || !endDate || endDate < startDate) {
     const mk = getMonthKey(fallbackDateStr);
     if (mk) result.set(mk, { amount, days: 1 });
     return result;
   }
 
   // Calculate total rental days (inclusive)
-  const totalDays = Math.round((endDate.getTime() - startDate.getTime()) / 86400000) + 1;
+  const totalDays = dayDiff(startDate, endDate) + 1;
   if (totalDays <= 0) {
     const mk = getMonthKey(fallbackDateStr);
     if (mk) result.set(mk, { amount, days: 1 });
@@ -256,7 +272,7 @@ function allocateToMonths(
     // Overlap: max(rentalStart, monthStart) to min(rentalEnd, monthEnd)
     const overlapStart = startDate > monthStart ? startDate : monthStart;
     const overlapEnd = endDate < monthEnd ? endDate : monthEnd;
-    const daysInMonth = Math.round((overlapEnd.getTime() - overlapStart.getTime()) / 86400000) + 1;
+    const daysInMonth = overlapEnd >= overlapStart ? dayDiff(overlapStart, overlapEnd) + 1 : 0;
 
     if (daysInMonth > 0) {
       const mk = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}`;

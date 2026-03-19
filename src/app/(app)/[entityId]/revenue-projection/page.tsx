@@ -145,7 +145,7 @@ export default function RevenueProjectionPage() {
   const [data, setData] = useState<RevenueProjectionResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [dateMode, setDateMode] = useState<DateMode>("invoice_date");
+  const [dateMode, setDateMode] = useState<DateMode>("rental_period");
   const [invoiceMonthFilter, setInvoiceMonthFilter] = useState<string>("all");
 
   const fetchData = async (mode?: DateMode) => {
