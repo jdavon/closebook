@@ -175,3 +175,34 @@ export async function PATCH(request: NextRequest) {
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json(data);
 }
+
+/**
+ * DELETE /api/debt?id=...
+ * Delete a debt instrument and all related records.
+ */
+export async function DELETE(request: NextRequest) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const id = request.nextUrl.searchParams.get("id");
+  if (!id) {
+    return NextResponse.json({ error: "Missing required query param: id" }, { status: 400 });
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const sb = supabase as any;
+
+  // Delete child records first (amortization, transactions, rate history)
+  await sb.from("debt_amortization").delete().eq("debt_instrument_id", id);
+  await sb.from("debt_transactions").delete().eq("debt_instrument_id", id);
+  await sb.from("debt_rate_history").delete().eq("debt_instrument_id", id);
+
+  const { error } = await sb
+    .from("debt_instruments")
+    .delete()
+    .eq("id", id);
+
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  return NextResponse.json({ success: true });
+}

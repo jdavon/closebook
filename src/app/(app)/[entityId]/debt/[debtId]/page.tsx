@@ -36,6 +36,17 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
 import {
   ArrowLeft,
@@ -168,6 +179,24 @@ export default function DebtDetailPage() {
   const [whatIfRate, setWhatIfRate] = useState("");
   const [whatIfTerm, setWhatIfTerm] = useState("");
   const [showWhatIf, setShowWhatIf] = useState(false);
+
+  // Delete instrument
+  const [deleting, setDeleting] = useState(false);
+  async function handleDelete() {
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/debt?id=${debtId}`, { method: "DELETE" });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to delete");
+      }
+      toast.success("Instrument deleted");
+      router.push(`/${entityId}/debt`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Delete failed");
+      setDeleting(false);
+    }
+  }
 
   // Edit instrument
   const [editOpen, setEditOpen] = useState(false);
@@ -1122,10 +1151,35 @@ export default function DebtDetailPage() {
             )}
           </div>
         </div>
-        <Button variant="outline" onClick={openEditDialog}>
-          <Pencil className="mr-2 h-4 w-4" />
-          Edit
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={openEditDialog}>
+            <Pencil className="mr-2 h-4 w-4" />
+            Edit
+          </Button>
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button variant="destructive" size="icon">
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Delete Instrument</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This will permanently delete &ldquo;{instrument.instrument_name}&rdquo; and all
+                  associated transactions, amortization schedules, and rate history. This action
+                  cannot be undone.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction onClick={handleDelete} disabled={deleting}>
+                  {deleting ? "Deleting…" : "Delete"}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        </div>
       </div>
 
       {/* Edit Instrument Dialog */}
