@@ -1284,6 +1284,7 @@ function AccrualSchedule({ monthlyData, invoices }: { monthlyData: MonthlyRevenu
                                       <TableHead>Invoice #</TableHead>
                                       <TableHead>Customer</TableHead>
                                       <TableHead>Description</TableHead>
+                                      <TableHead className="whitespace-nowrap">Invoice Date</TableHead>
                                       <TableHead className="whitespace-nowrap">Billing Period</TableHead>
                                       <TableHead className="text-right">Invoice Total</TableHead>
                                       <TableHead className="text-right">Billed in Mo.</TableHead>
@@ -1299,6 +1300,9 @@ function AccrualSchedule({ monthlyData, invoices }: { monthlyData: MonthlyRevenu
                                         <TableCell className="max-w-[140px] truncate">{d.customer}</TableCell>
                                         <TableCell className="max-w-[180px] truncate text-muted-foreground text-sm">
                                           {d.orderDescription}
+                                        </TableCell>
+                                        <TableCell className="text-muted-foreground whitespace-nowrap text-xs">
+                                          {formatDate(d.invoiceDate)}
                                         </TableCell>
                                         <TableCell className="text-muted-foreground whitespace-nowrap text-xs">
                                           {d.billingStartDate || d.billingEndDate
@@ -1327,7 +1331,7 @@ function AccrualSchedule({ monthlyData, invoices }: { monthlyData: MonthlyRevenu
                                       </TableRow>
                                     ))}
                                     <TableRow className="border-t font-semibold">
-                                      <TableCell colSpan={5}>
+                                      <TableCell colSpan={6}>
                                         Total ({invoiceDetails.length} invoices)
                                       </TableCell>
                                       <TableCell className="text-right tabular-nums">
