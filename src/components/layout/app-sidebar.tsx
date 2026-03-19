@@ -209,6 +209,11 @@ export function AppSidebar({ user, entityId: entityIdProp, entities = [] }: AppS
           icon: LayoutDashboard,
         },
         {
+          title: "Close Dashboard",
+          url: "/close-dashboard",
+          icon: CheckSquare,
+        },
+        {
           title: "QBO Sync",
           url: "/sync",
           icon: RefreshCw,

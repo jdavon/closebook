@@ -77,6 +77,65 @@ function formatCompact(value: number): string {
   return `$${value.toFixed(0)}`;
 }
 
+const REVENUE_SERIES: { key: string; label: string; color: string }[] = [
+  { key: "closed", label: "Recognized", color: "#2563eb" },
+  { key: "pending", label: "Pending", color: "#f59e0b" },
+  { key: "pipeline", label: "Pipeline", color: "#94a3b8" },
+  { key: "forecast", label: "Forecast", color: "#ea580c" },
+];
+
+function RevenueTooltip({ active, payload, label }: { active?: boolean; payload?: Array<{ dataKey: string; value: number }>; label?: string }) {
+  if (!active || !payload?.length) return null;
+  const total = payload
+    .filter((p) => p.dataKey !== "forecast")
+    .reduce((s, p) => s + (p.value || 0), 0);
+  return (
+    <div className="rounded-lg border bg-card px-3 py-2 shadow-md text-sm">
+      <p className="font-medium mb-1.5">{label}</p>
+      {payload.map((entry) => {
+        const series = REVENUE_SERIES.find((s) => s.key === entry.dataKey);
+        if (!series || !entry.value) return null;
+        return (
+          <div key={entry.dataKey} className="flex items-center justify-between gap-6">
+            <div className="flex items-center gap-1.5">
+              <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: series.color }} />
+              <span className="text-muted-foreground">{series.label}</span>
+            </div>
+            <span className="font-medium tabular-nums">{formatCurrency(entry.value)}</span>
+          </div>
+        );
+      })}
+      {payload.filter((p) => p.dataKey !== "forecast" && p.value).length > 1 && (
+        <div className="flex items-center justify-between gap-6 border-t mt-1.5 pt-1.5 font-medium">
+          <span>Total</span>
+          <span className="tabular-nums">{formatCurrency(total)}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function EquipmentTooltip({ active, payload }: { active?: boolean; payload?: Array<{ name: string; value: number; payload: { type: string; percentage: number } }> }) {
+  if (!active || !payload?.length) return null;
+  const entry = payload[0];
+  return (
+    <div className="rounded-lg border bg-card px-3 py-2 shadow-md text-sm">
+      <div className="flex items-center gap-1.5 mb-1">
+        <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: EQUIP_COLORS[entry.payload.type] || "#6b7280" }} />
+        <span className="font-medium">{entry.name}</span>
+      </div>
+      <div className="flex items-center justify-between gap-4">
+        <span className="text-muted-foreground">Revenue</span>
+        <span className="font-medium tabular-nums">{formatCurrency(entry.value)}</span>
+      </div>
+      <div className="flex items-center justify-between gap-4">
+        <span className="text-muted-foreground">Share</span>
+        <span className="font-medium tabular-nums">{entry.payload.percentage.toFixed(1)}%</span>
+      </div>
+    </div>
+  );
+}
+
 // ─── Component ──────────────────────────────────────────────────────────────
 
 export default function RevenueProjectionPage() {
@@ -320,14 +379,7 @@ export default function RevenueProjectionPage() {
                     className="text-xs"
                     tick={{ fontSize: 12 }}
                   />
-                  <RechartsTooltip
-                    formatter={(value) => [formatCurrency(Number(value)), ""]}
-                    contentStyle={{
-                      backgroundColor: "hsl(var(--card))",
-                      border: "1px solid hsl(var(--border))",
-                      borderRadius: "8px",
-                    }}
-                  />
+                  <RechartsTooltip content={<RevenueTooltip />} />
                   <Legend />
                   <Bar
                     dataKey="closed"
@@ -392,14 +444,7 @@ export default function RevenueProjectionPage() {
                             />
                           ))}
                         </Pie>
-                        <RechartsTooltip
-                          formatter={(value) => [formatCurrency(Number(value)), ""]}
-                          contentStyle={{
-                            backgroundColor: "hsl(var(--card))",
-                            border: "1px solid hsl(var(--border))",
-                            borderRadius: "8px",
-                          }}
-                        />
+                        <RechartsTooltip content={<EquipmentTooltip />} />
                         <Legend />
                       </PieChart>
                     </ResponsiveContainer>

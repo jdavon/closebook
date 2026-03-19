@@ -23,9 +23,16 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { toast } from "sonner";
-import { Plus, ArrowRight } from "lucide-react";
+import {
+  Plus,
+  ArrowRight,
+  CheckCircle2,
+  XCircle,
+  AlertTriangle,
+  Minus,
+} from "lucide-react";
 import { getPeriodLabel } from "@/lib/utils/dates";
-import type { CloseStatus } from "@/lib/types/database";
+import type { CloseStatus, GateCheckStatus } from "@/lib/types/database";
 
 interface ClosePeriod {
   id: string;
@@ -38,7 +45,10 @@ interface ClosePeriod {
 }
 
 function StatusBadge({ status }: { status: CloseStatus }) {
-  const variants: Record<CloseStatus, "default" | "secondary" | "outline" | "destructive"> = {
+  const variants: Record<
+    CloseStatus,
+    "default" | "secondary" | "outline" | "destructive"
+  > = {
     closed: "default",
     locked: "default",
     review: "secondary",
@@ -55,6 +65,35 @@ function StatusBadge({ status }: { status: CloseStatus }) {
   return <Badge variant={variants[status]}>{labels[status]}</Badge>;
 }
 
+function GateCheckIcon({ checks }: { checks: Array<{ status: string; is_critical: boolean }> }) {
+  if (checks.length === 0) {
+    return <Minus className="h-4 w-4 text-muted-foreground" />;
+  }
+
+  const criticalFailed = checks.some(
+    (c) => c.is_critical && c.status === "failed"
+  );
+  const anyFailed = checks.some((c) => c.status === "failed");
+  const allPassed = checks.every(
+    (c) => c.status === "passed" || c.status === "skipped"
+  );
+  const anyPending = checks.some((c) => c.status === "pending");
+
+  if (criticalFailed) {
+    return <XCircle className="h-4 w-4 text-red-500" />;
+  }
+  if (allPassed) {
+    return <CheckCircle2 className="h-4 w-4 text-green-500" />;
+  }
+  if (anyFailed) {
+    return <AlertTriangle className="h-4 w-4 text-yellow-500" />;
+  }
+  if (anyPending) {
+    return <Minus className="h-4 w-4 text-muted-foreground" />;
+  }
+  return <Minus className="h-4 w-4 text-muted-foreground" />;
+}
+
 export default function ClosePeriodsPage() {
   const params = useParams();
   const entityId = params.entityId as string;
@@ -63,6 +102,9 @@ export default function ClosePeriodsPage() {
   const [periods, setPeriods] = useState<ClosePeriod[]>([]);
   const [taskCounts, setTaskCounts] = useState<
     Record<string, { total: number; completed: number }>
+  >({});
+  const [gateChecks, setGateChecks] = useState<
+    Record<string, Array<{ status: string; is_critical: boolean }>>
   >({});
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
@@ -77,12 +119,14 @@ export default function ClosePeriodsPage() {
 
     setPeriods((data as ClosePeriod[]) ?? []);
 
-    // Load task counts for each period
     if (data && data.length > 0) {
+      const periodIds = data.map((p) => p.id);
+
+      // Load task counts
       const { data: tasks } = await supabase
         .from("close_tasks")
         .select("close_period_id, status")
-        .in("close_period_id", data.map((p) => p.id));
+        .in("close_period_id", periodIds);
 
       if (tasks) {
         const counts: Record<string, { total: number; completed: number }> = {};
@@ -96,6 +140,29 @@ export default function ClosePeriodsPage() {
           }
         }
         setTaskCounts(counts);
+      }
+
+      // Load gate check summaries
+      const { data: checks } = await supabase
+        .from("close_gate_checks")
+        .select("close_period_id, status, is_critical")
+        .in("close_period_id", periodIds);
+
+      if (checks) {
+        const grouped: Record<
+          string,
+          Array<{ status: string; is_critical: boolean }>
+        > = {};
+        for (const check of checks) {
+          if (!grouped[check.close_period_id]) {
+            grouped[check.close_period_id] = [];
+          }
+          grouped[check.close_period_id].push({
+            status: check.status,
+            is_critical: check.is_critical,
+          });
+        }
+        setGateChecks(grouped);
       }
     }
 
@@ -124,103 +191,34 @@ export default function ClosePeriodsPage() {
       }
     }
 
-    // Create the close period
-    const { data: period, error } = await supabase
-      .from("close_periods")
-      .insert({
-        entity_id: entityId,
-        period_year: year,
-        period_month: month,
-        status: "open",
-      })
-      .select()
-      .single();
+    try {
+      const res = await fetch("/api/close/initialize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          entityId,
+          periodYear: year,
+          periodMonth: month,
+        }),
+      });
 
-    if (error) {
-      toast.error(error.message);
-      setCreating(false);
-      return;
-    }
+      const data = await res.json();
 
-    // Get user's org to load task templates
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      setCreating(false);
-      return;
-    }
-
-    const { data: membership } = await supabase
-      .from("organization_members")
-      .select("organization_id")
-      .eq("user_id", user.id)
-      .single();
-
-    if (membership) {
-      // Load templates and create tasks
-      const { data: templates } = await supabase
-        .from("close_task_templates")
-        .select("*")
-        .eq("organization_id", membership.organization_id)
-        .eq("is_active", true)
-        .order("display_order");
-
-      if (templates && templates.length > 0) {
-        // Match templates to accounts
-        const { data: accounts } = await supabase
-          .from("accounts")
-          .select("id, classification, account_type")
-          .eq("entity_id", entityId)
-          .eq("is_active", true);
-
-        const tasksToInsert = [];
-
-        for (const template of templates) {
-          if (template.account_classification || template.account_type) {
-            // Create one task per matching account
-            const matchingAccounts = (accounts ?? []).filter(
-              (a) =>
-                (!template.account_classification ||
-                  a.classification === template.account_classification) &&
-                (!template.account_type ||
-                  a.account_type === template.account_type)
-            );
-
-            for (const account of matchingAccounts) {
-              tasksToInsert.push({
-                close_period_id: period.id,
-                template_id: template.id,
-                account_id: account.id,
-                name: template.name,
-                description: template.description,
-                category: template.category,
-                display_order: template.display_order,
-              });
-            }
-          } else {
-            // General task not linked to specific accounts
-            tasksToInsert.push({
-              close_period_id: period.id,
-              template_id: template.id,
-              name: template.name,
-              description: template.description,
-              category: template.category,
-              display_order: template.display_order,
-            });
-          }
-        }
-
-        if (tasksToInsert.length > 0) {
-          await supabase.from("close_tasks").insert(tasksToInsert);
-        }
+      if (!res.ok) {
+        toast.error(data.error ?? "Failed to initialize period");
+        setCreating(false);
+        return;
       }
-    }
 
-    toast.success(
-      `Close period initialized: ${getPeriodLabel(year, month)}`
-    );
-    setCreating(false);
-    loadPeriods();
-    router.push(`/${entityId}/close/${period.id}`);
+      toast.success(
+        `Close period initialized: ${getPeriodLabel(year, month)} (${data.taskCount} tasks)`
+      );
+      setCreating(false);
+      router.push(`/${entityId}/close/${data.period.id}`);
+    } catch {
+      toast.error("Failed to initialize period");
+      setCreating(false);
+    }
   }
 
   return (
@@ -252,8 +250,8 @@ export default function ClosePeriodsPage() {
             <p className="text-sm text-muted-foreground">Loading...</p>
           ) : periods.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              No close periods yet. Click &quot;Initialize Period&quot; to create your
-              first one.
+              No close periods yet. Click &quot;Initialize Period&quot; to create
+              your first one.
             </p>
           ) : (
             <Table>
@@ -262,6 +260,7 @@ export default function ClosePeriodsPage() {
                   <TableHead>Period</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Progress</TableHead>
+                  <TableHead>Gate Checks</TableHead>
                   <TableHead>Due Date</TableHead>
                   <TableHead></TableHead>
                 </TableRow>
@@ -273,6 +272,7 @@ export default function ClosePeriodsPage() {
                     counts && counts.total > 0
                       ? Math.round((counts.completed / counts.total) * 100)
                       : 0;
+                  const periodChecks = gateChecks[period.id] ?? [];
 
                   return (
                     <TableRow key={period.id}>
@@ -298,6 +298,9 @@ export default function ClosePeriodsPage() {
                             No tasks
                           </span>
                         )}
+                      </TableCell>
+                      <TableCell>
+                        <GateCheckIcon checks={periodChecks} />
                       </TableCell>
                       <TableCell className="text-muted-foreground">
                         {period.due_date

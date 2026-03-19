@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
+import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,9 +27,19 @@ import {
   XCircle,
   Clock,
   AlertCircle,
+  ExternalLink,
+  Lock,
+  Zap,
+  RefreshCw,
 } from "lucide-react";
 import { formatCurrency } from "@/lib/utils/dates";
-import type { TaskStatus } from "@/lib/types/database";
+import {
+  CLOSE_PHASES,
+  getSourceModuleUrl,
+  getSourceModuleLabel,
+  computePhaseBlocking,
+} from "@/lib/utils/close-management";
+import type { TaskStatus, ClosePhase, CloseSourceModule } from "@/lib/types/database";
 
 interface TaskDetail {
   id: string;
@@ -41,6 +52,10 @@ interface TaskDetail {
   gl_balance: number | null;
   reconciled_balance: number | null;
   variance: number | null;
+  phase: number;
+  source_module: string | null;
+  source_record_id: string | null;
+  is_auto_generated: boolean;
   accounts?: { name: string; account_number: string | null } | null;
 }
 
@@ -59,6 +74,40 @@ interface Attachment {
   created_at: string;
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type SourceStatusData = Record<string, any>;
+
+interface JELine {
+  account: string;
+  accountId?: string;
+  amount: number;
+}
+
+interface JEEntry {
+  source: string;
+  sourceRecordId?: string;
+  sourceRecordName: string;
+  date: string;
+  description: string;
+  debits: JELine[];
+  credits: JELine[];
+}
+
+interface JEWorksheetData {
+  module: string;
+  entries: JEEntry[];
+  totalDebit: number;
+  totalCredit: number;
+  message?: string;
+}
+
+const JE_MODULE_MAP: Record<string, string> = {
+  debt: "debt",
+  assets: "depreciation",
+  leases: "leases",
+  payroll: "payroll",
+};
+
 export default function TaskDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -76,25 +125,32 @@ export default function TaskDetailPage() {
   const [reviewerNotes, setReviewerNotes] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [sourceStatus, setSourceStatus] = useState<SourceStatusData | null>(
+    null
+  );
+  const [sourceLoading, setSourceLoading] = useState(false);
+  const [isBlocked, setIsBlocked] = useState(false);
+  const [jeWorksheet, setJeWorksheet] = useState<JEWorksheetData | null>(null);
+  const [jeLoading, setJeLoading] = useState(false);
 
   const loadTask = useCallback(async () => {
-    const [taskResult, commentsResult, attachmentsResult] = await Promise.all([
-      supabase
-        .from("close_tasks")
-        .select("*, accounts(name, account_number)")
-        .eq("id", taskId)
-        .single(),
-      supabase
-        .from("close_task_comments")
-        .select("*, profiles(full_name)")
-        .eq("close_task_id", taskId)
-        .order("created_at"),
-      supabase
-        .from("close_task_attachments")
-        .select("*")
-        .eq("close_task_id", taskId)
-        .order("created_at", { ascending: false }),
-    ]);
+    const taskResult = await supabase
+      .from("close_tasks")
+      .select("*, accounts(name, account_number)")
+      .eq("id", taskId)
+      .single();
+
+    const commentsResult = await supabase
+      .from("close_task_comments")
+      .select("*, profiles(full_name)")
+      .eq("close_task_id", taskId)
+      .order("created_at");
+
+    const attachmentsResult = await supabase
+      .from("close_task_attachments")
+      .select("*")
+      .eq("close_task_id", taskId)
+      .order("created_at", { ascending: false });
 
     const taskData = taskResult.data as unknown as TaskDetail;
     setTask(taskData);
@@ -107,14 +163,85 @@ export default function TaskDetailPage() {
       );
       setPreparerNotes(taskData.preparer_notes ?? "");
       setReviewerNotes(taskData.reviewer_notes ?? "");
+
+      // Check phase blocking
+      const { data: allTasks } = await supabase
+        .from("close_tasks")
+        .select("phase, status")
+        .eq("close_period_id", periodId);
+
+      if (allTasks) {
+        const blocking = computePhaseBlocking(allTasks);
+        setIsBlocked(blocking[taskData.phase as ClosePhase] ?? false);
+      }
     }
 
     setLoading(false);
-  }, [supabase, taskId]);
+  }, [supabase, taskId, periodId]);
 
   useEffect(() => {
     loadTask();
   }, [loadTask]);
+
+  // Load source module status
+  const loadSourceStatus = useCallback(async () => {
+    if (!task?.source_module) return;
+    setSourceLoading(true);
+    try {
+      const res = await fetch(
+        `/api/close/task-source-status?taskId=${taskId}`
+      );
+      const data = await res.json();
+      if (res.ok) {
+        setSourceStatus(data);
+      }
+    } catch {
+      // Silently fail — source status is optional
+    }
+    setSourceLoading(false);
+  }, [task?.source_module, taskId]);
+
+  useEffect(() => {
+    if (task?.source_module) {
+      loadSourceStatus();
+    }
+  }, [task?.source_module, loadSourceStatus]);
+
+  // Load JE worksheet for computation-engine modules
+  const loadJeWorksheet = useCallback(async () => {
+    if (!task?.source_module) return;
+    const jeModule = JE_MODULE_MAP[task.source_module];
+    if (!jeModule) return;
+
+    setJeLoading(true);
+    try {
+      // Need period year/month — fetch from close_periods
+      const { data: period } = await supabase
+        .from("close_periods")
+        .select("period_year, period_month, entity_id")
+        .eq("id", periodId)
+        .single();
+
+      if (!period) return;
+
+      const res = await fetch(
+        `/api/close/je-worksheet?entityId=${period.entity_id}&periodYear=${period.period_year}&periodMonth=${period.period_month}&module=${jeModule}`
+      );
+      const data = await res.json();
+      if (res.ok) {
+        setJeWorksheet(data);
+      }
+    } catch {
+      // Silently fail
+    }
+    setJeLoading(false);
+  }, [task?.source_module, periodId, supabase]);
+
+  useEffect(() => {
+    if (task?.source_module && JE_MODULE_MAP[task.source_module]) {
+      loadJeWorksheet();
+    }
+  }, [task?.source_module, loadJeWorksheet]);
 
   async function handleSaveReconciliation() {
     setSaving(true);
@@ -148,6 +275,11 @@ export default function TaskDetailPage() {
   }
 
   async function handleStatusChange(newStatus: TaskStatus) {
+    if (isBlocked) {
+      toast.error("This task is blocked. Complete earlier phase tasks first.");
+      return;
+    }
+
     const { error } = await supabase
       .from("close_tasks")
       .update({
@@ -243,6 +375,11 @@ export default function TaskDetailPage() {
       ? "text-green-600"
       : "text-red-600";
 
+  const phaseInfo = CLOSE_PHASES[task.phase as ClosePhase];
+  const moduleUrl = task.source_module
+    ? getSourceModuleUrl(entityId, task.source_module as CloseSourceModule)
+    : null;
+
   return (
     <div className="space-y-6 max-w-4xl">
       <div className="flex items-center gap-4">
@@ -256,57 +393,100 @@ export default function TaskDetailPage() {
         </Button>
       </div>
 
+      {/* Blocked Banner */}
+      {isBlocked && (
+        <div className="flex items-center gap-3 p-4 rounded-lg border border-yellow-200 bg-yellow-50 dark:bg-yellow-950/20 dark:border-yellow-800">
+          <Lock className="h-5 w-5 text-yellow-600 flex-shrink-0" />
+          <div>
+            <p className="text-sm font-medium text-yellow-800 dark:text-yellow-200">
+              This task is blocked
+            </p>
+            <p className="text-xs text-yellow-700 dark:text-yellow-300">
+              Complete all tasks in earlier phases to unlock this task.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">
-            {task.name}
-          </h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-semibold tracking-tight">
+              {task.name}
+            </h1>
+            {task.is_auto_generated && (
+              <span title="Auto-generated from module">
+                <Zap className="h-4 w-4 text-yellow-500" />
+              </span>
+            )}
+          </div>
           {task.accounts && (
             <p className="text-muted-foreground">
               {task.accounts.account_number} - {task.accounts.name}
             </p>
           )}
-          {task.category && (
-            <Badge variant="outline" className="mt-1">
-              {task.category}
-            </Badge>
-          )}
+          <div className="flex items-center gap-2 mt-1">
+            {task.category && (
+              <Badge variant="outline">{task.category}</Badge>
+            )}
+            {phaseInfo && (
+              <Badge variant="outline" className="text-xs">
+                Phase {task.phase}: {phaseInfo.name}
+              </Badge>
+            )}
+            {task.source_module && moduleUrl && (
+              <Link href={moduleUrl}>
+                <Badge
+                  variant="secondary"
+                  className="text-xs cursor-pointer hover:bg-secondary/80"
+                >
+                  <ExternalLink className="mr-1 h-3 w-3" />
+                  {getSourceModuleLabel(
+                    task.source_module as CloseSourceModule
+                  )}
+                </Badge>
+              </Link>
+            )}
+          </div>
         </div>
-        <div className="flex gap-2">
-          {task.status === "not_started" && (
-            <Button onClick={() => handleStatusChange("in_progress")}>
-              <Clock className="mr-2 h-4 w-4" />
-              Start Working
-            </Button>
-          )}
-          {task.status === "in_progress" && (
-            <Button onClick={() => handleStatusChange("pending_review")}>
-              <Send className="mr-2 h-4 w-4" />
-              Submit for Review
-            </Button>
-          )}
-          {task.status === "pending_review" && (
-            <>
-              <Button
-                variant="destructive"
-                onClick={() => handleStatusChange("rejected")}
-              >
-                <XCircle className="mr-2 h-4 w-4" />
-                Reject
+        {!isBlocked && (
+          <div className="flex gap-2">
+            {task.status === "not_started" && (
+              <Button onClick={() => handleStatusChange("in_progress")}>
+                <Clock className="mr-2 h-4 w-4" />
+                Start Working
               </Button>
-              <Button onClick={() => handleStatusChange("approved")}>
-                <CheckCircle2 className="mr-2 h-4 w-4" />
-                Approve
+            )}
+            {task.status === "in_progress" && (
+              <Button onClick={() => handleStatusChange("pending_review")}>
+                <Send className="mr-2 h-4 w-4" />
+                Submit for Review
               </Button>
-            </>
-          )}
-          {task.status === "rejected" && (
-            <Button onClick={() => handleStatusChange("in_progress")}>
-              <Clock className="mr-2 h-4 w-4" />
-              Reopen
-            </Button>
-          )}
-        </div>
+            )}
+            {task.status === "pending_review" && (
+              <>
+                <Button
+                  variant="destructive"
+                  onClick={() => handleStatusChange("rejected")}
+                >
+                  <XCircle className="mr-2 h-4 w-4" />
+                  Reject
+                </Button>
+                <Button onClick={() => handleStatusChange("approved")}>
+                  <CheckCircle2 className="mr-2 h-4 w-4" />
+                  Approve
+                </Button>
+              </>
+            )}
+            {task.status === "rejected" && (
+              <Button onClick={() => handleStatusChange("in_progress")}>
+                <Clock className="mr-2 h-4 w-4" />
+                Reopen
+              </Button>
+            )}
+          </div>
+        )}
       </div>
 
       {task.description && (
@@ -314,73 +494,138 @@ export default function TaskDetailPage() {
       )}
 
       <div className="grid gap-6 md:grid-cols-2">
-        {/* Reconciliation */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-lg">Reconciliation</CardTitle>
-            <CardDescription>
-              Compare GL balance with reconciled balance
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <Label>GL Balance</Label>
-              <div className="text-lg font-semibold tabular-nums">
-                {task.gl_balance !== null
-                  ? formatCurrency(task.gl_balance)
-                  : "Not synced"}
-              </div>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="reconciled">Reconciled Balance</Label>
-              <Input
-                id="reconciled"
-                type="number"
-                step="0.01"
-                placeholder="0.00"
-                value={reconciledBalance}
-                onChange={(e) => setReconciledBalance(e.target.value)}
-              />
-            </div>
-            {task.variance !== null && (
+        {/* Left column: Reconciliation + Source Module Status */}
+        <div className="space-y-6">
+          {/* Reconciliation */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg">Reconciliation</CardTitle>
+              <CardDescription>
+                Compare GL balance with reconciled balance
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
               <div className="space-y-2">
-                <Label>Variance</Label>
-                <div className={`text-lg font-semibold tabular-nums ${varianceClass}`}>
-                  {formatCurrency(task.variance)}
-                  {task.variance === 0 && (
-                    <CheckCircle2 className="inline ml-2 h-5 w-5" />
-                  )}
+                <Label>GL Balance</Label>
+                <div className="text-lg font-semibold tabular-nums">
+                  {task.gl_balance !== null
+                    ? formatCurrency(task.gl_balance)
+                    : "Not synced"}
                 </div>
               </div>
-            )}
-            <Separator />
-            <div className="space-y-2">
-              <Label htmlFor="preparerNotes">Preparer Notes</Label>
-              <Textarea
-                id="preparerNotes"
-                placeholder="Add notes about the reconciliation..."
-                value={preparerNotes}
-                onChange={(e) => setPreparerNotes(e.target.value)}
-                rows={3}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="reviewerNotes">Reviewer Notes</Label>
-              <Textarea
-                id="reviewerNotes"
-                placeholder="Reviewer feedback..."
-                value={reviewerNotes}
-                onChange={(e) => setReviewerNotes(e.target.value)}
-                rows={3}
-              />
-            </div>
-            <Button onClick={handleSaveReconciliation} disabled={saving}>
-              {saving ? "Saving..." : "Save"}
-            </Button>
-          </CardContent>
-        </Card>
+              <div className="space-y-2">
+                <Label htmlFor="reconciled">Reconciled Balance</Label>
+                <Input
+                  id="reconciled"
+                  type="number"
+                  step="0.01"
+                  placeholder="0.00"
+                  value={reconciledBalance}
+                  onChange={(e) => setReconciledBalance(e.target.value)}
+                  disabled={isBlocked}
+                />
+              </div>
+              {task.variance !== null && (
+                <div className="space-y-2">
+                  <Label>Variance</Label>
+                  <div
+                    className={`text-lg font-semibold tabular-nums ${varianceClass}`}
+                  >
+                    {formatCurrency(task.variance)}
+                    {task.variance === 0 && (
+                      <CheckCircle2 className="inline ml-2 h-5 w-5" />
+                    )}
+                  </div>
+                </div>
+              )}
+              <Separator />
+              <div className="space-y-2">
+                <Label htmlFor="preparerNotes">Preparer Notes</Label>
+                <Textarea
+                  id="preparerNotes"
+                  placeholder="Add notes about the reconciliation..."
+                  value={preparerNotes}
+                  onChange={(e) => setPreparerNotes(e.target.value)}
+                  rows={3}
+                  disabled={isBlocked}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="reviewerNotes">Reviewer Notes</Label>
+                <Textarea
+                  id="reviewerNotes"
+                  placeholder="Reviewer feedback..."
+                  value={reviewerNotes}
+                  onChange={(e) => setReviewerNotes(e.target.value)}
+                  rows={3}
+                  disabled={isBlocked}
+                />
+              </div>
+              <Button
+                onClick={handleSaveReconciliation}
+                disabled={saving || isBlocked}
+              >
+                {saving ? "Saving..." : "Save"}
+              </Button>
+            </CardContent>
+          </Card>
 
-        {/* Attachments & Comments */}
+          {/* Source Module Status */}
+          {task.source_module && (
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle className="text-lg">Module Status</CardTitle>
+                    <CardDescription>
+                      Live data from{" "}
+                      {getSourceModuleLabel(
+                        task.source_module as CloseSourceModule
+                      )}
+                    </CardDescription>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={loadSourceStatus}
+                    disabled={sourceLoading}
+                  >
+                    <RefreshCw
+                      className={`h-4 w-4 ${sourceLoading ? "animate-spin" : ""}`}
+                    />
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent>
+                {sourceLoading && !sourceStatus ? (
+                  <p className="text-sm text-muted-foreground">Loading...</p>
+                ) : sourceStatus?.data ? (
+                  <SourceStatusDisplay
+                    sourceModule={task.source_module}
+                    data={sourceStatus.data}
+                  />
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    No module data available
+                  </p>
+                )}
+                {moduleUrl && (
+                  <Link href={moduleUrl} className="block mt-3">
+                    <Button variant="outline" size="sm" className="w-full">
+                      <ExternalLink className="mr-2 h-4 w-4" />
+                      Go to{" "}
+                      {getSourceModuleLabel(
+                        task.source_module as CloseSourceModule
+                      )}
+                    </Button>
+                  </Link>
+                )}
+              </CardContent>
+            </Card>
+          )}
+        </div>
+
+        {/* Right column: Attachments & Comments */}
         <div className="space-y-6">
           <Card>
             <CardHeader>
@@ -470,6 +715,365 @@ export default function TaskDetailPage() {
           </Card>
         </div>
       </div>
+
+      {/* JE Worksheet — full width below the two-column grid */}
+      {task.source_module && JE_MODULE_MAP[task.source_module] && (
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle className="text-lg">Journal Entry Worksheet</CardTitle>
+                <CardDescription>
+                  Computed entries from{" "}
+                  {getSourceModuleLabel(task.source_module as CloseSourceModule)}{" "}
+                  engine
+                </CardDescription>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={loadJeWorksheet}
+                disabled={jeLoading}
+              >
+                <RefreshCw
+                  className={`h-4 w-4 ${jeLoading ? "animate-spin" : ""}`}
+                />
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {jeLoading && !jeWorksheet ? (
+              <p className="text-sm text-muted-foreground">
+                Computing journal entries...
+              </p>
+            ) : jeWorksheet ? (
+              <JEWorksheetDisplay data={jeWorksheet} />
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                No journal entry data available
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
+}
+
+// ---------------------------------------------------------------------------
+// JE Worksheet Display Component
+// ---------------------------------------------------------------------------
+
+function JEWorksheetDisplay({ data }: { data: JEWorksheetData }) {
+  if (data.entries.length === 0) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        {data.message ?? "No entries to post for this period."}
+      </p>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {data.message && (
+        <p className="text-sm text-muted-foreground">{data.message}</p>
+      )}
+
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b text-left">
+              <th className="pb-2 font-medium">Source</th>
+              <th className="pb-2 font-medium">Account</th>
+              <th className="pb-2 font-medium text-right">Debit</th>
+              <th className="pb-2 font-medium text-right">Credit</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.entries.map((entry, idx) => (
+              <JEEntryRows key={idx} entry={entry} isLast={idx === data.entries.length - 1} />
+            ))}
+          </tbody>
+          <tfoot>
+            <tr className="border-t-2 font-semibold">
+              <td className="pt-2" colSpan={2}>
+                Total
+              </td>
+              <td className="pt-2 text-right tabular-nums">
+                {formatCurrency(data.totalDebit)}
+              </td>
+              <td className="pt-2 text-right tabular-nums">
+                {formatCurrency(data.totalCredit)}
+              </td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function JEEntryRows({
+  entry,
+  isLast,
+}: {
+  entry: JEEntry;
+  isLast: boolean;
+}) {
+  const rows: React.ReactNode[] = [];
+
+  // Debit lines
+  for (let i = 0; i < entry.debits.length; i++) {
+    const d = entry.debits[i];
+    rows.push(
+      <tr key={`dr-${i}`} className={i === 0 ? "border-t" : ""}>
+        {i === 0 && (
+          <td
+            className="py-1 pr-4 text-muted-foreground align-top"
+            rowSpan={entry.debits.length + entry.credits.length}
+          >
+            <div className="font-medium text-foreground">
+              {entry.sourceRecordName}
+            </div>
+            <div className="text-xs">{entry.description}</div>
+          </td>
+        )}
+        <td className="py-1 pl-2">{d.account}</td>
+        <td className="py-1 text-right tabular-nums">
+          {formatCurrency(d.amount)}
+        </td>
+        <td className="py-1 text-right tabular-nums"></td>
+      </tr>
+    );
+  }
+
+  // Credit lines (indented)
+  for (let i = 0; i < entry.credits.length; i++) {
+    const c = entry.credits[i];
+    rows.push(
+      <tr key={`cr-${i}`}>
+        <td className="py-1 pl-6 text-muted-foreground">{c.account}</td>
+        <td className="py-1 text-right tabular-nums"></td>
+        <td className="py-1 text-right tabular-nums">
+          {formatCurrency(c.amount)}
+        </td>
+      </tr>
+    );
+  }
+
+  return <>{rows}</>;
+}
+
+// ---------------------------------------------------------------------------
+// Source Status Display Component
+// ---------------------------------------------------------------------------
+
+function SourceStatusDisplay({
+  sourceModule,
+  data,
+}: {
+  sourceModule: string;
+  data: SourceStatusData;
+}) {
+  switch (sourceModule) {
+    case "debt":
+    case "assets": {
+      const recons = data.reconciliations ?? [];
+      if (recons.length === 0) {
+        return (
+          <p className="text-sm text-muted-foreground">
+            No reconciliation data for this period
+          </p>
+        );
+      }
+      return (
+        <div className="space-y-2">
+          {recons.map(
+            (
+              r: {
+                glAccountGroup: string;
+                glBalance: number;
+                subledgerBalance: number;
+                variance: number;
+                isReconciled: boolean;
+              },
+              i: number
+            ) => (
+              <div key={i} className="flex items-center justify-between text-sm">
+                <span className="font-medium">{r.glAccountGroup}</span>
+                <div className="flex items-center gap-3">
+                  <span className="tabular-nums text-muted-foreground">
+                    Var: {formatCurrency(r.variance ?? 0)}
+                  </span>
+                  {r.isReconciled ? (
+                    <CheckCircle2 className="h-4 w-4 text-green-500" />
+                  ) : (
+                    <AlertCircle className="h-4 w-4 text-red-500" />
+                  )}
+                </div>
+              </div>
+            )
+          )}
+          <Separator />
+          <p
+            className={`text-sm font-medium ${
+              data.allReconciled ? "text-green-600" : "text-red-600"
+            }`}
+          >
+            {data.allReconciled
+              ? "All groups reconciled"
+              : "Unreconciled groups remain"}
+          </p>
+        </div>
+      );
+    }
+
+    case "leases": {
+      const lease = data.lease;
+      if (!lease) {
+        return (
+          <p className="text-sm text-muted-foreground">Lease not found</p>
+        );
+      }
+      return (
+        <div className="space-y-1 text-sm">
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Lease</span>
+            <span className="font-medium">{lease.leaseName}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Type</span>
+            <span className="capitalize">{lease.leaseType}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Status</span>
+            <Badge variant="outline" className="text-xs capitalize">
+              {lease.status}
+            </Badge>
+          </div>
+        </div>
+      );
+    }
+
+    case "tb": {
+      return (
+        <div className="space-y-1 text-sm">
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Total Debits</span>
+            <span className="tabular-nums">
+              {formatCurrency(data.totalDebits ?? 0)}
+            </span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Total Credits</span>
+            <span className="tabular-nums">
+              {formatCurrency(data.totalCredits ?? 0)}
+            </span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Variance</span>
+            <span
+              className={`tabular-nums font-medium ${
+                data.isBalanced ? "text-green-600" : "text-red-600"
+              }`}
+            >
+              {formatCurrency(data.variance ?? 0)}
+            </span>
+          </div>
+          {data.unmatchedCount > 0 && (
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Unmatched Accounts</span>
+              <span className="text-red-600 font-medium">
+                {data.unmatchedCount}
+              </span>
+            </div>
+          )}
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Account Count</span>
+            <span>{data.accountCount ?? 0}</span>
+          </div>
+        </div>
+      );
+    }
+
+    case "financial_statements": {
+      return (
+        <div className="space-y-1 text-sm">
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Total Assets</span>
+            <span className="tabular-nums">
+              {formatCurrency(data.totalAssets ?? 0)}
+            </span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Total Liabilities</span>
+            <span className="tabular-nums">
+              {formatCurrency(data.totalLiabilities ?? 0)}
+            </span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Total Equity</span>
+            <span className="tabular-nums">
+              {formatCurrency(data.totalEquity ?? 0)}
+            </span>
+          </div>
+          <Separator />
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">A = L + E</span>
+            <span
+              className={`font-medium ${
+                data.isBalanced ? "text-green-600" : "text-red-600"
+              }`}
+            >
+              {data.isBalanced ? "Balanced" : `Off by ${formatCurrency(data.bsDifference ?? 0)}`}
+            </span>
+          </div>
+        </div>
+      );
+    }
+
+    case "intercompany": {
+      if (data.status === "skipped" || data.status === "no_ic_accounts") {
+        return (
+          <p className="text-sm text-muted-foreground">
+            {data.status === "skipped"
+              ? "Single entity — no intercompany balances"
+              : "No intercompany accounts found"}
+          </p>
+        );
+      }
+      return (
+        <div className="space-y-1 text-sm">
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">IC Accounts</span>
+            <span>{data.icAccountCount ?? 0}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Net Balance</span>
+            <span
+              className={`tabular-nums font-medium ${
+                data.isNetZero ? "text-green-600" : "text-red-600"
+              }`}
+            >
+              {formatCurrency(data.netBalance ?? 0)}
+            </span>
+          </div>
+        </div>
+      );
+    }
+
+    case "payroll":
+      return (
+        <p className="text-sm text-muted-foreground">
+          {data.message ?? "Manual verification required"}
+        </p>
+      );
+
+    default:
+      return (
+        <p className="text-sm text-muted-foreground">
+          No status display for this module
+        </p>
+      );
+  }
 }

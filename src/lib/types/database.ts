@@ -84,6 +84,29 @@ export type AccrualSource = "paylocity_sync" | "manual";
 
 export type AccrualStatus = "draft" | "posted" | "reversed";
 
+// -- Close Management V2 --
+
+export type ClosePhase = 1 | 2 | 3 | 4;
+
+export type CloseSourceModule =
+  | "debt"
+  | "assets"
+  | "leases"
+  | "payroll"
+  | "intercompany"
+  | "schedules"
+  | "tb"
+  | "financial_statements";
+
+export type GateCheckType =
+  | "balance_sheet_balance"
+  | "trial_balance_footing"
+  | "intercompany_net_zero"
+  | "debt_reconciliation"
+  | "asset_reconciliation";
+
+export type GateCheckStatus = "pending" | "passed" | "failed" | "warning" | "skipped";
+
 export type PaylocityEnvironment = "testing" | "production";
 
 export type NormalBalance = "debit" | "credit";

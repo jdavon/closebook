@@ -30,7 +30,9 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
-import { Plus, Trash2 } from "lucide-react";
+import { Plus, Trash2, Zap } from "lucide-react";
+import { CLOSE_PHASES, AUTO_DISCOVERY_MODULES } from "@/lib/utils/close-management";
+import type { ClosePhase } from "@/lib/types/database";
 
 interface TaskTemplate {
   id: string;
@@ -42,7 +44,16 @@ interface TaskTemplate {
   relative_due_day: number | null;
   requires_reconciliation: boolean;
   is_active: boolean;
+  phase: number;
+  source_module: string | null;
 }
+
+const PHASE_LABELS: Record<ClosePhase, string> = {
+  1: "Phase 1: Pre-Close",
+  2: "Phase 2: Adjustments",
+  3: "Phase 3: Reconciliations",
+  4: "Phase 4: Review & Reporting",
+};
 
 export default function TaskTemplatesPage() {
   const supabase = createClient();
@@ -56,6 +67,7 @@ export default function TaskTemplatesPage() {
   const [accountClassification, setAccountClassification] = useState("");
   const [relativeDueDay, setRelativeDueDay] = useState("5");
   const [requiresReconciliation, setRequiresReconciliation] = useState(false);
+  const [phase, setPhase] = useState<string>("3");
   const [creating, setCreating] = useState(false);
 
   const loadTemplates = useCallback(async () => {
@@ -76,6 +88,7 @@ export default function TaskTemplatesPage() {
       .from("close_task_templates")
       .select("*")
       .eq("organization_id", membership.organization_id)
+      .order("phase")
       .order("display_order")
       .order("name");
 
@@ -120,6 +133,7 @@ export default function TaskTemplatesPage() {
       relative_due_day: parseInt(relativeDueDay) || 5,
       requires_reconciliation: requiresReconciliation,
       display_order: templates.length,
+      phase: parseInt(phase) || 3,
     });
 
     if (error) {
@@ -131,6 +145,7 @@ export default function TaskTemplatesPage() {
       setCategory("");
       setAccountClassification("");
       setRequiresReconciliation(false);
+      setPhase("3");
       loadTemplates();
     }
 
@@ -151,6 +166,17 @@ export default function TaskTemplatesPage() {
     }
   }
 
+  // Group templates by phase for display
+  const groupedTemplates = templates.reduce(
+    (acc, tpl) => {
+      const p = (tpl.phase || 3) as ClosePhase;
+      if (!acc[p]) acc[p] = [];
+      acc[p].push(tpl);
+      return acc;
+    },
+    {} as Record<ClosePhase, TaskTemplate[]>
+  );
+
   return (
     <div className="space-y-6">
       <div>
@@ -168,7 +194,7 @@ export default function TaskTemplatesPage() {
           <CardTitle>Add Template</CardTitle>
           <CardDescription>
             Templates linked to an account classification will create one task
-            per matching account
+            per matching account. Phase determines when the task is available during the close.
           </CardDescription>
         </CardHeader>
         <form onSubmit={handleCreate}>
@@ -205,10 +231,24 @@ export default function TaskTemplatesPage() {
                 </Select>
               </div>
             </div>
-            <div className="grid gap-4 md:grid-cols-2">
+            <div className="grid gap-4 md:grid-cols-3">
+              <div className="space-y-2">
+                <Label htmlFor="tplPhase">Phase</Label>
+                <Select value={phase} onValueChange={setPhase}>
+                  <SelectTrigger id="tplPhase">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="1">1 — Pre-Close</SelectItem>
+                    <SelectItem value="2">2 — Adjustments</SelectItem>
+                    <SelectItem value="3">3 — Reconciliations</SelectItem>
+                    <SelectItem value="4">4 — Review & Reporting</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
               <div className="space-y-2">
                 <Label htmlFor="tplClassification">
-                  Account Classification (optional)
+                  Account Classification
                 </Label>
                 <Select
                   value={accountClassification}
@@ -269,6 +309,59 @@ export default function TaskTemplatesPage() {
         </form>
       </Card>
 
+      {/* Auto-discovered tasks info */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Zap className="h-5 w-5 text-yellow-500" />
+            Auto-Discovered Tasks
+          </CardTitle>
+          <CardDescription>
+            These tasks are automatically generated when initializing a close
+            period, based on active data in each entity. They don&apos;t need templates.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Module</TableHead>
+                <TableHead>Phase</TableHead>
+                <TableHead>Category</TableHead>
+                <TableHead>Description</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {AUTO_DISCOVERY_MODULES.map((mod) => (
+                <TableRow key={mod.sourceModule}>
+                  <TableCell className="font-medium capitalize">
+                    {mod.sourceModule === "tb"
+                      ? "Trial Balance"
+                      : mod.sourceModule === "financial_statements"
+                      ? "Financial Statements"
+                      : mod.sourceModule.replace("_", " ")}
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant="outline" className="text-xs">
+                      {CLOSE_PHASES[mod.phase].name}
+                    </Badge>
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant="outline" className="text-xs">
+                      {mod.category}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="text-muted-foreground text-sm">
+                    {mod.description}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+
+      {/* Template list grouped by phase */}
       <Card>
         <CardHeader>
           <CardTitle>Templates</CardTitle>
@@ -284,50 +377,66 @@ export default function TaskTemplatesPage() {
               No templates yet. Add your first template above.
             </p>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Category</TableHead>
-                  <TableHead>Account Class</TableHead>
-                  <TableHead>Due Day</TableHead>
-                  <TableHead>Reconciliation</TableHead>
-                  <TableHead></TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {templates.map((tpl) => (
-                  <TableRow key={tpl.id}>
-                    <TableCell className="font-medium">{tpl.name}</TableCell>
-                    <TableCell>
-                      {tpl.category && (
-                        <Badge variant="outline">{tpl.category}</Badge>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {tpl.account_classification ?? "All"}
-                    </TableCell>
-                    <TableCell>
-                      {tpl.relative_due_day
-                        ? `+${tpl.relative_due_day} days`
-                        : "---"}
-                    </TableCell>
-                    <TableCell>
-                      {tpl.requires_reconciliation ? "Yes" : "No"}
-                    </TableCell>
-                    <TableCell>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => handleDelete(tpl.id)}
-                      >
-                        <Trash2 className="h-4 w-4 text-muted-foreground" />
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            <div className="space-y-6">
+              {([1, 2, 3, 4] as ClosePhase[]).map((p) => {
+                const phaseTpls = groupedTemplates[p];
+                if (!phaseTpls || phaseTpls.length === 0) return null;
+
+                return (
+                  <div key={p}>
+                    <h3 className="text-sm font-medium text-muted-foreground mb-2">
+                      {PHASE_LABELS[p]}
+                    </h3>
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Name</TableHead>
+                          <TableHead>Category</TableHead>
+                          <TableHead>Account Class</TableHead>
+                          <TableHead>Due Day</TableHead>
+                          <TableHead>Reconciliation</TableHead>
+                          <TableHead></TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {phaseTpls.map((tpl) => (
+                          <TableRow key={tpl.id}>
+                            <TableCell className="font-medium">
+                              {tpl.name}
+                            </TableCell>
+                            <TableCell>
+                              {tpl.category && (
+                                <Badge variant="outline">{tpl.category}</Badge>
+                              )}
+                            </TableCell>
+                            <TableCell className="text-muted-foreground">
+                              {tpl.account_classification ?? "All"}
+                            </TableCell>
+                            <TableCell>
+                              {tpl.relative_due_day
+                                ? `+${tpl.relative_due_day} days`
+                                : "---"}
+                            </TableCell>
+                            <TableCell>
+                              {tpl.requires_reconciliation ? "Yes" : "No"}
+                            </TableCell>
+                            <TableCell>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => handleDelete(tpl.id)}
+                              >
+                                <Trash2 className="h-4 w-4 text-muted-foreground" />
+                              </Button>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                );
+              })}
+            </div>
           )}
         </CardContent>
       </Card>
