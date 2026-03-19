@@ -51,6 +51,7 @@ function StatusBadge({ status }: { status: CloseStatus }) {
   > = {
     closed: "default",
     locked: "default",
+    soft_closed: "secondary",
     review: "secondary",
     in_progress: "secondary",
     open: "outline",
@@ -59,6 +60,7 @@ function StatusBadge({ status }: { status: CloseStatus }) {
     open: "Open",
     in_progress: "In Progress",
     review: "In Review",
+    soft_closed: "Soft Closed",
     closed: "Closed",
     locked: "Locked",
   };
