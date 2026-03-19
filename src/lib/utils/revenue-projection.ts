@@ -107,6 +107,7 @@ export interface ClosedInvoice {
   subTotal: number;
   tax: number;
   equipmentType: string;
+  status: string;
   month: string; // primary month key (start month for rental_period, group date otherwise)
   allocations?: MonthAllocation[]; // per-month breakdown (rental_period mode only)
 }
@@ -550,8 +551,9 @@ export function processRevenueData(
     }))
     .sort((a, b) => b.total - a.total);
 
-  // --- Closed invoices table ---
-  const closedInvoiceRows: ClosedInvoice[] = closedInvoices
+  // --- Invoices table (closed + pending) ---
+  const allDisplayInvoices = [...closedInvoices, ...pendingInvoices];
+  const closedInvoiceRows: ClosedInvoice[] = allDisplayInvoices
     .map((inv) => {
       let month: string;
       let allocations: MonthAllocation[] | undefined;
@@ -594,6 +596,7 @@ export function processRevenueData(
         equipmentType: classifyEquipmentType(
           inv.OrderDescription || inv.InvoiceDescription || "",
         ),
+        status: (inv.Status || "").toUpperCase(),
         month,
         allocations,
       };

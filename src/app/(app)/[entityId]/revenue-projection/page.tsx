@@ -565,7 +565,7 @@ export default function RevenueProjectionPage() {
             <CardHeader>
               <div className="flex items-center justify-between">
                 <div>
-                  <CardTitle>Closed Invoices</CardTitle>
+                  <CardTitle>Invoices</CardTitle>
                   <CardDescription>
                     Revenue grouped by{" "}
                     {dateMode === "invoice_date"
@@ -607,7 +607,7 @@ export default function RevenueProjectionPage() {
             <CardContent>
               {filteredInvoices.length === 0 ? (
                 <p className="text-muted-foreground py-8 text-center text-sm">
-                  No closed invoices found.
+                  No invoices found.
                 </p>
               ) : (
                 <div className="overflow-x-auto">
@@ -693,7 +693,14 @@ export default function RevenueProjectionPage() {
                                       <TableCell />
                                       <TableCell className="pl-8" colSpan={showAllocation ? 1 : 1}>
                                         <div className="flex flex-col gap-0.5">
-                                          <span className="text-sm font-medium">{inv.invoiceNumber}</span>
+                                          <span className="flex items-center gap-1.5 text-sm font-medium">
+                                            {inv.invoiceNumber}
+                                            {inv.status && inv.status !== "CLOSED" && inv.status !== "PROCESSED" && (
+                                              <Badge variant={inv.status === "APPROVED" ? "secondary" : "outline"} className="text-[10px] px-1.5 py-0">
+                                                {inv.status}
+                                              </Badge>
+                                            )}
+                                          </span>
                                           <span className="text-muted-foreground max-w-[260px] truncate text-xs">
                                             {inv.orderDescription || inv.orderNumber}
                                           </span>
