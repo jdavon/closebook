@@ -201,10 +201,10 @@ export default function AccruedInterestPage() {
       const dec = decMap[instr.id];
       const lastBal = lastBalanceMap[instr.id];
 
-      // Balance at year-end: use December ending balance if available, else last known
-      const balanceAtYearEnd = dec
-        ? Number(dec.ending_balance)
-        : (lastBal ?? Number(instr.current_draw ?? instr.original_amount));
+      // Balance at year-end: use the instrument's actual current_draw (derived from
+      // real transactions) as the authoritative balance. The amortization schedule's
+      // ending_balance is a projection that may include payments not yet made.
+      const balanceAtYearEnd = Number(instr.current_draw ?? instr.original_amount);
 
       // December interest from amortization schedule
       const decemberInterest = dec ? Number(dec.interest) : 0;
@@ -242,11 +242,7 @@ export default function AccruedInterestPage() {
         } else {
           accruedDays = daysInMonth(year, 12); // 31
         }
-        // Use the beginning balance for December (or ending balance of Nov)
-        const decBegBal = dec
-          ? Number(dec.beginning_balance)
-          : balanceAtYearEnd;
-        accruedInterest = Math.round(decBegBal * dailyRate * accruedDays * 100) / 100;
+        accruedInterest = Math.round(balanceAtYearEnd * dailyRate * accruedDays * 100) / 100;
       }
 
       result.push({
