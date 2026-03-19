@@ -30,7 +30,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
-import { RefreshCw, Link2, Unlink, CheckCircle2, AlertCircle, Trash2, Activity } from "lucide-react";
+import { RefreshCw, Link2, Unlink, CheckCircle2, AlertCircle, Trash2, Activity, X } from "lucide-react";
 import { getCurrentPeriod, getPeriodLabel } from "@/lib/utils/dates";
 
 interface Account {
@@ -509,6 +509,35 @@ export default function EntitySettingsPage() {
             </p>
           ) : (
             <div className="space-y-4">
+              {/* Currently Monitored Summary */}
+              {monitoredAccountIds.size > 0 && (
+                <div className="rounded-md border bg-muted/30 p-4 space-y-2">
+                  <h4 className="text-sm font-medium flex items-center gap-2">
+                    <Activity className="h-4 w-4 text-green-500" />
+                    Currently Monitoring ({monitoredAccountIds.size} account{monitoredAccountIds.size !== 1 ? "s" : ""})
+                  </h4>
+                  <p className="text-xs text-muted-foreground mb-2">
+                    Checked daily across all months (Jan – current month) for balance changes.
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {accounts
+                      .filter((a) => monitoredAccountIds.has(a.id))
+                      .map((a) => (
+                        <Badge
+                          key={a.id}
+                          variant="secondary"
+                          className="cursor-pointer hover:bg-destructive/20 hover:text-destructive transition-colors"
+                          onClick={() => toggleMonitoredAccount(a.id)}
+                          title="Click to remove"
+                        >
+                          {a.account_number ? `#${a.account_number} ` : ""}{a.name}
+                          <X className="ml-1 h-3 w-3" />
+                        </Badge>
+                      ))}
+                  </div>
+                </div>
+              )}
+
               <Input
                 placeholder="Filter accounts..."
                 value={driftFilter}
