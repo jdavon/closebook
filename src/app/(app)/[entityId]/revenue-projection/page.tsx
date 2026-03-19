@@ -90,23 +90,23 @@ function RevenueTooltip({ active, payload, label }: { active?: boolean; payload?
     .filter((p) => p.dataKey !== "forecast")
     .reduce((s, p) => s + (p.value || 0), 0);
   return (
-    <div className="rounded-lg border bg-card px-3 py-2 shadow-md text-sm">
-      <p className="font-medium mb-1.5">{label}</p>
+    <div className="rounded-lg border bg-white px-3 py-2 shadow-lg text-sm whitespace-nowrap" style={{ zIndex: 50 }}>
+      <p className="font-semibold text-gray-900 mb-1.5">{label}</p>
       {payload.map((entry) => {
         const series = REVENUE_SERIES.find((s) => s.key === entry.dataKey);
         if (!series || !entry.value) return null;
         return (
-          <div key={entry.dataKey} className="flex items-center justify-between gap-6">
-            <div className="flex items-center gap-1.5">
-              <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: series.color }} />
-              <span className="text-muted-foreground">{series.label}</span>
+          <div key={entry.dataKey} className="flex items-center justify-between gap-8">
+            <div className="flex items-center gap-2">
+              <span className="inline-block h-2.5 w-2.5 rounded-sm shrink-0" style={{ backgroundColor: series.color }} />
+              <span className="text-gray-500">{series.label}</span>
             </div>
-            <span className="font-medium tabular-nums">{formatCurrency(entry.value)}</span>
+            <span className="font-medium tabular-nums text-gray-900">{formatCurrency(entry.value)}</span>
           </div>
         );
       })}
       {payload.filter((p) => p.dataKey !== "forecast" && p.value).length > 1 && (
-        <div className="flex items-center justify-between gap-6 border-t mt-1.5 pt-1.5 font-medium">
+        <div className="flex items-center justify-between gap-8 border-t border-gray-200 mt-1.5 pt-1.5 font-medium text-gray-900">
           <span>Total</span>
           <span className="tabular-nums">{formatCurrency(total)}</span>
         </div>
@@ -119,18 +119,18 @@ function EquipmentTooltip({ active, payload }: { active?: boolean; payload?: Arr
   if (!active || !payload?.length) return null;
   const entry = payload[0];
   return (
-    <div className="rounded-lg border bg-card px-3 py-2 shadow-md text-sm">
-      <div className="flex items-center gap-1.5 mb-1">
-        <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: EQUIP_COLORS[entry.payload.type] || "#6b7280" }} />
-        <span className="font-medium">{entry.name}</span>
+    <div className="rounded-lg border bg-white px-3 py-2 shadow-lg text-sm whitespace-nowrap" style={{ zIndex: 50 }}>
+      <div className="flex items-center gap-2 mb-1">
+        <span className="inline-block h-2.5 w-2.5 rounded-sm shrink-0" style={{ backgroundColor: EQUIP_COLORS[entry.payload.type] || "#6b7280" }} />
+        <span className="font-semibold text-gray-900">{entry.name}</span>
       </div>
-      <div className="flex items-center justify-between gap-4">
-        <span className="text-muted-foreground">Revenue</span>
-        <span className="font-medium tabular-nums">{formatCurrency(entry.value)}</span>
+      <div className="flex items-center justify-between gap-6">
+        <span className="text-gray-500">Revenue</span>
+        <span className="font-medium tabular-nums text-gray-900">{formatCurrency(entry.value)}</span>
       </div>
-      <div className="flex items-center justify-between gap-4">
-        <span className="text-muted-foreground">Share</span>
-        <span className="font-medium tabular-nums">{entry.payload.percentage.toFixed(1)}%</span>
+      <div className="flex items-center justify-between gap-6">
+        <span className="text-gray-500">Share</span>
+        <span className="font-medium tabular-nums text-gray-900">{entry.payload.percentage.toFixed(1)}%</span>
       </div>
     </div>
   );
@@ -379,7 +379,11 @@ export default function RevenueProjectionPage() {
                     className="text-xs"
                     tick={{ fontSize: 12 }}
                   />
-                  <RechartsTooltip content={<RevenueTooltip />} />
+                  <RechartsTooltip
+                    content={<RevenueTooltip />}
+                    allowEscapeViewBox={{ x: true, y: true }}
+                    wrapperStyle={{ zIndex: 50, pointerEvents: "none" }}
+                  />
                   <Legend />
                   <Bar
                     dataKey="closed"
@@ -444,7 +448,11 @@ export default function RevenueProjectionPage() {
                             />
                           ))}
                         </Pie>
-                        <RechartsTooltip content={<EquipmentTooltip />} />
+                        <RechartsTooltip
+                          content={<EquipmentTooltip />}
+                          allowEscapeViewBox={{ x: true, y: true }}
+                          wrapperStyle={{ zIndex: 50, pointerEvents: "none" }}
+                        />
                         <Legend />
                       </PieChart>
                     </ResponsiveContainer>
