@@ -28,6 +28,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { AccountCombobox } from "@/components/ui/account-combobox";
 import { toast } from "sonner";
 import { ArrowLeft, Upload, X, FileSpreadsheet } from "lucide-react";
 import type { ScheduleType } from "@/lib/types/database";
@@ -353,20 +354,16 @@ export default function NewSchedulePage() {
             </div>
             <div className="space-y-2">
               <Label htmlFor="account">Linked GL Account (optional)</Label>
-              <Select value={accountId} onValueChange={setAccountId}>
-                <SelectTrigger id="account">
-                  <SelectValue placeholder="Select an account..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {accounts.map((account) => (
-                    <SelectItem key={account.id} value={account.id}>
-                      {account.account_number
-                        ? `${account.account_number} - ${account.name}`
-                        : account.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <AccountCombobox
+                accounts={accounts.map((a) => ({
+                  id: a.id,
+                  account_number: a.account_number,
+                  name: a.name,
+                }))}
+                value={accountId}
+                onValueChange={setAccountId}
+                placeholder="Select an account..."
+              />
             </div>
 
             {/* Upload section for custom schedules */}

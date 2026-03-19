@@ -44,6 +44,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { AccountCombobox } from "@/components/ui/account-combobox";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -1161,24 +1162,16 @@ export default function MasterGLPage() {
                   {selectedEntityId && (
                     <div className="space-y-2">
                       <Label>Entity Account</Label>
-                      <Select
+                      <AccountCombobox
+                        accounts={getAvailableAccounts(selectedEntityId).map((a) => ({
+                          id: a.id,
+                          account_number: a.account_number,
+                          name: a.name,
+                          account_type: a.classification,
+                        }))}
                         value={selectedAccountId}
                         onValueChange={setSelectedAccountId}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select account..." />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {getAvailableAccounts(selectedEntityId).map((a) => (
-                            <SelectItem key={a.id} value={a.id}>
-                              {a.account_number
-                                ? `${a.account_number} - `
-                                : ""}
-                              {a.name} ({a.classification})
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      />
                       {getAvailableAccounts(selectedEntityId).length === 0 && (
                         <p className="text-xs text-muted-foreground">
                           All accounts for this entity are already mapped.

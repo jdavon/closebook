@@ -28,6 +28,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { AccountCombobox } from "@/components/ui/account-combobox";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
@@ -502,6 +503,7 @@ export default function DebtDetailPage() {
       Reconciled: txn.is_reconciled ? "Yes" : "No",
     }));
     const ws = XLSX.utils.json_to_sheet(rows);
+    // Auto-size columns based on header + data widths
     const colKeys = Object.keys(rows[0]);
     ws["!cols"] = colKeys.map((key) => {
       const maxDataLen = rows.reduce((mx, r) => Math.max(mx, String(r[key as keyof typeof r] ?? "").length), 0);
@@ -1585,55 +1587,55 @@ export default function DebtDetailPage() {
               <CardContent className="space-y-4">
                 <div className="space-y-2">
                   <Label>Long-Term Liability Account</Label>
-                  <Select value={liabilityAccountId} onValueChange={setLiabilityAccountId}>
-                    <SelectTrigger><SelectValue placeholder="Select liability account..." /></SelectTrigger>
-                    <SelectContent>
-                      {liabilityAccounts.map((a) => (
-                        <SelectItem key={a.id} value={a.id}>
-                          {a.account_number ? `${a.account_number} - ${a.name}` : a.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <AccountCombobox
+                    accounts={liabilityAccounts.map((a) => ({
+                      id: a.id,
+                      account_number: a.account_number,
+                      name: a.name,
+                    }))}
+                    value={liabilityAccountId}
+                    onValueChange={setLiabilityAccountId}
+                    placeholder="Select liability account..."
+                  />
                 </div>
                 <div className="space-y-2">
                   <Label>Current Portion Liability Account</Label>
-                  <Select value={currentLiabilityAccountId} onValueChange={setCurrentLiabilityAccountId}>
-                    <SelectTrigger><SelectValue placeholder="Select current liability account..." /></SelectTrigger>
-                    <SelectContent>
-                      {liabilityAccounts.map((a) => (
-                        <SelectItem key={a.id} value={a.id}>
-                          {a.account_number ? `${a.account_number} - ${a.name}` : a.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <AccountCombobox
+                    accounts={liabilityAccounts.map((a) => ({
+                      id: a.id,
+                      account_number: a.account_number,
+                      name: a.name,
+                    }))}
+                    value={currentLiabilityAccountId}
+                    onValueChange={setCurrentLiabilityAccountId}
+                    placeholder="Select current liability account..."
+                  />
                 </div>
                 <div className="space-y-2">
                   <Label>Interest Expense Account</Label>
-                  <Select value={interestAccountId} onValueChange={setInterestAccountId}>
-                    <SelectTrigger><SelectValue placeholder="Select expense account..." /></SelectTrigger>
-                    <SelectContent>
-                      {expenseAccounts.map((a) => (
-                        <SelectItem key={a.id} value={a.id}>
-                          {a.account_number ? `${a.account_number} - ${a.name}` : a.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <AccountCombobox
+                    accounts={expenseAccounts.map((a) => ({
+                      id: a.id,
+                      account_number: a.account_number,
+                      name: a.name,
+                    }))}
+                    value={interestAccountId}
+                    onValueChange={setInterestAccountId}
+                    placeholder="Select expense account..."
+                  />
                 </div>
                 <div className="space-y-2">
                   <Label>Fee Expense Account</Label>
-                  <Select value={feeAccountId} onValueChange={setFeeAccountId}>
-                    <SelectTrigger><SelectValue placeholder="Select fee expense account..." /></SelectTrigger>
-                    <SelectContent>
-                      {expenseAccounts.map((a) => (
-                        <SelectItem key={a.id} value={a.id}>
-                          {a.account_number ? `${a.account_number} - ${a.name}` : a.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <AccountCombobox
+                    accounts={expenseAccounts.map((a) => ({
+                      id: a.id,
+                      account_number: a.account_number,
+                      name: a.name,
+                    }))}
+                    value={feeAccountId}
+                    onValueChange={setFeeAccountId}
+                    placeholder="Select fee expense account..."
+                  />
                 </div>
                 <Button onClick={handleSaveAccounts} disabled={saving} className="w-full">
                   <Save className="mr-2 h-4 w-4" />

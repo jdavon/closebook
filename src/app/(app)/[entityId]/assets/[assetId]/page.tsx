@@ -26,6 +26,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
+import { AccountCombobox } from "@/components/ui/account-combobox";
 import {
   Sheet,
   SheetContent,
@@ -316,20 +317,16 @@ export default function AssetDetailPage() {
     return (
       <div className="space-y-2">
         <Label htmlFor={id}>{label}</Label>
-        <Select value={value} onValueChange={onChange} disabled={isDisposed}>
-          <SelectTrigger id={id}>
-            <SelectValue placeholder="Select account..." />
-          </SelectTrigger>
-          <SelectContent>
-            {accountList.map((account) => (
-              <SelectItem key={account.id} value={account.id}>
-                {account.account_number
-                  ? `${account.account_number} - ${account.name}`
-                  : account.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <AccountCombobox
+          accounts={accountList.map((a) => ({
+            id: a.id,
+            account_number: a.account_number,
+            name: a.name,
+          }))}
+          value={value}
+          onValueChange={onChange}
+          disabled={isDisposed}
+        />
       </div>
     );
   }

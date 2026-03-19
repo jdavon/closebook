@@ -20,6 +20,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { AccountCombobox } from "@/components/ui/account-combobox";
 import {
   Collapsible,
   CollapsibleContent,
@@ -672,27 +673,18 @@ export function DebtReconciliationTab({ entityId }: DebtReconciliationTabProps) 
                       {/* Add account picker */}
                       {isAdding ? (
                         <div className="flex items-center gap-2">
-                          <Select
+                          <AccountCombobox
+                            accounts={entityAccounts
+                              .filter((a) => !allMappedAccountIds.has(a.id))
+                              .map((a) => ({
+                                id: a.id,
+                                account_number: a.account_number,
+                                name: a.name,
+                                account_type: a.account_type,
+                              }))}
                             value={selectedAccountId}
                             onValueChange={setSelectedAccountId}
-                          >
-                            <SelectTrigger className="w-full text-sm">
-                              <SelectValue placeholder="Select account..." />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {entityAccounts
-                                .filter((a) => !allMappedAccountIds.has(a.id))
-                                .map((a) => (
-                                  <SelectItem key={a.id} value={a.id}>
-                                    {a.account_number ? `${a.account_number} — ` : ""}
-                                    {a.name}
-                                    <span className="text-muted-foreground ml-2 text-xs">
-                                      ({a.account_type})
-                                    </span>
-                                  </SelectItem>
-                                ))}
-                            </SelectContent>
-                          </Select>
+                          />
                           <Button
                             size="sm"
                             onClick={() => handleAddAccount(group.key)}

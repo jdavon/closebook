@@ -19,6 +19,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { AccountCombobox } from "@/components/ui/account-combobox";
 import { toast } from "sonner";
 import { ArrowLeft } from "lucide-react";
 
@@ -153,7 +154,15 @@ export default function RevenueSettingsPage() {
             <p className="text-xs text-muted-foreground">
               Balance sheet account for revenue earned but not yet billed
             </p>
-            <Select
+            <AccountCombobox
+              accounts={[
+                { id: "none", name: "-- None --" },
+                ...accounts.map((a) => ({
+                  id: a.id,
+                  account_number: a.account_number,
+                  name: a.name,
+                })),
+              ]}
               value={settings.accrued_account_id ?? "none"}
               onValueChange={(v) =>
                 setSettings((s) => ({
@@ -161,21 +170,7 @@ export default function RevenueSettingsPage() {
                   accrued_account_id: v === "none" ? null : v,
                 }))
               }
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Select account..." />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="none">-- None --</SelectItem>
-                {accounts.map((a) => (
-                  <SelectItem key={a.id} value={a.id}>
-                    {a.account_number
-                      ? `${a.account_number} - ${a.name}`
-                      : a.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            />
           </div>
 
           <div className="space-y-2">
@@ -183,7 +178,15 @@ export default function RevenueSettingsPage() {
             <p className="text-xs text-muted-foreground">
               Balance sheet account for revenue billed but not yet earned
             </p>
-            <Select
+            <AccountCombobox
+              accounts={[
+                { id: "none", name: "-- None --" },
+                ...accounts.map((a) => ({
+                  id: a.id,
+                  account_number: a.account_number,
+                  name: a.name,
+                })),
+              ]}
               value={settings.deferred_account_id ?? "none"}
               onValueChange={(v) =>
                 setSettings((s) => ({
@@ -191,21 +194,7 @@ export default function RevenueSettingsPage() {
                   deferred_account_id: v === "none" ? null : v,
                 }))
               }
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Select account..." />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="none">-- None --</SelectItem>
-                {accounts.map((a) => (
-                  <SelectItem key={a.id} value={a.id}>
-                    {a.account_number
-                      ? `${a.account_number} - ${a.name}`
-                      : a.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            />
           </div>
 
           <div className="space-y-2">
@@ -213,7 +202,15 @@ export default function RevenueSettingsPage() {
             <p className="text-xs text-muted-foreground">
               Income statement account for rental revenue
             </p>
-            <Select
+            <AccountCombobox
+              accounts={[
+                { id: "none", name: "-- None --" },
+                ...accounts.map((a) => ({
+                  id: a.id,
+                  account_number: a.account_number,
+                  name: a.name,
+                })),
+              ]}
               value={settings.revenue_account_id ?? "none"}
               onValueChange={(v) =>
                 setSettings((s) => ({
@@ -221,21 +218,7 @@ export default function RevenueSettingsPage() {
                   revenue_account_id: v === "none" ? null : v,
                 }))
               }
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Select account..." />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="none">-- None --</SelectItem>
-                {accounts.map((a) => (
-                  <SelectItem key={a.id} value={a.id}>
-                    {a.account_number
-                      ? `${a.account_number} - ${a.name}`
-                      : a.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            />
           </div>
 
           <Button onClick={handleSave} disabled={saving} className="mt-4">
