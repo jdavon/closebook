@@ -28,6 +28,11 @@ export const DEBT_GL_ACCOUNT_GROUPS: DebtGLAccountGroup[] = [
     displayName: "Interest Payable",
     description: "Accrued interest expense for the period",
   },
+  {
+    key: "interest_expense",
+    displayName: "Interest Expense",
+    description: "YTD interest expense per amortization schedules",
+  },
 ];
 
 const LOC_TYPES = new Set(["line_of_credit", "revolving_credit"]);

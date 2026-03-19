@@ -245,6 +245,7 @@ export function DebtReconciliationTab({ entityId }: DebtReconciliationTabProps) 
     }
 
     // Interest payable: use period interest from amortization (theoretical accrual)
+    // Interest expense: use YTD interest from amortization (Jan through selected month)
     if (instrIds.length > 0) {
       const { data: amortInterest } = await supabase
         .from("debt_amortization")
@@ -266,6 +267,33 @@ export function DebtReconciliationTab({ entityId }: DebtReconciliationTabProps) 
         }
       }
       grouped["interest_payable"] = { total: totalInterest, instruments: interestInstruments };
+
+      // YTD interest expense: sum interest from Jan through selected month
+      const { data: ytdInterest } = await supabase
+        .from("debt_amortization")
+        .select("debt_instrument_id, interest, period_month")
+        .in("debt_instrument_id", instrIds)
+        .eq("period_year", periodYear)
+        .lte("period_month", periodMonth);
+
+      let ytdTotal = 0;
+      const ytdByInstrument: Record<string, number> = {};
+      for (const row of (ytdInterest ?? []) as { debt_instrument_id: string; interest: number; period_month: number }[]) {
+        const interest = Number(row.interest ?? 0);
+        ytdTotal += interest;
+        ytdByInstrument[row.debt_instrument_id] = (ytdByInstrument[row.debt_instrument_id] ?? 0) + interest;
+      }
+
+      const ytdInstruments: InstrumentSummary[] = [];
+      for (const [instrId, ytdAmt] of Object.entries(ytdByInstrument)) {
+        if (ytdAmt > 0) {
+          const instr = instruments.find((i) => i.id === instrId);
+          if (instr) {
+            ytdInstruments.push({ ...instr, ending_balance: ytdAmt });
+          }
+        }
+      }
+      grouped["interest_expense"] = { total: Math.round(ytdTotal * 100) / 100, instruments: ytdInstruments };
     }
 
     setSubledgerBalances(grouped);
