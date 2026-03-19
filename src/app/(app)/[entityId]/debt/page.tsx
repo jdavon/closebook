@@ -48,6 +48,7 @@ import {
   Percent,
   CreditCard,
   Plus,
+  FileText,
 } from "lucide-react";
 import { DebtReconciliationTab } from "./reconciliation-tab";
 import {
@@ -472,6 +473,12 @@ export default function DebtPage() {
             className="hidden"
             onChange={handleUpload}
           />
+          <Link href={`/${entityId}/debt/accrued-interest`}>
+            <Button variant="outline">
+              <FileText className="mr-2 h-4 w-4" />
+              Accrued Interest Report
+            </Button>
+          </Link>
           <Button
             variant="outline"
             onClick={() => fileInputRef.current?.click()}
