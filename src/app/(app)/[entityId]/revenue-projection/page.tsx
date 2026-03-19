@@ -29,12 +29,14 @@ import {
   RefreshCw,
   Loader2,
   ChevronRight,
+  BookOpen,
 } from "lucide-react";
 import { formatCurrency } from "@/lib/utils/dates";
 import {
   EQUIPMENT_TYPE_LABELS,
   type RevenueProjectionResponse,
   type ClosedInvoice,
+  type MonthlyRevenue,
   type DateMode,
 } from "@/lib/utils/revenue-projection";
 import {
@@ -50,6 +52,7 @@ import {
   PieChart,
   Pie,
   Cell,
+  ReferenceLine,
 } from "recharts";
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -84,6 +87,49 @@ const REVENUE_SERIES: { key: string; label: string; color: string }[] = [
   { key: "pipeline", label: "Pipeline", color: "#94a3b8" },
   { key: "forecast", label: "Forecast", color: "#ea580c" },
 ];
+
+function AccrualDeferralTooltip({ active, payload, label }: { active?: boolean; payload?: Array<{ dataKey: string; value: number; payload: MonthlyRevenue }>; label?: string }) {
+  if (!active || !payload?.length) return null;
+  const row = payload[0]?.payload;
+  if (!row) return null;
+  return (
+    <div className="rounded-lg border bg-white px-3 py-2 shadow-lg text-sm whitespace-nowrap" style={{ zIndex: 50 }}>
+      <p className="font-semibold text-gray-900 mb-1.5">{label}</p>
+      <div className="flex items-center justify-between gap-8">
+        <div className="flex items-center gap-2">
+          <span className="inline-block h-2.5 w-2.5 rounded-sm shrink-0 bg-blue-500" />
+          <span className="text-gray-500">Billed</span>
+        </div>
+        <span className="font-medium tabular-nums text-gray-900">{formatCurrency(row.billed)}</span>
+      </div>
+      <div className="flex items-center justify-between gap-8">
+        <div className="flex items-center gap-2">
+          <span className="inline-block h-2.5 w-2.5 rounded-sm shrink-0 bg-emerald-500" />
+          <span className="text-gray-500">Earned</span>
+        </div>
+        <span className="font-medium tabular-nums text-gray-900">{formatCurrency(row.earned)}</span>
+      </div>
+      {row.accrued > 0 && (
+        <div className="flex items-center justify-between gap-8 border-t border-gray-200 mt-1.5 pt-1.5">
+          <div className="flex items-center gap-2">
+            <span className="inline-block h-2.5 w-2.5 rounded-sm shrink-0 bg-teal-500" />
+            <span className="text-gray-500">Accrued Revenue</span>
+          </div>
+          <span className="font-medium tabular-nums text-teal-700">{formatCurrency(row.accrued)}</span>
+        </div>
+      )}
+      {row.deferred > 0 && (
+        <div className="flex items-center justify-between gap-8 border-t border-gray-200 mt-1.5 pt-1.5">
+          <div className="flex items-center gap-2">
+            <span className="inline-block h-2.5 w-2.5 rounded-sm shrink-0 bg-amber-500" />
+            <span className="text-gray-500">Deferred Revenue</span>
+          </div>
+          <span className="font-medium tabular-nums text-amber-700">{formatCurrency(row.deferred)}</span>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function RevenueTooltip({ active, payload, label }: { active?: boolean; payload?: Array<{ dataKey: string; value: number }>; label?: string }) {
   if (!active || !payload?.length) return null;
@@ -414,6 +460,10 @@ export default function RevenueProjectionPage() {
           <TabsTrigger value="quotes">
             Quotes ({data.pipelineQuotes.length})
           </TabsTrigger>
+          <TabsTrigger value="accruals">
+            <BookOpen className="mr-1.5 h-3.5 w-3.5" />
+            Accruals
+          </TabsTrigger>
         </TabsList>
 
         {/* Overview Tab */}
@@ -486,6 +536,44 @@ export default function RevenueProjectionPage() {
               </ResponsiveContainer>
             </CardContent>
           </Card>
+
+          {/* Accrued & Deferred Revenue Chart */}
+          {data.monthlyData.some((m) => m.accrued > 0 || m.deferred > 0) && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Accrued & Deferred Revenue</CardTitle>
+                <CardDescription>
+                  Monthly difference between earned revenue (by rental period) and billed revenue (by invoice date)
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ResponsiveContainer width="100%" height={320}>
+                  <ComposedChart
+                    data={data.monthlyData.map((m) => ({
+                      ...m,
+                      deferredNeg: m.deferred > 0 ? -m.deferred : 0,
+                    }))}
+                    margin={{ top: 10, right: 30, left: 10, bottom: 0 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                    <XAxis dataKey="label" className="text-xs" tick={{ fontSize: 12 }} />
+                    <YAxis tickFormatter={formatCompact} className="text-xs" tick={{ fontSize: 12 }} />
+                    <RechartsTooltip
+                      content={<AccrualDeferralTooltip />}
+                      allowEscapeViewBox={{ x: true, y: true }}
+                      wrapperStyle={{ zIndex: 50, pointerEvents: "none" }}
+                    />
+                    <Legend />
+                    <ReferenceLine y={0} stroke="#94a3b8" strokeWidth={1} />
+                    <Bar dataKey="accrued" name="Accrued" fill="#14b8a6" radius={[3, 3, 0, 0]} />
+                    <Bar dataKey="deferredNeg" name="Deferred" fill="#f59e0b" radius={[0, 0, 3, 3]} />
+                    <Line dataKey="billed" name="Billed" stroke="#3b82f6" strokeWidth={2} dot={{ r: 3 }} />
+                    <Line dataKey="earned" name="Earned" stroke="#10b981" strokeWidth={2} dot={{ r: 3 }} strokeDasharray="5 5" />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+          )}
 
           {/* Equipment Breakdown */}
           {data.equipmentBreakdown.length > 0 && (
@@ -955,12 +1043,220 @@ export default function RevenueProjectionPage() {
             </CardContent>
           </Card>
         </TabsContent>
+
+        {/* Accruals Tab — JE Schedule */}
+        <TabsContent value="accruals" className="space-y-6">
+          <AccrualSchedule monthlyData={data.monthlyData} />
+        </TabsContent>
       </Tabs>
     </div>
   );
 }
 
 // ─── Sub-components ─────────────────────────────────────────────────────────
+
+function AccrualSchedule({ monthlyData }: { monthlyData: MonthlyRevenue[] }) {
+  const activeMonths = monthlyData.filter((m) => m.billed > 0 || m.earned > 0);
+
+  const totals = activeMonths.reduce(
+    (acc, m) => ({
+      billed: acc.billed + m.billed,
+      earned: acc.earned + m.earned,
+      accrued: acc.accrued + m.accrued,
+      deferred: acc.deferred + m.deferred,
+    }),
+    { billed: 0, earned: 0, accrued: 0, deferred: 0 },
+  );
+
+  return (
+    <>
+      {/* Monthly Summary Table */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Accrual & Deferral Schedule</CardTitle>
+          <CardDescription>
+            Monthly earned vs billed revenue — use for QuickBooks journal entries
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {activeMonths.length === 0 ? (
+            <p className="text-muted-foreground py-8 text-center text-sm">
+              No revenue data available.
+            </p>
+          ) : (
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Month</TableHead>
+                    <TableHead className="text-right">Billed</TableHead>
+                    <TableHead className="text-right">Earned</TableHead>
+                    <TableHead className="text-right">Accrued</TableHead>
+                    <TableHead className="text-right">Deferred</TableHead>
+                    <TableHead className="text-right">Net Adj.</TableHead>
+                    <TableHead>Type</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {activeMonths.map((m) => {
+                    const netAdj = m.accrued - m.deferred;
+                    return (
+                      <TableRow key={m.month}>
+                        <TableCell className="font-medium">{m.label}</TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {formatCurrency(m.billed)}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {formatCurrency(m.earned)}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums text-teal-700">
+                          {m.accrued > 0 ? formatCurrency(m.accrued) : "—"}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums text-amber-700">
+                          {m.deferred > 0 ? formatCurrency(m.deferred) : "—"}
+                        </TableCell>
+                        <TableCell className={`text-right tabular-nums font-medium ${netAdj > 0 ? "text-teal-700" : netAdj < 0 ? "text-amber-700" : ""}`}>
+                          {netAdj === 0 ? "—" : formatCurrency(netAdj)}
+                        </TableCell>
+                        <TableCell>
+                          {m.accrued > 0 && m.deferred === 0 && (
+                            <Badge className="bg-teal-100 text-teal-800 hover:bg-teal-100">Accrual</Badge>
+                          )}
+                          {m.deferred > 0 && m.accrued === 0 && (
+                            <Badge className="bg-amber-100 text-amber-800 hover:bg-amber-100">Deferral</Badge>
+                          )}
+                          {m.accrued > 0 && m.deferred > 0 && (
+                            <Badge variant="outline">Mixed</Badge>
+                          )}
+                          {m.accrued === 0 && m.deferred === 0 && (
+                            <Badge variant="secondary">Matched</Badge>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                  <TableRow className="border-t-2 font-semibold">
+                    <TableCell>Total</TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {formatCurrency(totals.billed)}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {formatCurrency(totals.earned)}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums text-teal-700">
+                      {totals.accrued > 0 ? formatCurrency(totals.accrued) : "—"}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums text-amber-700">
+                      {totals.deferred > 0 ? formatCurrency(totals.deferred) : "—"}
+                    </TableCell>
+                    <TableCell className={`text-right tabular-nums font-medium ${totals.accrued - totals.deferred > 0 ? "text-teal-700" : "text-amber-700"}`}>
+                      {formatCurrency(totals.accrued - totals.deferred)}
+                    </TableCell>
+                    <TableCell />
+                  </TableRow>
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Journal Entry Details */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Journal Entry Details</CardTitle>
+          <CardDescription>
+            Monthly adjusting entries for QuickBooks — post at month-end, reverse at beginning of next month
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {activeMonths.filter((m) => m.accrued > 0 || m.deferred > 0).length === 0 ? (
+            <p className="text-muted-foreground py-8 text-center text-sm">
+              No adjustments needed — billed and earned revenue match for all months.
+            </p>
+          ) : (
+            <div className="space-y-4">
+              {activeMonths
+                .filter((m) => m.accrued > 0 || m.deferred > 0)
+                .map((m) => (
+                  <div key={m.month} className="rounded-lg border p-4">
+                    <h4 className="font-semibold mb-3">{m.label}</h4>
+                    <div className="overflow-x-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead className="w-[60px]">#</TableHead>
+                            <TableHead>Account</TableHead>
+                            <TableHead>Memo</TableHead>
+                            <TableHead className="text-right">Debit</TableHead>
+                            <TableHead className="text-right">Credit</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {m.accrued > 0 && (
+                            <>
+                              <TableRow>
+                                <TableCell className="text-muted-foreground">1</TableCell>
+                                <TableCell className="font-medium">Accrued Revenue (Asset)</TableCell>
+                                <TableCell className="text-muted-foreground text-sm">
+                                  Revenue earned but not yet billed — {m.label}
+                                </TableCell>
+                                <TableCell className="text-right tabular-nums font-medium text-teal-700">
+                                  {formatCurrency(m.accrued)}
+                                </TableCell>
+                                <TableCell className="text-right tabular-nums">—</TableCell>
+                              </TableRow>
+                              <TableRow>
+                                <TableCell className="text-muted-foreground">2</TableCell>
+                                <TableCell className="font-medium">Rental Revenue (Income)</TableCell>
+                                <TableCell className="text-muted-foreground text-sm">
+                                  Accrued rental revenue — {m.label}
+                                </TableCell>
+                                <TableCell className="text-right tabular-nums">—</TableCell>
+                                <TableCell className="text-right tabular-nums font-medium text-teal-700">
+                                  {formatCurrency(m.accrued)}
+                                </TableCell>
+                              </TableRow>
+                            </>
+                          )}
+                          {m.deferred > 0 && (
+                            <>
+                              <TableRow>
+                                <TableCell className="text-muted-foreground">{m.accrued > 0 ? 3 : 1}</TableCell>
+                                <TableCell className="font-medium">Rental Revenue (Income)</TableCell>
+                                <TableCell className="text-muted-foreground text-sm">
+                                  Revenue billed but not yet earned — {m.label}
+                                </TableCell>
+                                <TableCell className="text-right tabular-nums font-medium text-amber-700">
+                                  {formatCurrency(m.deferred)}
+                                </TableCell>
+                                <TableCell className="text-right tabular-nums">—</TableCell>
+                              </TableRow>
+                              <TableRow>
+                                <TableCell className="text-muted-foreground">{m.accrued > 0 ? 4 : 2}</TableCell>
+                                <TableCell className="font-medium">Deferred Revenue (Liability)</TableCell>
+                                <TableCell className="text-muted-foreground text-sm">
+                                  Deferred rental revenue — {m.label}
+                                </TableCell>
+                                <TableCell className="text-right tabular-nums">—</TableCell>
+                                <TableCell className="text-right tabular-nums font-medium text-amber-700">
+                                  {formatCurrency(m.deferred)}
+                                </TableCell>
+                              </TableRow>
+                            </>
+                          )}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  </div>
+                ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </>
+  );
+}
 
 function KPICard({
   title,

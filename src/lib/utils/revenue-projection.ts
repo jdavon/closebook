@@ -58,6 +58,10 @@ export interface MonthlyRevenue {
   pending: number;
   pipeline: number;
   forecast: number | null; // null = no forecast for this month
+  billed: number; // revenue grouped by invoice date
+  earned: number; // revenue pro-rata by rental period
+  accrued: number; // earned > billed → recognize extra revenue
+  deferred: number; // billed > earned → defer excess to future
 }
 
 export interface PipelineOrder {
@@ -383,10 +387,27 @@ export function processRevenueData(
   const monthKeys = generateMonthKeys(12, 3);
   const monthMap = new Map<
     string,
-    { closed: number; pending: number; pipeline: number }
+    { closed: number; pending: number; pipeline: number; billed: number; earned: number }
   >();
   for (const mk of monthKeys) {
-    monthMap.set(mk, { closed: 0, pending: 0, pipeline: 0 });
+    monthMap.set(mk, { closed: 0, pending: 0, pipeline: 0, billed: 0, earned: 0 });
+  }
+
+  // --- Compute billed (by invoice date) and earned (by rental period) for all closed invoices ---
+  for (const inv of closedInvoices) {
+    const amount = toNum(inv.InvoiceSubTotal);
+    // Billed: always grouped by invoice date
+    const billedMk = getMonthKey(inv.InvoiceDate);
+    if (billedMk && monthMap.has(billedMk)) {
+      monthMap.get(billedMk)!.billed += amount;
+    }
+    // Earned: pro-rata by rental period
+    const earnedAllocs = allocateToMonths(
+      inv.BillingStartDate, inv.BillingEndDate, amount, inv.InvoiceDate,
+    );
+    for (const [mk, entry] of earnedAllocs) {
+      if (monthMap.has(mk)) monthMap.get(mk)!.earned += entry.amount;
+    }
   }
 
   // Aggregate closed invoices by the selected date mode
@@ -452,6 +473,7 @@ export function processRevenueData(
   const monthlyData: MonthlyRevenue[] = monthKeys.map((mk) => {
     const bucket = monthMap.get(mk)!;
     const isFuture = futureMonths.includes(mk);
+    const diff = bucket.earned - bucket.billed;
     return {
       month: mk,
       label: getMonthLabel(mk),
@@ -459,6 +481,10 @@ export function processRevenueData(
       pending: bucket.pending,
       pipeline: bucket.pipeline,
       forecast: isFuture ? smaAvg : null,
+      billed: Math.round(bucket.billed * 100) / 100,
+      earned: Math.round(bucket.earned * 100) / 100,
+      accrued: diff > 0 ? Math.round(diff * 100) / 100 : 0,
+      deferred: diff < 0 ? Math.round(Math.abs(diff) * 100) / 100 : 0,
     };
   });
 
