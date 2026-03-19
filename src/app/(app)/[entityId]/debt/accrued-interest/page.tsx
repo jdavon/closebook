@@ -128,7 +128,7 @@ export default function AccruedInterestPage() {
 
     const instrIds = instruments.map((i: AnyRow) => i.id);
 
-    // Fetch all transactions through year-end to replay balances as of 12/31
+    // Fetch ALL transactions (through year-end) to replay balances
     const { data: txnData } = await supabase
       .from("debt_transactions")
       .select("debt_instrument_id, transaction_type, amount, to_principal, effective_date")
@@ -137,26 +137,40 @@ export default function AccruedInterestPage() {
       .order("effective_date", { ascending: true })
       .order("created_at", { ascending: true });
 
-    // Replay transactions per instrument to get balance as of 12/31
-    const balanceAsOfMap: Record<string, number> = {};
+    // For each instrument, build:
+    // 1. Balance entering December (replay txns through Nov 30)
+    // 2. December transaction timeline (for day-by-day interest calc)
+    const decStartStr = `${year}-12-01`;
+    const balancePreDecMap: Record<string, number> = {};
+    const decTxnsMap: Record<string, AnyRow[]> = {};
     const origAmountMap: Record<string, number> = {};
+
     for (const instr of instruments as AnyRow[]) {
       origAmountMap[instr.id] = Number(instr.original_amount ?? 0);
+      balancePreDecMap[instr.id] = Number(instr.original_amount ?? 0);
+      decTxnsMap[instr.id] = [];
     }
+
     if (txnData) {
       for (const txn of txnData as AnyRow[]) {
         const id = txn.debt_instrument_id;
-        if (!(id in balanceAsOfMap)) {
-          balanceAsOfMap[id] = origAmountMap[id] ?? 0;
+        const isDecember = txn.effective_date >= decStartStr;
+
+        if (isDecember) {
+          // Save December transactions for day-by-day processing
+          decTxnsMap[id] = decTxnsMap[id] || [];
+          decTxnsMap[id].push(txn);
+        } else {
+          // Replay pre-December transactions to get balance entering December
+          if (txn.transaction_type === "advance") {
+            balancePreDecMap[id] += Math.abs(txn.amount);
+          } else if (txn.transaction_type === "principal_payment" || txn.transaction_type === "vehicle_payoff") {
+            balancePreDecMap[id] -= Math.abs(txn.to_principal ?? txn.amount);
+          } else if (txn.transaction_type === "payoff") {
+            balancePreDecMap[id] = 0;
+          }
+          balancePreDecMap[id] = Math.max(0, balancePreDecMap[id]);
         }
-        if (txn.transaction_type === "advance") {
-          balanceAsOfMap[id] += Math.abs(txn.amount);
-        } else if (txn.transaction_type === "principal_payment" || txn.transaction_type === "vehicle_payoff") {
-          balanceAsOfMap[id] -= Math.abs(txn.to_principal ?? txn.amount);
-        } else if (txn.transaction_type === "payoff") {
-          balanceAsOfMap[id] = 0;
-        }
-        balanceAsOfMap[id] = Math.max(0, balanceAsOfMap[id]);
       }
     }
 
@@ -170,6 +184,7 @@ export default function AccruedInterestPage() {
 
     // Build accrued interest rows
     const result: AccruedInterestRow[] = [];
+    const decDays = daysInMonth(year, 12); // 31
 
     for (const instr of instruments as AnyRow[]) {
       const convention = instr.day_count_convention || "30/360";
@@ -177,49 +192,79 @@ export default function AccruedInterestPage() {
       const denominator = getDayCountDenominator(convention, year);
       const dailyRate = annualRate / denominator;
 
-      // Balance as of 12/31: replayed from original_amount + transactions through year-end
-      const balanceAtYearEnd = Math.round(
-        (balanceAsOfMap[instr.id] ?? Number(instr.original_amount ?? 0)) * 100
-      ) / 100;
-
-      // Skip instruments with no balance at year-end
-      if (balanceAtYearEnd <= 0) continue;
-
-      // Calculate accrued interest at year-end
-      // This is the interest accrued in December based on the ending balance
-      // For 30/360: 30 days of accrual
-      // For actual conventions: actual days in December (31)
       const startDate = instr.origination_date || instr.start_date;
-      // Parse as local date parts to avoid UTC timezone shift
       const [sY, sM, sD] = startDate.split("T")[0].split("-").map(Number);
-      const startYear = sY;
-      const startMonth = sM;
-      const startDay = sD;
 
-      let accruedDays: number;
-      let accruedInterest: number;
-
-      if (startYear === year && startMonth === 12) {
-        // Note started in December of report year - pro-rate from start day to 31
-        if (convention === "30/360") {
-          accruedDays = Math.min(30, 30 - Math.min(startDay - 1, 30));
-        } else {
-          accruedDays = 31 - startDay + 1;
-        }
-        accruedInterest = Math.round(balanceAtYearEnd * dailyRate * accruedDays * 100) / 100;
-      } else if (startYear > year) {
-        // Note doesn't exist yet in the report year
-        accruedDays = 0;
-        accruedInterest = 0;
+      // Determine which day accrual starts in December
+      let accrualStartDay: number;
+      if (sY > year || (sY === year && sM > 12)) {
+        // Note doesn't exist yet — skip
+        continue;
+      } else if (sY === year && sM === 12) {
+        // Note started in December of report year
+        accrualStartDay = sD;
       } else {
-        // Note existed before December - full December accrual
-        if (convention === "30/360") {
-          accruedDays = 30;
-        } else {
-          accruedDays = daysInMonth(year, 12); // 31
-        }
-        accruedInterest = Math.round(balanceAtYearEnd * dailyRate * accruedDays * 100) / 100;
+        // Note existed before December — full month
+        accrualStartDay = 1;
       }
+
+      // Get the balance entering December
+      // For notes starting in December, this is the original amount
+      const balanceEnteringDec = sY === year && sM === 12
+        ? Number(instr.original_amount ?? 0)
+        : Math.round(balancePreDecMap[instr.id] * 100) / 100;
+
+      // Build day-by-day balance segments for December
+      // Each segment: { fromDay, toDay, balance }
+      interface Segment { fromDay: number; toDay: number; balance: number }
+      const segments: Segment[] = [];
+      let currentBalance = balanceEnteringDec;
+
+      // Collect balance-changing December transactions with their day
+      const decChanges: { day: number; txn: AnyRow }[] = [];
+      for (const txn of decTxnsMap[instr.id] || []) {
+        const txnDay = Number(txn.effective_date.split("T")[0].split("-")[2]);
+        decChanges.push({ day: txnDay, txn });
+      }
+      decChanges.sort((a, b) => a.day - b.day);
+
+      let segStart = accrualStartDay;
+      for (const { day, txn } of decChanges) {
+        if (day < accrualStartDay) continue;
+        // Interest accrues on the balance BEFORE the payment on that day
+        if (day > segStart) {
+          segments.push({ fromDay: segStart, toDay: day - 1, balance: currentBalance });
+        }
+        // Apply the transaction to get new balance
+        if (txn.transaction_type === "advance") {
+          currentBalance += Math.abs(txn.amount);
+        } else if (txn.transaction_type === "principal_payment" || txn.transaction_type === "vehicle_payoff") {
+          currentBalance -= Math.abs(txn.to_principal ?? txn.amount);
+        } else if (txn.transaction_type === "payoff") {
+          currentBalance = 0;
+        }
+        currentBalance = Math.max(0, currentBalance);
+        segStart = day;
+      }
+      // Final segment from last change (or accrual start) through Dec 31
+      if (segStart <= decDays) {
+        segments.push({ fromDay: segStart, toDay: decDays, balance: currentBalance });
+      }
+
+      // Calculate interest for each segment
+      let accruedInterest = 0;
+      let totalAccruedDays = 0;
+      for (const seg of segments) {
+        const days = seg.toDay - seg.fromDay + 1;
+        totalAccruedDays += days;
+        accruedInterest += seg.balance * dailyRate * days;
+      }
+      accruedInterest = Math.round(accruedInterest * 100) / 100;
+
+      const balanceAtYearEnd = Math.round(currentBalance * 100) / 100;
+
+      // Skip instruments with no balance and no accrual
+      if (balanceAtYearEnd <= 0 && accruedInterest <= 0) continue;
 
       result.push({
         instrumentId: instr.id,
@@ -233,14 +278,13 @@ export default function AccruedInterestPage() {
         dayCountConvention: convention,
         dailyRate,
         balanceAtYearEnd,
-        accruedDays,
+        accruedDays: totalAccruedDays,
         accruedInterest,
         status: instr.status,
       });
     }
 
-    // Filter out instruments with zero balance and zero accrual
-    setRows(result.filter((r) => r.balanceAtYearEnd > 0 || r.accruedInterest > 0));
+    setRows(result);
     setLoading(false);
   }, [entityId, year, supabase]);
 
