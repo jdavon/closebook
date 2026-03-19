@@ -109,7 +109,7 @@ export interface EquipmentBreakdown {
   percentage: number;
 }
 
-export type DateMode = "invoice_date" | "billing_date";
+export type DateMode = "invoice_date" | "billing_date" | "rental_period";
 
 export interface RevenueProjectionResponse {
   ytdRevenue: number;
@@ -196,6 +196,73 @@ function generateMonthKeys(startMonthsAgo: number, endMonthsAhead: number): stri
   return keys;
 }
 
+/**
+ * Pro-rata allocate an amount across months based on rental period days.
+ * Returns a Map of monthKey → allocated amount.
+ * If dates are missing/invalid, falls back to a single-month assignment using fallbackDate.
+ */
+function allocateToMonths(
+  startDateStr: string | null | undefined,
+  endDateStr: string | null | undefined,
+  amount: number,
+  fallbackDateStr: string | null | undefined,
+): Map<string, number> {
+  const result = new Map<string, number>();
+  if (amount === 0) return result;
+
+  const startDate = startDateStr ? new Date(startDateStr) : null;
+  const endDate = endDateStr ? new Date(endDateStr) : null;
+
+  // If either date is missing/invalid, fall back to single-month assignment
+  if (!startDate || !endDate || isNaN(startDate.getTime()) || isNaN(endDate.getTime()) || endDate < startDate) {
+    const mk = getMonthKey(fallbackDateStr);
+    if (mk) result.set(mk, amount);
+    return result;
+  }
+
+  // Calculate total rental days (inclusive)
+  const totalDays = Math.round((endDate.getTime() - startDate.getTime()) / 86400000) + 1;
+  if (totalDays <= 0) {
+    const mk = getMonthKey(fallbackDateStr);
+    if (mk) result.set(mk, amount);
+    return result;
+  }
+
+  const dailyRate = amount / totalDays;
+  let allocated = 0;
+
+  // Walk through each month the rental period touches
+  const cursor = new Date(startDate.getFullYear(), startDate.getMonth(), 1);
+  const lastMonthStart = new Date(endDate.getFullYear(), endDate.getMonth(), 1);
+
+  while (cursor <= lastMonthStart) {
+    const monthStart = new Date(cursor.getFullYear(), cursor.getMonth(), 1);
+    const monthEnd = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0); // last day of month
+
+    // Overlap: max(rentalStart, monthStart) to min(rentalEnd, monthEnd)
+    const overlapStart = startDate > monthStart ? startDate : monthStart;
+    const overlapEnd = endDate < monthEnd ? endDate : monthEnd;
+    const daysInMonth = Math.round((overlapEnd.getTime() - overlapStart.getTime()) / 86400000) + 1;
+
+    if (daysInMonth > 0) {
+      const mk = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}`;
+      // For the last month in the range, assign remainder to avoid rounding drift
+      if (cursor.getTime() === lastMonthStart.getTime()) {
+        result.set(mk, Math.round((amount - allocated) * 100) / 100);
+      } else {
+        const monthAmount = Math.round(dailyRate * daysInMonth * 100) / 100;
+        result.set(mk, monthAmount);
+        allocated += monthAmount;
+      }
+    }
+
+    // Advance to next month
+    cursor.setMonth(cursor.getMonth() + 1);
+  }
+
+  return result;
+}
+
 // ─── Main Processing ────────────────────────────────────────────────────────
 
 export function processRevenueData(
@@ -208,7 +275,10 @@ export function processRevenueData(
   const currentMonthKey = getMonthKey(now.toISOString());
   const currentYear = now.getFullYear();
 
+  const useRentalPeriod = dateMode === "rental_period";
+
   // Date selector: which date to use for grouping invoices into months
+  // (used for non-rental_period modes and as fallback)
   const getInvoiceGroupDate = (inv: RWInvoiceRow) =>
     dateMode === "billing_date"
       ? inv.BillingEndDate || inv.BillingStartDate || inv.InvoiceDate
@@ -270,17 +340,37 @@ export function processRevenueData(
 
   // Aggregate closed invoices by the selected date mode
   for (const inv of closedInvoices) {
-    const mk = getMonthKey(getInvoiceGroupDate(inv));
-    if (mk && monthMap.has(mk)) {
-      monthMap.get(mk)!.closed += toNum(inv.InvoiceSubTotal);
+    if (useRentalPeriod) {
+      const allocations = allocateToMonths(
+        inv.BillingStartDate, inv.BillingEndDate,
+        toNum(inv.InvoiceSubTotal), inv.InvoiceDate,
+      );
+      for (const [mk, amt] of allocations) {
+        if (monthMap.has(mk)) monthMap.get(mk)!.closed += amt;
+      }
+    } else {
+      const mk = getMonthKey(getInvoiceGroupDate(inv));
+      if (mk && monthMap.has(mk)) {
+        monthMap.get(mk)!.closed += toNum(inv.InvoiceSubTotal);
+      }
     }
   }
 
   // Aggregate pending invoices by the selected date mode
   for (const inv of pendingInvoices) {
-    const mk = getMonthKey(getInvoiceGroupDate(inv));
-    if (mk && monthMap.has(mk)) {
-      monthMap.get(mk)!.pending += toNum(inv.InvoiceSubTotal);
+    if (useRentalPeriod) {
+      const allocations = allocateToMonths(
+        inv.BillingStartDate, inv.BillingEndDate,
+        toNum(inv.InvoiceSubTotal), inv.InvoiceDate,
+      );
+      for (const [mk, amt] of allocations) {
+        if (monthMap.has(mk)) monthMap.get(mk)!.pending += amt;
+      }
+    } else {
+      const mk = getMonthKey(getInvoiceGroupDate(inv));
+      if (mk && monthMap.has(mk)) {
+        monthMap.get(mk)!.pending += toNum(inv.InvoiceSubTotal);
+      }
     }
   }
 
@@ -322,12 +412,21 @@ export function processRevenueData(
   });
 
   // --- KPIs ---
-  const ytdRevenue = closedInvoices
-    .filter((inv) => {
-      const d = new Date(getInvoiceGroupDate(inv));
-      return !isNaN(d.getTime()) && d.getFullYear() === currentYear;
-    })
-    .reduce((sum, inv) => sum + toNum(inv.InvoiceSubTotal), 0);
+  let ytdRevenue = 0;
+  if (useRentalPeriod) {
+    // Sum only the portions of revenue that fall in the current year
+    const ytdMonths = monthKeys.filter((mk) => mk.startsWith(String(currentYear)));
+    for (const mk of ytdMonths) {
+      ytdRevenue += monthMap.get(mk)?.closed ?? 0;
+    }
+  } else {
+    ytdRevenue = closedInvoices
+      .filter((inv) => {
+        const d = new Date(getInvoiceGroupDate(inv));
+        return !isNaN(d.getTime()) && d.getFullYear() === currentYear;
+      })
+      .reduce((sum, inv) => sum + toNum(inv.InvoiceSubTotal), 0);
+  }
 
   const currentMonthBucket = monthMap.get(currentMonthKey);
   const currentMonthActual = currentMonthBucket?.closed ?? 0;
@@ -354,12 +453,25 @@ export function processRevenueData(
   // --- Equipment breakdown (YTD closed invoices) ---
   const equipTotals: Record<string, number> = {};
   for (const inv of closedInvoices) {
-    const d = new Date(getInvoiceGroupDate(inv));
-    if (isNaN(d.getTime()) || d.getFullYear() !== currentYear) continue;
     const type = classifyEquipmentType(
       inv.OrderDescription || inv.InvoiceDescription || "",
     );
-    equipTotals[type] = (equipTotals[type] || 0) + toNum(inv.InvoiceSubTotal);
+    if (useRentalPeriod) {
+      // Only count the portion of revenue allocated to current-year months
+      const allocations = allocateToMonths(
+        inv.BillingStartDate, inv.BillingEndDate,
+        toNum(inv.InvoiceSubTotal), inv.InvoiceDate,
+      );
+      for (const [mk, amt] of allocations) {
+        if (mk.startsWith(String(currentYear))) {
+          equipTotals[type] = (equipTotals[type] || 0) + amt;
+        }
+      }
+    } else {
+      const d = new Date(getInvoiceGroupDate(inv));
+      if (isNaN(d.getTime()) || d.getFullYear() !== currentYear) continue;
+      equipTotals[type] = (equipTotals[type] || 0) + toNum(inv.InvoiceSubTotal);
+    }
   }
 
   const equipTotal = Object.values(equipTotals).reduce((a, b) => a + b, 0);
@@ -391,7 +503,14 @@ export function processRevenueData(
   // --- Closed invoices table ---
   const closedInvoiceRows: ClosedInvoice[] = closedInvoices
     .map((inv) => {
-      const groupDate = getInvoiceGroupDate(inv);
+      let month: string;
+      if (useRentalPeriod) {
+        // Use billing start date as the primary month for display;
+        // fall back to invoice date if missing
+        month = getMonthKey(inv.BillingStartDate) || getMonthKey(inv.InvoiceDate);
+      } else {
+        month = getMonthKey(getInvoiceGroupDate(inv));
+      }
       return {
         invoiceId: inv.InvoiceId,
         invoiceNumber: inv.InvoiceNumber,
@@ -409,7 +528,7 @@ export function processRevenueData(
         equipmentType: classifyEquipmentType(
           inv.OrderDescription || inv.InvoiceDescription || "",
         ),
-        month: getMonthKey(groupDate),
+        month,
       };
     })
     .sort((a, b) => {

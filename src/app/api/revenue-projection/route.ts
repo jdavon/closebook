@@ -42,13 +42,13 @@ export async function POST(request: Request) {
       1,
     );
 
-    // For billing_date mode, use BillingEndDate as the search/sort field.
-    // We also widen the lookback to 36 months because some invoices have
-    // InvoiceDates far older than their BillingEndDate (e.g. long-term rentals
-    // invoiced once with rolling billing periods).
+    // For billing_date and rental_period modes, widen the lookback to 36 months
+    // because some invoices have InvoiceDates far older than their billing
+    // periods (e.g. long-term rentals invoiced once with rolling billing periods).
     const useBillingDate = dateMode === "billing_date";
+    const useRentalPeriod = dateMode === "rental_period";
     const invoiceDateField = useBillingDate ? "BillingEndDate" : "InvoiceDate";
-    const invoiceLookbackDate = useBillingDate
+    const invoiceLookbackDate = useBillingDate || useRentalPeriod
       ? new Date(now.getFullYear(), now.getMonth() - 36, 1)
       : thirteenMonthsAgo;
     const invoiceStartDate = formatRWDate(invoiceLookbackDate);

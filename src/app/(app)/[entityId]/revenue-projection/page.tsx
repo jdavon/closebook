@@ -289,6 +289,16 @@ export default function RevenueProjectionPage() {
             >
               Billing Date
             </button>
+            <button
+              onClick={() => handleDateModeChange("rental_period")}
+              className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                dateMode === "rental_period"
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              Rental Period
+            </button>
           </div>
           <Button
             onClick={() => fetchData()}
@@ -503,7 +513,9 @@ export default function RevenueProjectionPage() {
                     Revenue grouped by{" "}
                     {dateMode === "invoice_date"
                       ? "invoice date"
-                      : "rental billing date"}
+                      : dateMode === "rental_period"
+                        ? "rental period (pro-rata)"
+                        : "rental billing date"}
                   </CardDescription>
                 </div>
                 {invoiceMonths.length > 0 && (
