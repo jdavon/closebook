@@ -23,6 +23,7 @@ import {
 import { getCurrentPeriod, getPeriodLabel } from "@/lib/utils/dates";
 import { LastMonthPerformance } from "@/components/dashboard/last-month-performance";
 import { ThisMonthProjection } from "@/components/dashboard/this-month-projection";
+import { DriftAlertBanner } from "@/components/dashboard/drift-alerts";
 
 async function getEntityDashboardData(entityId: string) {
   const supabase = await createClient();
@@ -43,6 +44,18 @@ async function getEntityDashboardData(entityId: string) {
       .eq("entity_id", entityId)
       .single(),
   ]);
+
+  // Fetch active drift alerts
+  const { data: driftAlertsRaw } = await supabase
+    .from("drift_alerts")
+    .select("*, accounts!inner(name, account_number, account_type, classification)")
+    .eq("entity_id", entityId)
+    .eq("is_dismissed", false)
+    .order("created_at", { ascending: false })
+    .limit(50);
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const driftAlerts = (driftAlertsRaw ?? []) as any[];
 
   let taskStats = null;
   if (periodResult.data) {
@@ -78,6 +91,7 @@ async function getEntityDashboardData(entityId: string) {
     currentPeriod: periodResult.data,
     connection: connectionResult.data,
     taskStats,
+    driftAlerts: driftAlerts ?? [],
   };
 }
 
@@ -87,7 +101,7 @@ export default async function EntityDashboardPage({
   params: Promise<{ entityId: string }>;
 }) {
   const { entityId } = await params;
-  const { entity, currentPeriod, connection, taskStats } =
+  const { entity, currentPeriod, connection, taskStats, driftAlerts } =
     await getEntityDashboardData(entityId);
 
   if (!entity) notFound();
@@ -102,6 +116,11 @@ export default async function EntityDashboardPage({
         </h1>
         <p className="text-muted-foreground">{entity.code}</p>
       </div>
+
+      {/* Drift Alert Banner */}
+      {driftAlerts.length > 0 && (
+        <DriftAlertBanner entityId={entityId} initialAlerts={driftAlerts} />
+      )}
 
       {/* Financial Performance Section */}
       <div className="grid gap-4 lg:grid-cols-2">

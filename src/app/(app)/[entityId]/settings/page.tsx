@@ -29,8 +29,17 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { RefreshCw, Link2, Unlink, CheckCircle2, AlertCircle, Trash2 } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import { RefreshCw, Link2, Unlink, CheckCircle2, AlertCircle, Trash2, Activity } from "lucide-react";
 import { getCurrentPeriod, getPeriodLabel } from "@/lib/utils/dates";
+
+interface Account {
+  id: string;
+  name: string;
+  account_number: string | null;
+  account_type: string;
+  classification: string;
+}
 
 interface QboConnection {
   id: string;
@@ -68,6 +77,12 @@ export default function EntitySettingsPage() {
   const [entityName, setEntityName] = useState("");
   const [deleting, setDeleting] = useState(false);
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
+
+  // Drift monitoring state
+  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [monitoredAccountIds, setMonitoredAccountIds] = useState<Set<string>>(new Set());
+  const [driftSaving, setDriftSaving] = useState(false);
+  const [driftFilter, setDriftFilter] = useState("");
 
   // Show toast based on callback result
   useEffect(() => {
@@ -110,6 +125,30 @@ export default function EntitySettingsPage() {
         .limit(10);
 
       setSyncLogs((logs as SyncLog[]) ?? []);
+    }
+
+    // Load all active accounts for drift monitoring selector
+    const { data: accts } = await supabase
+      .from("accounts")
+      .select("id, name, account_number, account_type, classification")
+      .eq("entity_id", entityId)
+      .eq("is_active", true)
+      .order("classification")
+      .order("account_type")
+      .order("name");
+
+    if (accts) {
+      setAccounts(accts as Account[]);
+    }
+
+    // Load currently monitored accounts
+    const { data: monitored } = await supabase
+      .from("drift_monitored_accounts")
+      .select("account_id")
+      .eq("entity_id", entityId);
+
+    if (monitored) {
+      setMonitoredAccountIds(new Set(monitored.map((m) => m.account_id)));
     }
 
     setLoading(false);
@@ -214,6 +253,42 @@ export default function EntitySettingsPage() {
     } catch {
       toast.error("Failed to disconnect");
     }
+  }
+
+  function toggleMonitoredAccount(accountId: string) {
+    setMonitoredAccountIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(accountId)) {
+        next.delete(accountId);
+      } else {
+        next.add(accountId);
+      }
+      return next;
+    });
+  }
+
+  async function handleSaveDriftMonitoring() {
+    setDriftSaving(true);
+    try {
+      const response = await fetch("/api/drift/monitored-accounts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          entityId,
+          accountIds: Array.from(monitoredAccountIds),
+        }),
+      });
+
+      if (response.ok) {
+        toast.success(`Monitoring ${monitoredAccountIds.size} accounts for drift`);
+      } else {
+        const data = await response.json();
+        toast.error(data.error || "Failed to save drift settings");
+      }
+    } catch {
+      toast.error("Failed to save drift settings");
+    }
+    setDriftSaving(false);
   }
 
   async function handleDeleteEntity() {
@@ -400,6 +475,129 @@ export default function EntitySettingsPage() {
                 <Link2 className="mr-2 h-4 w-4" />
                 Connect to QuickBooks
               </Button>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Drift Monitoring */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <Activity className="h-5 w-5" />
+                Balance Drift Monitoring
+              </CardTitle>
+              <CardDescription>
+                Select accounts to monitor for unexpected balance changes between
+                daily syncs. You&apos;ll be alerted on the dashboard when a monitored
+                account&apos;s ending balance changes.
+              </CardDescription>
+            </div>
+            {monitoredAccountIds.size > 0 && (
+              <Badge variant="secondary">
+                {monitoredAccountIds.size} monitored
+              </Badge>
+            )}
+          </div>
+        </CardHeader>
+        <CardContent>
+          {accounts.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No accounts found. Sync from QuickBooks first.
+            </p>
+          ) : (
+            <div className="space-y-4">
+              <Input
+                placeholder="Filter accounts..."
+                value={driftFilter}
+                onChange={(e) => setDriftFilter(e.target.value)}
+                className="max-w-sm"
+              />
+
+              <div className="max-h-[400px] overflow-y-auto rounded-md border">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-[50px]">Monitor</TableHead>
+                      <TableHead>Account</TableHead>
+                      <TableHead>Type</TableHead>
+                      <TableHead>Classification</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {(() => {
+                      const filtered = accounts.filter((a) => {
+                        if (!driftFilter) return true;
+                        const term = driftFilter.toLowerCase();
+                        return (
+                          a.name.toLowerCase().includes(term) ||
+                          (a.account_number ?? "").toLowerCase().includes(term) ||
+                          a.account_type.toLowerCase().includes(term) ||
+                          a.classification.toLowerCase().includes(term)
+                        );
+                      });
+
+                      // Group by classification
+                      const groups: Record<string, Account[]> = {};
+                      for (const a of filtered) {
+                        (groups[a.classification] ??= []).push(a);
+                      }
+
+                      const classificationOrder = ["Asset", "Liability", "Equity", "Revenue", "Expense"];
+
+                      return classificationOrder
+                        .filter((c) => groups[c]?.length)
+                        .flatMap((classification) => [
+                          <TableRow key={`group-${classification}`} className="bg-muted/50">
+                            <TableCell colSpan={4} className="font-semibold text-xs uppercase tracking-wide py-2">
+                              {classification}
+                            </TableCell>
+                          </TableRow>,
+                          ...groups[classification].map((account) => (
+                            <TableRow
+                              key={account.id}
+                              className="cursor-pointer hover:bg-muted/30"
+                              onClick={() => toggleMonitoredAccount(account.id)}
+                            >
+                              <TableCell>
+                                <Checkbox
+                                  checked={monitoredAccountIds.has(account.id)}
+                                  onCheckedChange={() => toggleMonitoredAccount(account.id)}
+                                />
+                              </TableCell>
+                              <TableCell>
+                                <div>
+                                  <span className="font-medium">{account.name}</span>
+                                  {account.account_number && (
+                                    <span className="ml-2 text-xs text-muted-foreground">
+                                      #{account.account_number}
+                                    </span>
+                                  )}
+                                </div>
+                              </TableCell>
+                              <TableCell className="text-sm text-muted-foreground">
+                                {account.account_type}
+                              </TableCell>
+                              <TableCell>
+                                <Badge variant="outline" className="text-xs">
+                                  {account.classification}
+                                </Badge>
+                              </TableCell>
+                            </TableRow>
+                          )),
+                        ]);
+                    })()}
+                  </TableBody>
+                </Table>
+              </div>
+
+              <div className="flex justify-end">
+                <Button onClick={handleSaveDriftMonitoring} disabled={driftSaving}>
+                  {driftSaving ? "Saving..." : "Save Monitoring Settings"}
+                </Button>
+              </div>
             </div>
           )}
         </CardContent>

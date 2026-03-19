@@ -132,6 +132,24 @@ export async function GET(request: Request) {
     }
 
     results.push(entityResult);
+
+    // Take drift snapshot for all synced months
+    try {
+      await fetch(`${baseUrl}/api/drift/snapshot`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-cron-secret": cronSecret,
+        },
+        body: JSON.stringify({
+          entityId: conn.entity_id,
+          year: currentYear,
+          months: monthsToSync,
+        }),
+      });
+    } catch {
+      // Drift snapshot failure should not block the sync summary
+    }
   }
 
   // Summary stats

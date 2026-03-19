@@ -227,6 +227,8 @@ export type Database = {
           display_order: number
           is_active: boolean
           requires_reconciliation: boolean
+          phase: number
+          source_module: string | null
           created_at: string
           updated_at: string
         }
@@ -243,6 +245,8 @@ export type Database = {
           display_order?: number
           is_active?: boolean
           requires_reconciliation?: boolean
+          phase?: number
+          source_module?: string | null
           created_at?: string
           updated_at?: string
         }
@@ -259,6 +263,8 @@ export type Database = {
           display_order?: number
           is_active?: boolean
           requires_reconciliation?: boolean
+          phase?: number
+          source_module?: string | null
           created_at?: string
           updated_at?: string
         }
@@ -285,6 +291,10 @@ export type Database = {
           reconciled_balance: number | null
           variance: number | null
           display_order: number
+          phase: number
+          source_module: string | null
+          source_record_id: string | null
+          is_auto_generated: boolean
           created_at: string
           updated_at: string
         }
@@ -308,6 +318,10 @@ export type Database = {
           reconciled_balance?: number | null
           variance?: number | null
           display_order?: number
+          phase?: number
+          source_module?: string | null
+          source_record_id?: string | null
+          is_auto_generated?: boolean
           created_at?: string
           updated_at?: string
         }
@@ -331,6 +345,46 @@ export type Database = {
           reconciled_balance?: number | null
           variance?: number | null
           display_order?: number
+          phase?: number
+          source_module?: string | null
+          source_record_id?: string | null
+          is_auto_generated?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      close_gate_checks: {
+        Row: {
+          id: string
+          close_period_id: string
+          check_type: string
+          status: string
+          is_critical: boolean
+          result_data: Record<string, unknown>
+          checked_at: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          close_period_id: string
+          check_type: string
+          status?: string
+          is_critical?: boolean
+          result_data?: Record<string, unknown>
+          checked_at?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          close_period_id?: string
+          check_type?: string
+          status?: string
+          is_critical?: boolean
+          result_data?: Record<string, unknown>
+          checked_at?: string | null
           created_at?: string
           updated_at?: string
         }
@@ -4337,6 +4391,108 @@ export type Database = {
           notes?: string | null
           created_at?: string
           updated_at?: string
+        }
+        Relationships: []
+      }
+      drift_monitored_accounts: {
+        Row: {
+          id: string
+          entity_id: string
+          account_id: string
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          entity_id: string
+          account_id: string
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          entity_id?: string
+          account_id?: string
+          created_at?: string
+        }
+        Relationships: []
+      }
+      drift_snapshots: {
+        Row: {
+          id: string
+          entity_id: string
+          account_id: string
+          period_year: number
+          period_month: number
+          ending_balance: number
+          snapshot_date: string
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          entity_id: string
+          account_id: string
+          period_year: number
+          period_month: number
+          ending_balance: number
+          snapshot_date?: string
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          entity_id?: string
+          account_id?: string
+          period_year?: number
+          period_month?: number
+          ending_balance?: number
+          snapshot_date?: string
+          created_at?: string
+        }
+        Relationships: []
+      }
+      drift_alerts: {
+        Row: {
+          id: string
+          entity_id: string
+          account_id: string
+          period_year: number
+          period_month: number
+          previous_balance: number
+          current_balance: number
+          drift_amount: number
+          snapshot_date: string
+          previous_snapshot_date: string
+          is_dismissed: boolean
+          dismissed_at: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          entity_id: string
+          account_id: string
+          period_year: number
+          period_month: number
+          previous_balance: number
+          current_balance: number
+          drift_amount: number
+          snapshot_date: string
+          previous_snapshot_date: string
+          is_dismissed?: boolean
+          dismissed_at?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          entity_id?: string
+          account_id?: string
+          period_year?: number
+          period_month?: number
+          previous_balance?: number
+          current_balance?: number
+          drift_amount?: number
+          snapshot_date?: string
+          previous_snapshot_date?: string
+          is_dismissed?: boolean
+          dismissed_at?: string | null
+          created_at?: string
         }
         Relationships: []
       }
