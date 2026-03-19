@@ -123,6 +123,10 @@ export type Database = {
           opened_at: string
           closed_at: string | null
           closed_by: string | null
+          soft_closed_at: string | null
+          soft_closed_by: string | null
+          hard_closed_at: string | null
+          hard_closed_by: string | null
           created_at: string
           updated_at: string
         }
@@ -137,6 +141,10 @@ export type Database = {
           opened_at?: string
           closed_at?: string | null
           closed_by?: string | null
+          soft_closed_at?: string | null
+          soft_closed_by?: string | null
+          hard_closed_at?: string | null
+          hard_closed_by?: string | null
           created_at?: string
           updated_at?: string
         }
@@ -151,6 +159,10 @@ export type Database = {
           opened_at?: string
           closed_at?: string | null
           closed_by?: string | null
+          soft_closed_at?: string | null
+          soft_closed_by?: string | null
+          hard_closed_at?: string | null
+          hard_closed_by?: string | null
           created_at?: string
           updated_at?: string
         }
@@ -295,6 +307,9 @@ export type Database = {
           source_module: string | null
           source_record_id: string | null
           is_auto_generated: boolean
+          is_immaterial: boolean
+          immaterial_reason: string | null
+          reconciliation_template_id: string | null
           created_at: string
           updated_at: string
         }
@@ -322,6 +337,9 @@ export type Database = {
           source_module?: string | null
           source_record_id?: string | null
           is_auto_generated?: boolean
+          is_immaterial?: boolean
+          immaterial_reason?: string | null
+          reconciliation_template_id?: string | null
           created_at?: string
           updated_at?: string
         }
@@ -349,6 +367,9 @@ export type Database = {
           source_module?: string | null
           source_record_id?: string | null
           is_auto_generated?: boolean
+          is_immaterial?: boolean
+          immaterial_reason?: string | null
+          reconciliation_template_id?: string | null
           created_at?: string
           updated_at?: string
         }
@@ -385,6 +406,183 @@ export type Database = {
           is_critical?: boolean
           result_data?: Record<string, unknown>
           checked_at?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      materiality_thresholds: {
+        Row: {
+          id: string
+          organization_id: string
+          name: string
+          description: string | null
+          threshold_amount: number | null
+          threshold_percentage: number | null
+          applies_to_category: string | null
+          applies_to_phase: number | null
+          is_active: boolean
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          organization_id: string
+          name: string
+          description?: string | null
+          threshold_amount?: number | null
+          threshold_percentage?: number | null
+          applies_to_category?: string | null
+          applies_to_phase?: number | null
+          is_active?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          organization_id?: string
+          name?: string
+          description?: string | null
+          threshold_amount?: number | null
+          threshold_percentage?: number | null
+          applies_to_category?: string | null
+          applies_to_phase?: number | null
+          is_active?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      materiality_overrides: {
+        Row: {
+          id: string
+          close_task_id: string
+          threshold_id: string | null
+          variance_amount: number | null
+          justification: string
+          waived_by: string | null
+          waived_at: string
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          close_task_id: string
+          threshold_id?: string | null
+          variance_amount?: number | null
+          justification: string
+          waived_by?: string | null
+          waived_at?: string
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          close_task_id?: string
+          threshold_id?: string | null
+          variance_amount?: number | null
+          justification?: string
+          waived_by?: string | null
+          waived_at?: string
+          created_at?: string
+        }
+        Relationships: []
+      }
+      reconciliation_templates: {
+        Row: {
+          id: string
+          organization_id: string
+          name: string
+          description: string | null
+          category: string
+          field_definitions: Record<string, unknown>[]
+          variance_tolerance_amount: number | null
+          variance_tolerance_percentage: number | null
+          is_active: boolean
+          display_order: number
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          organization_id: string
+          name: string
+          description?: string | null
+          category: string
+          field_definitions?: Record<string, unknown>[]
+          variance_tolerance_amount?: number | null
+          variance_tolerance_percentage?: number | null
+          is_active?: boolean
+          display_order?: number
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          organization_id?: string
+          name?: string
+          description?: string | null
+          category?: string
+          field_definitions?: Record<string, unknown>[]
+          variance_tolerance_amount?: number | null
+          variance_tolerance_percentage?: number | null
+          is_active?: boolean
+          display_order?: number
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      reconciliation_workpapers: {
+        Row: {
+          id: string
+          close_task_id: string
+          template_id: string | null
+          workpaper_data: Record<string, unknown>
+          gl_balance: number | null
+          subledger_balance: number | null
+          variance: number | null
+          is_within_tolerance: boolean
+          submitted_by: string | null
+          submitted_at: string | null
+          reviewed_by: string | null
+          reviewed_at: string | null
+          status: string
+          notes: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          close_task_id: string
+          template_id?: string | null
+          workpaper_data?: Record<string, unknown>
+          gl_balance?: number | null
+          subledger_balance?: number | null
+          variance?: number | null
+          is_within_tolerance?: boolean
+          submitted_by?: string | null
+          submitted_at?: string | null
+          reviewed_by?: string | null
+          reviewed_at?: string | null
+          status?: string
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          close_task_id?: string
+          template_id?: string | null
+          workpaper_data?: Record<string, unknown>
+          gl_balance?: number | null
+          subledger_balance?: number | null
+          variance?: number | null
+          is_within_tolerance?: boolean
+          submitted_by?: string | null
+          submitted_at?: string | null
+          reviewed_by?: string | null
+          reviewed_at?: string | null
+          status?: string
+          notes?: string | null
           created_at?: string
           updated_at?: string
         }

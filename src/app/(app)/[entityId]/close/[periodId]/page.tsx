@@ -224,6 +224,7 @@ export default function ClosePeriodDetailPage() {
   const [filter, setFilter] = useState<string>("all");
   const [loading, setLoading] = useState(true);
   const [runningChecks, setRunningChecks] = useState(false);
+  const [transitioning, setTransitioning] = useState(false);
   const [collapsedPhases, setCollapsedPhases] = useState<
     Record<ClosePhase, boolean>
   >({ 1: false, 2: false, 3: false, 4: false });
@@ -328,54 +329,30 @@ export default function ClosePeriodDetailPage() {
     setRunningChecks(false);
   }
 
-  async function handleClosePeriod() {
-    const unfinished = tasks.filter(
-      (t) => t.status !== "approved" && t.status !== "na"
-    );
-    if (unfinished.length > 0) {
-      toast.error(
-        `Cannot close: ${unfinished.length} task(s) are not yet approved or N/A`
-      );
-      return;
-    }
-
-    // Check critical gate checks
-    const criticalFailed = gateChecks.filter(
-      (c) => c.is_critical && c.status === "failed"
-    );
-    if (criticalFailed.length > 0) {
-      const labels = criticalFailed.map((c) => {
-        const cfg = GATE_CHECKS.find((gc) => gc.checkType === c.check_type);
-        return cfg?.label ?? c.check_type;
+  async function handleTransition(targetStatus: CloseStatus) {
+    setTransitioning(true);
+    try {
+      const res = await fetch("/api/close/transition", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ periodId, targetStatus }),
       });
-      toast.error(
-        `Cannot close: ${criticalFailed.length} critical gate check(s) failed — ${labels.join(", ")}`
-      );
-      return;
+
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error ?? "Transition failed");
+      } else {
+        setPeriod((prev) =>
+          prev ? { ...prev, status: targetStatus } : null
+        );
+        toast.success(
+          `Period moved to ${targetStatus.replace("_", " ")}`
+        );
+      }
+    } catch {
+      toast.error("Transition failed");
     }
-
-    // Warn if gate checks haven't been run
-    const allPending = gateChecks.every((c) => c.status === "pending");
-    if (allPending && gateChecks.length > 0) {
-      toast.error("Run gate checks before closing the period");
-      return;
-    }
-
-    const { error } = await supabase
-      .from("close_periods")
-      .update({
-        status: "closed",
-        closed_at: new Date().toISOString(),
-      })
-      .eq("id", periodId);
-
-    if (error) {
-      toast.error(error.message);
-      return;
-    }
-
-    setPeriod((prev) => (prev ? { ...prev, status: "closed" } : null));
-    toast.success("Period closed successfully");
+    setTransitioning(false);
   }
 
   function togglePhase(phase: ClosePhase) {
@@ -398,7 +375,7 @@ export default function ClosePeriodDetailPage() {
     totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
 
   const isPeriodLocked =
-    period.status === "closed" || period.status === "locked";
+    period.status === "closed" || period.status === "locked" || period.status === "soft_closed";
 
   // Group tasks by phase
   const tasksByPhase = tasks.reduce(
@@ -443,12 +420,81 @@ export default function ClosePeriodDetailPage() {
             </div>
           </div>
         </div>
-        {!isPeriodLocked && (
-          <Button onClick={handleClosePeriod}>
-            <Lock className="mr-2 h-4 w-4" />
-            Close Period
-          </Button>
-        )}
+        <div className="flex gap-2">
+          {period.status === "open" && (
+            <Button
+              onClick={() => handleTransition("in_progress")}
+              disabled={transitioning}
+            >
+              <Clock className="mr-2 h-4 w-4" />
+              Start Close
+            </Button>
+          )}
+          {period.status === "in_progress" && (
+            <Button
+              onClick={() => handleTransition("review")}
+              disabled={transitioning}
+            >
+              <AlertCircle className="mr-2 h-4 w-4" />
+              Move to Review
+            </Button>
+          )}
+          {period.status === "review" && (
+            <>
+              <Button
+                variant="outline"
+                onClick={() => handleTransition("in_progress")}
+                disabled={transitioning}
+              >
+                Revert to In Progress
+              </Button>
+              <Button
+                onClick={() => handleTransition("soft_closed")}
+                disabled={transitioning}
+              >
+                <Shield className="mr-2 h-4 w-4" />
+                Soft Close
+              </Button>
+            </>
+          )}
+          {period.status === "soft_closed" && (
+            <>
+              <Button
+                variant="outline"
+                onClick={() => handleTransition("review")}
+                disabled={transitioning}
+              >
+                Revert to Review
+              </Button>
+              <Button
+                onClick={() => handleTransition("closed")}
+                disabled={transitioning}
+              >
+                <Lock className="mr-2 h-4 w-4" />
+                Hard Close
+              </Button>
+            </>
+          )}
+          {period.status === "closed" && (
+            <>
+              <Button
+                variant="outline"
+                onClick={() => handleTransition("soft_closed")}
+                disabled={transitioning}
+              >
+                Revert to Soft Close
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={() => handleTransition("locked")}
+                disabled={transitioning}
+              >
+                <Lock className="mr-2 h-4 w-4" />
+                Lock Period
+              </Button>
+            </>
+          )}
+        </div>
       </div>
 
       {/* Gate Checks Panel */}

@@ -8,6 +8,7 @@ export type CloseStatus =
   | "open"
   | "in_progress"
   | "review"
+  | "soft_closed"
   | "closed"
   | "locked";
 
@@ -106,6 +107,18 @@ export type GateCheckType =
   | "asset_reconciliation";
 
 export type GateCheckStatus = "pending" | "passed" | "failed" | "warning" | "skipped";
+
+// -- Close Management V3 --
+
+export type WorkpaperStatus = "draft" | "submitted" | "reviewed" | "approved";
+
+export interface ReconciliationFieldDef {
+  fieldName: string;
+  fieldLabel: string;
+  fieldType: "text" | "number" | "currency" | "date" | "select";
+  required: boolean;
+  options?: string[];
+}
 
 export type PaylocityEnvironment = "testing" | "production";
 

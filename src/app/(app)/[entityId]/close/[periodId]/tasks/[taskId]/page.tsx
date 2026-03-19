@@ -19,6 +19,13 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   ArrowLeft,
   Upload,
   FileText,
@@ -31,6 +38,8 @@ import {
   Lock,
   Zap,
   RefreshCw,
+  ShieldAlert,
+  ClipboardList,
 } from "lucide-react";
 import { formatCurrency } from "@/lib/utils/dates";
 import {
@@ -39,7 +48,7 @@ import {
   getSourceModuleLabel,
   computePhaseBlocking,
 } from "@/lib/utils/close-management";
-import type { TaskStatus, ClosePhase, CloseSourceModule } from "@/lib/types/database";
+import type { TaskStatus, ClosePhase, CloseSourceModule, ReconciliationFieldDef } from "@/lib/types/database";
 
 interface TaskDetail {
   id: string;
@@ -56,7 +65,28 @@ interface TaskDetail {
   source_module: string | null;
   source_record_id: string | null;
   is_auto_generated: boolean;
+  is_immaterial: boolean;
+  immaterial_reason: string | null;
+  reconciliation_template_id: string | null;
   accounts?: { name: string; account_number: string | null } | null;
+}
+
+interface ReconciliationTemplate {
+  id: string;
+  name: string;
+  field_definitions: ReconciliationFieldDef[];
+  variance_tolerance_amount: number | null;
+  variance_tolerance_percentage: number | null;
+}
+
+interface WorkpaperData {
+  id: string;
+  status: string;
+  workpaper_data: Record<string, unknown>;
+  gl_balance: number | null;
+  subledger_balance: number | null;
+  variance: number | null;
+  notes: string | null;
 }
 
 interface Comment {
@@ -132,6 +162,21 @@ export default function TaskDetailPage() {
   const [isBlocked, setIsBlocked] = useState(false);
   const [jeWorksheet, setJeWorksheet] = useState<JEWorksheetData | null>(null);
   const [jeLoading, setJeLoading] = useState(false);
+
+  // Materiality waiver state
+  const [showWaiverForm, setShowWaiverForm] = useState(false);
+  const [waiverReason, setWaiverReason] = useState("");
+  const [waiverSaving, setWaiverSaving] = useState(false);
+
+  // Workpaper state
+  const [reconTemplate, setReconTemplate] = useState<ReconciliationTemplate | null>(null);
+  const [workpaper, setWorkpaper] = useState<WorkpaperData | null>(null);
+  const [wpFieldValues, setWpFieldValues] = useState<Record<string, unknown>>({});
+  const [wpGlBalance, setWpGlBalance] = useState("");
+  const [wpSubBalance, setWpSubBalance] = useState("");
+  const [wpNotes, setWpNotes] = useState("");
+  const [wpSaving, setWpSaving] = useState(false);
+  const [allTemplates, setAllTemplates] = useState<ReconciliationTemplate[]>([]);
 
   const loadTask = useCallback(async () => {
     const taskResult = await supabase
@@ -242,6 +287,48 @@ export default function TaskDetailPage() {
       loadJeWorksheet();
     }
   }, [task?.source_module, loadJeWorksheet]);
+
+  // Load reconciliation template and workpaper
+  const loadWorkpaperData = useCallback(async () => {
+    // Load all templates for selector
+    try {
+      const templatesRes = await fetch("/api/close/reconciliation-templates");
+      const templatesData = await templatesRes.json();
+      setAllTemplates(templatesData.templates ?? []);
+    } catch {
+      // ignore
+    }
+
+    // Load existing workpaper for this task
+    try {
+      const wpRes = await fetch(`/api/close/workpapers?taskId=${taskId}`);
+      const wpData = await wpRes.json();
+      if (wpData.workpaper) {
+        setWorkpaper(wpData.workpaper);
+        setWpFieldValues(wpData.workpaper.workpaper_data ?? {});
+        setWpGlBalance(wpData.workpaper.gl_balance?.toString() ?? "");
+        setWpSubBalance(wpData.workpaper.subledger_balance?.toString() ?? "");
+        setWpNotes(wpData.workpaper.notes ?? "");
+      }
+    } catch {
+      // ignore
+    }
+  }, [taskId]);
+
+  useEffect(() => {
+    if (task) {
+      loadWorkpaperData();
+    }
+  }, [task, loadWorkpaperData]);
+
+  // Set template when task has reconciliation_template_id or workpaper has one
+  useEffect(() => {
+    const templateId = task?.reconciliation_template_id ?? undefined;
+    if (templateId && allTemplates.length > 0) {
+      const tmpl = allTemplates.find((t) => t.id === templateId);
+      if (tmpl) setReconTemplate(tmpl);
+    }
+  }, [task?.reconciliation_template_id, allTemplates]);
 
   async function handleSaveReconciliation() {
     setSaving(true);
@@ -363,6 +450,117 @@ export default function TaskDetailPage() {
     toast.success("File(s) uploaded");
     loadTask();
     e.target.value = "";
+  }
+
+  async function handleWaiveImmaterial() {
+    if (!waiverReason.trim()) {
+      toast.error("Please provide a reason for the waiver");
+      return;
+    }
+    setWaiverSaving(true);
+    try {
+      const res = await fetch("/api/close/materiality-override", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          taskId: taskId,
+          justification: waiverReason.trim(),
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        toast.error(err.error || "Failed to waive variance");
+      } else {
+        toast.success("Variance waived as immaterial");
+        setShowWaiverForm(false);
+        setWaiverReason("");
+        setTask((prev) =>
+          prev ? { ...prev, is_immaterial: true, immaterial_reason: waiverReason.trim() } : null
+        );
+      }
+    } catch {
+      toast.error("Failed to waive variance");
+    }
+    setWaiverSaving(false);
+  }
+
+  async function handleSaveWorkpaper() {
+    if (!reconTemplate) return;
+    setWpSaving(true);
+
+    const glBal = wpGlBalance ? parseFloat(wpGlBalance) : null;
+    const subBal = wpSubBalance ? parseFloat(wpSubBalance) : null;
+    const variance = glBal != null && subBal != null ? glBal - subBal : null;
+
+    try {
+      if (workpaper) {
+        // Update
+        const res = await fetch("/api/close/workpapers", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            id: workpaper.id,
+            fieldValues: wpFieldValues,
+            glBalance: glBal,
+            subBalance: subBal,
+            variance,
+            notes: wpNotes || null,
+          }),
+        });
+        if (!res.ok) {
+          const err = await res.json();
+          toast.error(err.error || "Failed to update workpaper");
+        } else {
+          toast.success("Workpaper saved");
+          setWorkpaper((prev) => prev ? { ...prev, gl_balance: glBal, subledger_balance: subBal, variance, notes: wpNotes || null, workpaper_data: wpFieldValues } : null);
+        }
+      } else {
+        // Create
+        const res = await fetch("/api/close/workpapers", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            closeTaskId: taskId,
+            templateId: reconTemplate.id,
+            fieldValues: wpFieldValues,
+            glBalance: glBal,
+            subBalance: subBal,
+            variance,
+            notes: wpNotes || null,
+          }),
+        });
+        if (!res.ok) {
+          const err = await res.json();
+          toast.error(err.error || "Failed to create workpaper");
+        } else {
+          const data = await res.json();
+          toast.success("Workpaper created");
+          setWorkpaper(data.workpaper);
+        }
+      }
+    } catch {
+      toast.error("Failed to save workpaper");
+    }
+    setWpSaving(false);
+  }
+
+  async function handleSubmitWorkpaper() {
+    if (!workpaper) return;
+    setWpSaving(true);
+    try {
+      const res = await fetch("/api/close/workpapers", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: workpaper.id, status: "submitted" }),
+      });
+      if (res.ok) {
+        toast.success("Workpaper submitted for review");
+        setWorkpaper((prev) => prev ? { ...prev, status: "submitted" } : null);
+      }
+    } catch {
+      toast.error("Failed to submit workpaper");
+    }
+    setWpSaving(false);
   }
 
   if (loading) return <p className="text-muted-foreground">Loading...</p>;
@@ -715,6 +913,258 @@ export default function TaskDetailPage() {
           </Card>
         </div>
       </div>
+
+      {/* Materiality Waiver */}
+      {task.variance !== null && task.variance !== 0 && !task.is_immaterial && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg flex items-center gap-2">
+              <ShieldAlert className="h-5 w-5 text-yellow-500" />
+              Variance Waiver
+            </CardTitle>
+            <CardDescription>
+              If this variance is immaterial, you can waive it with justification.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {!showWaiverForm ? (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowWaiverForm(true)}
+                disabled={isBlocked}
+              >
+                Waive as Immaterial
+              </Button>
+            ) : (
+              <div className="space-y-3">
+                <div className="space-y-2">
+                  <Label>Justification</Label>
+                  <Textarea
+                    placeholder="Explain why this variance is immaterial..."
+                    value={waiverReason}
+                    onChange={(e) => setWaiverReason(e.target.value)}
+                    rows={3}
+                  />
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    onClick={handleWaiveImmaterial}
+                    disabled={waiverSaving || !waiverReason.trim()}
+                  >
+                    {waiverSaving ? "Saving..." : "Confirm Waiver"}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      setShowWaiverForm(false);
+                      setWaiverReason("");
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Immaterial Badge */}
+      {task.is_immaterial && (
+        <div className="flex items-center gap-3 p-4 rounded-lg border border-blue-200 bg-blue-50 dark:bg-blue-950/20 dark:border-blue-800">
+          <ShieldAlert className="h-5 w-5 text-blue-600 flex-shrink-0" />
+          <div>
+            <p className="text-sm font-medium text-blue-800 dark:text-blue-200">
+              Variance waived as immaterial
+            </p>
+            {task.immaterial_reason && (
+              <p className="text-xs text-blue-700 dark:text-blue-300 mt-1">
+                {task.immaterial_reason}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Reconciliation Workpaper */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg flex items-center gap-2">
+            <ClipboardList className="h-5 w-5" />
+            Reconciliation Workpaper
+          </CardTitle>
+          <CardDescription>
+            {reconTemplate
+              ? `Template: ${reconTemplate.name}`
+              : "Select a reconciliation template to fill out a workpaper"}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {!reconTemplate && (
+            <div className="space-y-2">
+              <Label>Template</Label>
+              <Select
+                value=""
+                onValueChange={(v) => {
+                  const tmpl = allTemplates.find((t) => t.id === v);
+                  if (tmpl) setReconTemplate(tmpl);
+                }}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Choose a template..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {allTemplates.map((t) => (
+                    <SelectItem key={t.id} value={t.id}>
+                      {t.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+
+          {reconTemplate && (
+            <>
+              {workpaper && (
+                <Badge
+                  variant={
+                    workpaper.status === "approved"
+                      ? "default"
+                      : workpaper.status === "submitted"
+                      ? "secondary"
+                      : "outline"
+                  }
+                >
+                  {workpaper.status}
+                </Badge>
+              )}
+
+              {/* Standard fields */}
+              <div className="grid gap-4 sm:grid-cols-3">
+                <div className="space-y-2">
+                  <Label>GL Balance</Label>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    value={wpGlBalance}
+                    onChange={(e) => setWpGlBalance(e.target.value)}
+                    disabled={isBlocked || workpaper?.status === "submitted" || workpaper?.status === "approved"}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Sub/Supporting Balance</Label>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    value={wpSubBalance}
+                    onChange={(e) => setWpSubBalance(e.target.value)}
+                    disabled={isBlocked || workpaper?.status === "submitted" || workpaper?.status === "approved"}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Variance</Label>
+                  <div className="text-lg font-semibold tabular-nums pt-1.5">
+                    {wpGlBalance && wpSubBalance
+                      ? formatCurrency(parseFloat(wpGlBalance) - parseFloat(wpSubBalance))
+                      : "—"}
+                  </div>
+                </div>
+              </div>
+
+              {/* Template custom fields */}
+              {reconTemplate.field_definitions.length > 0 && (
+                <div className="space-y-3">
+                  <Separator />
+                  <p className="text-sm font-medium">Custom Fields</p>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    {reconTemplate.field_definitions.map((field) => (
+                      <div key={field.fieldName} className="space-y-2">
+                        <Label>
+                          {field.fieldLabel}
+                          {field.required && <span className="text-red-500 ml-1">*</span>}
+                        </Label>
+                        {field.fieldType === "select" ? (
+                          <Select
+                            value={(wpFieldValues[field.fieldName] as string) ?? ""}
+                            onValueChange={(v) =>
+                              setWpFieldValues((prev) => ({ ...prev, [field.fieldName]: v }))
+                            }
+                          >
+                            <SelectTrigger>
+                              <SelectValue placeholder={`Select ${field.fieldLabel}`} />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {(field.options ?? []).map((opt) => (
+                                <SelectItem key={opt} value={opt}>
+                                  {opt}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        ) : field.fieldType === "date" ? (
+                          <Input
+                            type="date"
+                            value={(wpFieldValues[field.fieldName] as string) ?? ""}
+                            onChange={(e) =>
+                              setWpFieldValues((prev) => ({ ...prev, [field.fieldName]: e.target.value }))
+                            }
+                            disabled={isBlocked || workpaper?.status === "submitted" || workpaper?.status === "approved"}
+                          />
+                        ) : (
+                          <Input
+                            type={field.fieldType === "currency" || field.fieldType === "number" ? "number" : "text"}
+                            step={field.fieldType === "currency" ? "0.01" : undefined}
+                            value={(wpFieldValues[field.fieldName] as string) ?? ""}
+                            onChange={(e) =>
+                              setWpFieldValues((prev) => ({ ...prev, [field.fieldName]: e.target.value }))
+                            }
+                            disabled={isBlocked || workpaper?.status === "submitted" || workpaper?.status === "approved"}
+                          />
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <Separator />
+              <div className="space-y-2">
+                <Label>Notes</Label>
+                <Textarea
+                  value={wpNotes}
+                  onChange={(e) => setWpNotes(e.target.value)}
+                  placeholder="Additional notes..."
+                  rows={3}
+                  disabled={isBlocked || workpaper?.status === "submitted" || workpaper?.status === "approved"}
+                />
+              </div>
+
+              <div className="flex gap-2">
+                <Button
+                  onClick={handleSaveWorkpaper}
+                  disabled={wpSaving || isBlocked || workpaper?.status === "submitted" || workpaper?.status === "approved"}
+                >
+                  {wpSaving ? "Saving..." : workpaper ? "Update Workpaper" : "Save Workpaper"}
+                </Button>
+                {workpaper && workpaper.status === "draft" && (
+                  <Button
+                    variant="outline"
+                    onClick={handleSubmitWorkpaper}
+                    disabled={wpSaving}
+                  >
+                    <Send className="mr-2 h-4 w-4" />
+                    Submit for Review
+                  </Button>
+                )}
+              </div>
+            </>
+          )}
+        </CardContent>
+      </Card>
 
       {/* JE Worksheet — full width below the two-column grid */}
       {task.source_module && JE_MODULE_MAP[task.source_module] && (

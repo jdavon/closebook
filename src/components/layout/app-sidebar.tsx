@@ -280,6 +280,11 @@ export function AppSidebar({ user, entityId: entityIdProp, entities = [] }: AppS
       url: "/settings/members",
       icon: Settings,
     },
+    {
+      title: "Close Templates",
+      url: "/settings/templates/tasks",
+      icon: CheckSquare,
+    },
   ];
 
   async function handleSignOut() {
