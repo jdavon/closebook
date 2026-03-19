@@ -244,46 +244,72 @@ export function DebtReconciliationTab({ entityId }: DebtReconciliationTabProps) 
       }
     }
 
-    // Interest payable: use period interest from amortization (theoretical accrual)
-    // Interest expense: use YTD interest from amortization (Jan through selected month)
+    // Interest payable: unpaid interest = cumulative interest accrued - cumulative interest paid
+    // Interest expense: YTD interest from amortization (Jan through selected month)
     if (instrIds.length > 0) {
-      const { data: amortInterest } = await supabase
+      // Fetch ALL amortization interest from inception through selected period
+      const periodKey = periodYear * 100 + periodMonth; // e.g. 202512
+      const { data: allAmortInterest } = await supabase
         .from("debt_amortization")
-        .select("debt_instrument_id, interest")
-        .in("debt_instrument_id", instrIds)
-        .eq("period_year", periodYear)
-        .eq("period_month", periodMonth);
+        .select("debt_instrument_id, interest, period_year, period_month")
+        .in("debt_instrument_id", instrIds);
 
-      let totalInterest = 0;
-      const interestInstruments: InstrumentSummary[] = [];
-      for (const row of (amortInterest ?? []) as { debt_instrument_id: string; interest: number }[]) {
+      // Sum accrued interest per instrument through the selected period
+      const accruedByInstrument: Record<string, number> = {};
+      const ytdByInstrument: Record<string, number> = {};
+      let ytdTotal = 0;
+      for (const row of (allAmortInterest ?? []) as { debt_instrument_id: string; interest: number; period_year: number; period_month: number }[]) {
+        const rowKey = row.period_year * 100 + row.period_month;
+        if (rowKey > periodKey) continue; // skip future periods
         const interest = Number(row.interest ?? 0);
-        if (interest > 0) {
-          totalInterest += interest;
-          const instr = instruments.find((i) => i.id === row.debt_instrument_id);
+        accruedByInstrument[row.debt_instrument_id] = (accruedByInstrument[row.debt_instrument_id] ?? 0) + interest;
+        // YTD = same year only
+        if (row.period_year === periodYear) {
+          ytdByInstrument[row.debt_instrument_id] = (ytdByInstrument[row.debt_instrument_id] ?? 0) + interest;
+          ytdTotal += interest;
+        }
+      }
+
+      // Fetch ALL interest payment transactions through end of selected period
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: intTxnData } = await (supabase as any)
+        .from("debt_transactions")
+        .select("debt_instrument_id, transaction_type, amount, to_interest")
+        .in("debt_instrument_id", instrIds)
+        .lte("effective_date", periodEnd);
+
+      const paidByInstrument: Record<string, number> = {};
+      for (const txn of (intTxnData ?? []) as { debt_instrument_id: string; transaction_type: string; amount: number; to_interest: number }[]) {
+        // Count interest paid: use to_interest if available, otherwise infer from transaction_type
+        let interestPaid = 0;
+        if (txn.to_interest && txn.to_interest > 0) {
+          interestPaid = txn.to_interest;
+        } else if (txn.transaction_type === "interest_payment") {
+          interestPaid = Math.abs(txn.amount ?? 0);
+        }
+        if (interestPaid > 0) {
+          paidByInstrument[txn.debt_instrument_id] = (paidByInstrument[txn.debt_instrument_id] ?? 0) + interestPaid;
+        }
+      }
+
+      // Unpaid interest = accrued - paid
+      let totalUnpaid = 0;
+      const unpaidInstruments: InstrumentSummary[] = [];
+      for (const instrId of instrIds) {
+        const accrued = accruedByInstrument[instrId] ?? 0;
+        const paid = paidByInstrument[instrId] ?? 0;
+        const unpaid = Math.round(Math.max(0, accrued - paid) * 100) / 100;
+        if (unpaid > 0) {
+          totalUnpaid += unpaid;
+          const instr = instruments.find((i) => i.id === instrId);
           if (instr) {
-            interestInstruments.push({ ...instr, ending_balance: interest });
+            unpaidInstruments.push({ ...instr, ending_balance: unpaid });
           }
         }
       }
-      grouped["interest_payable"] = { total: totalInterest, instruments: interestInstruments };
+      grouped["interest_payable"] = { total: Math.round(totalUnpaid * 100) / 100, instruments: unpaidInstruments };
 
-      // YTD interest expense: sum interest from Jan through selected month
-      const { data: ytdInterest } = await supabase
-        .from("debt_amortization")
-        .select("debt_instrument_id, interest, period_month")
-        .in("debt_instrument_id", instrIds)
-        .eq("period_year", periodYear)
-        .lte("period_month", periodMonth);
-
-      let ytdTotal = 0;
-      const ytdByInstrument: Record<string, number> = {};
-      for (const row of (ytdInterest ?? []) as { debt_instrument_id: string; interest: number; period_month: number }[]) {
-        const interest = Number(row.interest ?? 0);
-        ytdTotal += interest;
-        ytdByInstrument[row.debt_instrument_id] = (ytdByInstrument[row.debt_instrument_id] ?? 0) + interest;
-      }
-
+      // YTD interest expense
       const ytdInstruments: InstrumentSummary[] = [];
       for (const [instrId, ytdAmt] of Object.entries(ytdByInstrument)) {
         if (ytdAmt > 0) {
