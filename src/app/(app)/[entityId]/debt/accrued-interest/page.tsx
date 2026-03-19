@@ -214,10 +214,11 @@ export default function AccruedInterestPage() {
       // For 30/360: 30 days of accrual
       // For actual conventions: actual days in December (31)
       const startDate = instr.origination_date || instr.start_date;
-      const startD = new Date(startDate);
-      const startYear = startD.getFullYear();
-      const startMonth = startD.getMonth() + 1;
-      const startDay = startD.getDate();
+      // Parse as local date parts to avoid UTC timezone shift
+      const [sY, sM, sD] = startDate.split("T")[0].split("-").map(Number);
+      const startYear = sY;
+      const startMonth = sM;
+      const startDay = sD;
 
       let accruedDays: number;
       let accruedInterest: number;
@@ -644,12 +645,9 @@ export default function AccruedInterestPage() {
 
 function formatDate(dateStr: string): string {
   if (!dateStr) return "—";
-  const d = new Date(dateStr);
-  return d.toLocaleDateString("en-US", {
-    month: "2-digit",
-    day: "2-digit",
-    year: "numeric",
-  });
+  // Parse as local date to avoid UTC timezone shift (e.g. 2025-12-19 → 12/18 in local TZ)
+  const [y, m, d] = dateStr.split("T")[0].split("-");
+  return `${m}/${d}/${y}`;
 }
 
 function formatPct(rate: number): string {
