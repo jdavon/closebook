@@ -208,60 +208,34 @@ export default function AccruedInterestPage() {
         accrualStartDay = 1;
       }
 
-      // Get the balance entering December
+      // Balance entering December (before any December transactions)
       // For notes starting in December, this is the original amount
       const balanceEnteringDec = sY === year && sM === 12
         ? Number(instr.original_amount ?? 0)
         : Math.round(balancePreDecMap[instr.id] * 100) / 100;
 
-      // Build day-by-day balance segments for December
-      // Each segment: { fromDay, toDay, balance }
-      interface Segment { fromDay: number; toDay: number; balance: number }
-      const segments: Segment[] = [];
-      let currentBalance = balanceEnteringDec;
-
-      // Collect balance-changing December transactions with their day
-      const decChanges: { day: number; txn: AnyRow }[] = [];
+      // Replay December transactions to get the year-end balance for display
+      let balanceAtYearEnd = balanceEnteringDec;
       for (const txn of decTxnsMap[instr.id] || []) {
-        const txnDay = Number(txn.effective_date.split("T")[0].split("-")[2]);
-        decChanges.push({ day: txnDay, txn });
-      }
-      decChanges.sort((a, b) => a.day - b.day);
-
-      let segStart = accrualStartDay;
-      for (const { day, txn } of decChanges) {
-        if (day < accrualStartDay) continue;
-        // Interest accrues on the balance BEFORE the payment on that day
-        if (day > segStart) {
-          segments.push({ fromDay: segStart, toDay: day - 1, balance: currentBalance });
-        }
-        // Apply the transaction to get new balance
         if (txn.transaction_type === "advance") {
-          currentBalance += Math.abs(txn.amount);
+          balanceAtYearEnd += Math.abs(txn.amount);
         } else if (txn.transaction_type === "principal_payment" || txn.transaction_type === "vehicle_payoff") {
-          currentBalance -= Math.abs(txn.to_principal ?? txn.amount);
+          balanceAtYearEnd -= Math.abs(txn.to_principal ?? txn.amount);
         } else if (txn.transaction_type === "payoff") {
-          currentBalance = 0;
+          balanceAtYearEnd = 0;
         }
-        currentBalance = Math.max(0, currentBalance);
-        segStart = day;
+        balanceAtYearEnd = Math.max(0, balanceAtYearEnd);
       }
-      // Final segment from last change (or accrual start) through Dec 31
-      if (segStart <= decDays) {
-        segments.push({ fromDay: segStart, toDay: decDays, balance: currentBalance });
-      }
+      balanceAtYearEnd = Math.round(balanceAtYearEnd * 100) / 100;
 
-      // Calculate interest for each segment
-      let accruedInterest = 0;
-      let totalAccruedDays = 0;
-      for (const seg of segments) {
-        const days = seg.toDay - seg.fromDay + 1;
-        totalAccruedDays += days;
-        accruedInterest += seg.balance * dailyRate * days;
-      }
-      accruedInterest = Math.round(accruedInterest * 100) / 100;
-
-      const balanceAtYearEnd = Math.round(currentBalance * 100) / 100;
+      // Accrued interest: use beginning-of-period balance for the full accrual
+      // period, consistent with the amortization schedule (interest accrues on the
+      // opening balance; payments reduce principal but don't change the period's
+      // interest calculation)
+      const accruedDays = decDays - accrualStartDay + 1;
+      const accruedInterest = Math.round(
+        balanceEnteringDec * dailyRate * accruedDays * 100
+      ) / 100;
 
       // Skip instruments with no balance and no accrual
       if (balanceAtYearEnd <= 0 && accruedInterest <= 0) continue;
@@ -278,7 +252,7 @@ export default function AccruedInterestPage() {
         dayCountConvention: convention,
         dailyRate,
         balanceAtYearEnd,
-        accruedDays: totalAccruedDays,
+        accruedDays,
         accruedInterest,
         status: instr.status,
       });
