@@ -378,7 +378,7 @@ export default function RevenueProjectionPage() {
         <KPICard
           title="YTD Revenue"
           value={formatCurrency(data.ytdRevenue)}
-          description="Closed invoices this year"
+          description="All invoices this year"
           icon={<DollarSign className="text-muted-foreground h-4 w-4" />}
         />
         <KPICard

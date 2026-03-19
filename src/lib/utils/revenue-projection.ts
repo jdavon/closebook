@@ -468,10 +468,12 @@ export function processRevenueData(
     // Sum only the portions of revenue that fall in the current year
     const ytdMonths = monthKeys.filter((mk) => mk.startsWith(String(currentYear)));
     for (const mk of ytdMonths) {
-      ytdRevenue += monthMap.get(mk)?.closed ?? 0;
+      const bucket = monthMap.get(mk);
+      ytdRevenue += (bucket?.closed ?? 0) + (bucket?.pending ?? 0);
     }
   } else {
-    ytdRevenue = closedInvoices
+    const allInvoicesForYtd = [...closedInvoices, ...pendingInvoices];
+    ytdRevenue = allInvoicesForYtd
       .filter((inv) => {
         const d = new Date(getInvoiceGroupDate(inv));
         return !isNaN(d.getTime()) && d.getFullYear() === currentYear;
@@ -480,10 +482,10 @@ export function processRevenueData(
   }
 
   const currentMonthBucket = monthMap.get(currentMonthKey);
-  const currentMonthActual = currentMonthBucket?.closed ?? 0;
+  const currentMonthActual =
+    (currentMonthBucket?.closed ?? 0) + (currentMonthBucket?.pending ?? 0);
   const currentMonthProjected =
     currentMonthActual +
-    (currentMonthBucket?.pending ?? 0) +
     (currentMonthBucket?.pipeline ?? 0);
 
   const pipelineValue = activeOrders.reduce(
@@ -501,9 +503,10 @@ export function processRevenueData(
     0,
   );
 
-  // --- Equipment breakdown (YTD closed invoices) ---
+  // --- Equipment breakdown (YTD invoices — closed + pending) ---
+  const allInvoices = [...closedInvoices, ...pendingInvoices];
   const equipTotals: Record<string, number> = {};
-  for (const inv of closedInvoices) {
+  for (const inv of allInvoices) {
     const type = classifyEquipmentType(
       inv.OrderDescription || inv.InvoiceDescription || "",
     );
