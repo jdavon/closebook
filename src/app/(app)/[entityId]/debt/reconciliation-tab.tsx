@@ -36,6 +36,7 @@ import {
 } from "lucide-react";
 import { formatCurrency } from "@/lib/utils/dates";
 import { DEBT_GL_ACCOUNT_GROUPS } from "@/lib/utils/debt-gl-groups";
+import { interestFactor } from "@/lib/utils/amortization";
 import { toast } from "sonner";
 
 interface DebtReconciliationTabProps {
@@ -244,70 +245,180 @@ export function DebtReconciliationTab({ entityId }: DebtReconciliationTabProps) 
       }
     }
 
-    // Interest payable: unpaid interest = cumulative interest accrued - cumulative interest paid
-    // Interest expense: YTD interest from amortization (Jan through selected month)
+    // Interest payable & expense: dynamically compute unpaid interest and YTD interest
+    // using the same algorithm as the instrument detail page (pro-rated first period,
+    // actual transactions for past months, running unpaid interest balance).
     if (instrIds.length > 0) {
-      // Fetch ALL amortization interest from inception through selected period
-      const periodKey = periodYear * 100 + periodMonth; // e.g. 202512
-      const { data: allAmortInterest } = await supabase
-        .from("debt_amortization")
-        .select("debt_instrument_id, interest, period_year, period_month")
-        .in("debt_instrument_id", instrIds);
-
-      // Sum accrued interest per instrument through the selected period
-      const accruedByInstrument: Record<string, number> = {};
-      const ytdByInstrument: Record<string, number> = {};
-      let ytdTotal = 0;
-      for (const row of (allAmortInterest ?? []) as { debt_instrument_id: string; interest: number; period_year: number; period_month: number }[]) {
-        const rowKey = row.period_year * 100 + row.period_month;
-        if (rowKey > periodKey) continue; // skip future periods
-        const interest = Number(row.interest ?? 0);
-        accruedByInstrument[row.debt_instrument_id] = (accruedByInstrument[row.debt_instrument_id] ?? 0) + interest;
-        // YTD = same year only
-        if (row.period_year === periodYear) {
-          ytdByInstrument[row.debt_instrument_id] = (ytdByInstrument[row.debt_instrument_id] ?? 0) + interest;
-          ytdTotal += interest;
-        }
-      }
-
-      // Fetch ALL interest payment transactions through end of selected period
+      // Fetch rate history for all instruments
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data: intTxnData } = await (supabase as any)
-        .from("debt_transactions")
-        .select("debt_instrument_id, transaction_type, amount, to_interest")
+      const { data: rateData } = await (supabase as any)
+        .from("debt_rate_history")
+        .select("debt_instrument_id, effective_date, interest_rate")
         .in("debt_instrument_id", instrIds)
-        .lte("effective_date", periodEnd);
+        .order("effective_date", { ascending: true });
 
-      const paidByInstrument: Record<string, number> = {};
-      for (const txn of (intTxnData ?? []) as { debt_instrument_id: string; transaction_type: string; amount: number; to_interest: number }[]) {
-        // Count interest paid: use to_interest if available, otherwise infer from transaction_type
-        let interestPaid = 0;
-        if (txn.to_interest && txn.to_interest > 0) {
-          interestPaid = txn.to_interest;
-        } else if (txn.transaction_type === "interest_payment") {
-          interestPaid = Math.abs(txn.amount ?? 0);
+      const ratesByInstrument: Record<string, { effective_date: string; interest_rate: number }[]> = {};
+      for (const r of (rateData ?? []) as { debt_instrument_id: string; effective_date: string; interest_rate: number }[]) {
+        if (!ratesByInstrument[r.debt_instrument_id]) ratesByInstrument[r.debt_instrument_id] = [];
+        ratesByInstrument[r.debt_instrument_id].push(r);
+      }
+
+      // Fetch ALL transactions through end of selected period
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: allTxnData } = await (supabase as any)
+        .from("debt_transactions")
+        .select("debt_instrument_id, transaction_type, amount, to_principal, to_interest, effective_date")
+        .in("debt_instrument_id", instrIds)
+        .lte("effective_date", periodEnd)
+        .order("effective_date", { ascending: true })
+        .order("created_at", { ascending: true });
+
+      // Group transactions by instrument → month
+      const principalTxnTypes = ["principal_payment", "vehicle_payoff", "payoff"];
+      const interestTxnTypes = ["interest_payment"];
+
+      interface MonthActuals { totalPayment: number; toPrincipal: number; toInterest: number; }
+      const txnsByInstrMonth: Record<string, Record<string, MonthActuals>> = {};
+      const advancesByInstrMonth: Record<string, Record<string, number>> = {};
+
+      for (const txn of (allTxnData ?? []) as { debt_instrument_id: string; transaction_type: string; amount: number; to_principal: number; to_interest: number; effective_date: string }[]) {
+        const d = new Date(txn.effective_date);
+        const mKey = `${d.getFullYear()}-${d.getMonth() + 1}`;
+        const iid = txn.debt_instrument_id;
+
+        if (txn.transaction_type === "advance") {
+          if (!advancesByInstrMonth[iid]) advancesByInstrMonth[iid] = {};
+          advancesByInstrMonth[iid][mKey] = (advancesByInstrMonth[iid][mKey] ?? 0) + Math.abs(txn.amount);
+          continue;
         }
-        if (interestPaid > 0) {
-          paidByInstrument[txn.debt_instrument_id] = (paidByInstrument[txn.debt_instrument_id] ?? 0) + interestPaid;
+
+        if (![...principalTxnTypes, ...interestTxnTypes].includes(txn.transaction_type)) continue;
+
+        if (!txnsByInstrMonth[iid]) txnsByInstrMonth[iid] = {};
+        if (!txnsByInstrMonth[iid][mKey]) txnsByInstrMonth[iid][mKey] = { totalPayment: 0, toPrincipal: 0, toInterest: 0 };
+        const ma = txnsByInstrMonth[iid][mKey];
+        const amt = Math.abs(txn.amount);
+        ma.totalPayment += amt;
+
+        if ((txn.to_principal ?? 0) !== 0 || (txn.to_interest ?? 0) !== 0) {
+          ma.toPrincipal += Math.abs(txn.to_principal ?? 0);
+          ma.toInterest += Math.abs(txn.to_interest ?? 0);
+        } else if (principalTxnTypes.includes(txn.transaction_type)) {
+          ma.toPrincipal += amt;
+        } else if (interestTxnTypes.includes(txn.transaction_type)) {
+          ma.toInterest += amt;
         }
       }
 
-      // Unpaid interest = accrued - paid
+      // For each instrument, replay month-by-month to compute unpaid interest + YTD interest
+      const round2 = (n: number) => Math.round(n * 100) / 100;
       let totalUnpaid = 0;
+      let ytdTotal = 0;
       const unpaidInstruments: InstrumentSummary[] = [];
-      for (const instrId of instrIds) {
-        const accrued = accruedByInstrument[instrId] ?? 0;
-        const paid = paidByInstrument[instrId] ?? 0;
-        const unpaid = Math.round(Math.max(0, accrued - paid) * 100) / 100;
-        if (unpaid > 0) {
-          totalUnpaid += unpaid;
-          const instr = instruments.find((i) => i.id === instrId);
-          if (instr) {
-            unpaidInstruments.push({ ...instr, ending_balance: unpaid });
+      const ytdByInstrument: Record<string, number> = {};
+
+      for (const instr of instruments) {
+        if (instr.status === "inactive") continue;
+
+        const baseRate = instr.interest_rate ?? 0;
+        const convention = instr.day_count_convention ?? "30/360";
+        const rateChanges = ratesByInstrument[instr.id] ?? [];
+        const isLOC = ["line_of_credit", "revolving_credit"].includes(instr.debt_type);
+        let balance = isLOC ? (instr.current_draw ?? instr.original_amount) : instr.original_amount;
+        let unpaidInt = 0;
+
+        // Parse start date
+        const sd = new Date(instr.start_date);
+        let cy = sd.getFullYear();
+        let cm = sd.getMonth() + 1;
+        const startDay = sd.getDate();
+
+        // Scheduled payment for projections
+        let scheduledPayment = instr.payment_amount ?? 0;
+        if (scheduledPayment <= 0 && instr.term_months && baseRate > 0) {
+          const r = baseRate / 12;
+          const n = instr.term_months;
+          const f = Math.pow(1 + r, n);
+          scheduledPayment = round2(instr.original_amount * (r * f) / (f - 1));
+        } else if (scheduledPayment <= 0 && instr.term_months && baseRate === 0) {
+          scheduledPayment = round2(instr.original_amount / instr.term_months);
+        }
+
+        const now = new Date();
+        const nowY = now.getFullYear();
+        const nowM = now.getMonth() + 1;
+        let instrYtd = 0;
+
+        // Rate lookup
+        function getRateForMonth(y: number, m: number): number {
+          if (rateChanges.length === 0) return baseRate;
+          const ps = new Date(y, m - 1, 1);
+          let effective = baseRate;
+          for (const rc of rateChanges) {
+            if (new Date(rc.effective_date) <= ps) effective = rc.interest_rate;
           }
+          return effective;
+        }
+
+        for (let i = 0; i < 600; i++) {
+          if (cy > periodYear || (cy === periodYear && cm > periodMonth)) break;
+          if (balance <= 0.005 && unpaidInt <= 0.005) break;
+
+          const rate = getRateForMonth(cy, cm);
+          const fullFactor = interestFactor(cy, cm, convention);
+          // Pro-rate first period
+          const isFirst = i === 0;
+          const totalDays = new Date(cy, cm, 0).getDate();
+          const accrualDays = isFirst ? totalDays - startDay + 1 : totalDays;
+          const factor = isFirst ? fullFactor * (accrualDays / totalDays) : fullFactor;
+          const monthInterest = round2(balance * rate * factor);
+
+          const isPast = cy < nowY || (cy === nowY && cm < nowM);
+          const mKey = `${cy}-${cm}`;
+          const advance = advancesByInstrMonth[instr.id]?.[mKey] ?? 0;
+
+          let toInterest = 0;
+          let toPrincipal = 0;
+
+          if (isPast) {
+            const ma = txnsByInstrMonth[instr.id]?.[mKey];
+            if (ma) {
+              toInterest = ma.toInterest;
+              toPrincipal = Math.min(ma.toPrincipal, balance);
+            }
+          } else if (scheduledPayment > 0) {
+            const totalOwed = balance + unpaidInt + monthInterest;
+            const payment = Math.min(scheduledPayment, round2(totalOwed));
+            const totalIntOwed = unpaidInt + monthInterest;
+            toInterest = round2(Math.min(payment, totalIntOwed));
+            const remainder = round2(payment - toInterest);
+            toPrincipal = round2(Math.min(remainder, balance));
+          }
+
+          unpaidInt = round2(Math.max(0, unpaidInt + monthInterest - toInterest));
+          balance = round2(Math.max(0, balance - toPrincipal + advance));
+
+          // Track YTD interest (accrued, not paid)
+          if (cy === periodYear) {
+            instrYtd += monthInterest;
+          }
+
+          // Advance to next month
+          if (cm >= 12) { cy++; cm = 1; } else { cm++; }
+        }
+
+        if (unpaidInt > 0.005) {
+          totalUnpaid += unpaidInt;
+          unpaidInstruments.push({ ...instr, ending_balance: unpaidInt });
+        }
+
+        if (instrYtd > 0) {
+          ytdByInstrument[instr.id] = round2(instrYtd);
+          ytdTotal += instrYtd;
         }
       }
-      grouped["interest_payable"] = { total: Math.round(totalUnpaid * 100) / 100, instruments: unpaidInstruments };
+
+      grouped["interest_payable"] = { total: round2(totalUnpaid), instruments: unpaidInstruments };
 
       // YTD interest expense
       const ytdInstruments: InstrumentSummary[] = [];
@@ -319,7 +430,7 @@ export function DebtReconciliationTab({ entityId }: DebtReconciliationTabProps) 
           }
         }
       }
-      grouped["interest_expense"] = { total: Math.round(ytdTotal * 100) / 100, instruments: ytdInstruments };
+      grouped["interest_expense"] = { total: round2(ytdTotal), instruments: ytdInstruments };
     }
 
     setSubledgerBalances(grouped);
