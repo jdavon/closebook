@@ -61,11 +61,15 @@ export async function GET(request: Request) {
     return NextResponse.json({ message: "No connections to sync" });
   }
 
-  // Determine months to sync: January through current month of current year
+  // Determine months to sync: previous December + January through current month
   const now = new Date();
   const currentYear = now.getFullYear();
   const currentMonth = now.getMonth() + 1; // 1-indexed
   const monthsToSync = Array.from({ length: currentMonth }, (_, i) => i + 1);
+
+  // Also sync previous year's December (adjustments may still land there)
+  const prevYear = currentYear - 1;
+  const syncPrevDecember = true;
 
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
   const cronSecret = process.env.CRON_SECRET!;
@@ -74,6 +78,7 @@ export async function GET(request: Request) {
     entityId: string;
     companyName: string | null;
     months: {
+      year: number;
       month: number;
       success: boolean;
       recordsSynced: number;
@@ -81,6 +86,15 @@ export async function GET(request: Request) {
       error?: string;
     }[];
   }[] = [];
+
+  // Build full list of periods to sync: previous Dec + current year months
+  const periodsToSync: { year: number; month: number }[] = [];
+  if (syncPrevDecember) {
+    periodsToSync.push({ year: prevYear, month: 12 });
+  }
+  for (const month of monthsToSync) {
+    periodsToSync.push({ year: currentYear, month });
+  }
 
   // Process each entity sequentially (avoids token refresh race conditions
   // within a single QBO realm). Months within an entity are also sequential
@@ -92,7 +106,7 @@ export async function GET(request: Request) {
       months: [],
     };
 
-    for (const month of monthsToSync) {
+    for (const period of periodsToSync) {
       try {
         const response = await fetch(`${baseUrl}/api/qbo/sync`, {
           method: "POST",
@@ -103,15 +117,16 @@ export async function GET(request: Request) {
           body: JSON.stringify({
             entityId: conn.entity_id,
             syncType: "incremental",
-            periodYear: currentYear,
-            periodMonth: month,
+            periodYear: period.year,
+            periodMonth: period.month,
           }),
         });
 
         const lastEvent = await readSyncStream(response);
 
         entityResult.months.push({
-          month,
+          year: period.year,
+          month: period.month,
           success: !lastEvent.error,
           recordsSynced: (lastEvent.recordsSynced as number) ?? 0,
           dataChanged: (lastEvent.dataChanged as boolean) ?? false,
@@ -119,7 +134,8 @@ export async function GET(request: Request) {
         });
       } catch (err) {
         entityResult.months.push({
-          month,
+          year: period.year,
+          month: period.month,
           success: false,
           recordsSynced: 0,
           dataChanged: false,
@@ -133,7 +149,7 @@ export async function GET(request: Request) {
 
     results.push(entityResult);
 
-    // Take drift snapshot for all synced months
+    // Take drift snapshot for current year months
     try {
       await fetch(`${baseUrl}/api/drift/snapshot`, {
         method: "POST",
@@ -149,6 +165,26 @@ export async function GET(request: Request) {
       });
     } catch {
       // Drift snapshot failure should not block the sync summary
+    }
+
+    // Take drift snapshot for previous December
+    if (syncPrevDecember) {
+      try {
+        await fetch(`${baseUrl}/api/drift/snapshot`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-cron-secret": cronSecret,
+          },
+          body: JSON.stringify({
+            entityId: conn.entity_id,
+            year: prevYear,
+            months: [12],
+          }),
+        });
+      } catch {
+        // Drift snapshot failure should not block the sync summary
+      }
     }
   }
 
@@ -169,7 +205,8 @@ export async function GET(request: Request) {
 
   return NextResponse.json({
     year: currentYear,
-    monthsSynced: monthsToSync.length,
+    previousDecemberIncluded: syncPrevDecember,
+    monthsSynced: periodsToSync.length,
     entities: connections.length,
     totalSyncs,
     successfulSyncs,

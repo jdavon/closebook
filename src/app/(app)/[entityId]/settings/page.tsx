@@ -517,7 +517,7 @@ export default function EntitySettingsPage() {
                     Currently Monitoring ({monitoredAccountIds.size} account{monitoredAccountIds.size !== 1 ? "s" : ""})
                   </h4>
                   <p className="text-xs text-muted-foreground mb-2">
-                    Checked daily across all months (Jan – current month) for balance changes.
+                    Checked daily across all months (prior Dec – current month) for balance changes.
                   </p>
                   <div className="flex flex-wrap gap-2">
                     {accounts
