@@ -44,7 +44,7 @@ interface AccruedInterestRow {
   dayCountConvention: string;
   dailyRate: number;
   balanceAtYearEnd: number;
-  decemberInterest: number;
+
   // For pro-rata: if start_date is in the report year, accrued from start through 12/31
   accruedDays: number;
   accruedInterest: number;
@@ -233,7 +233,6 @@ export default function AccruedInterestPage() {
         dayCountConvention: convention,
         dailyRate,
         balanceAtYearEnd,
-        decemberInterest,
         accruedDays,
         accruedInterest,
         status: instr.status,
