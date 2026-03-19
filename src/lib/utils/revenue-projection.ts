@@ -211,25 +211,38 @@ interface AllocationEntry {
 }
 
 /**
- * Normalize a date string to a local-midnight Date, stripping any time/timezone
- * component. This prevents off-by-one errors when RW returns ISO-UTC dates
- * (e.g. "2026-03-01" parsed as UTC midnight shifts to Feb 28 in US timezones).
+ * Parse a date string into { year, month (0-based), day } integers.
+ * Handles ISO ("2026-03-01"), US slash ("03/01/2026"), and other formats.
+ * Returns null if unparseable.
  */
-function toLocalDate(dateStr: string): Date | null {
-  const d = new Date(dateStr);
-  if (isNaN(d.getTime())) return null;
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+function parseDateParts(dateStr: string): { y: number; m: number; d: number } | null {
+  // Try ISO format first: "2026-03-01" or "2026-03-01T..."
+  const isoMatch = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (isoMatch) {
+    return { y: Number(isoMatch[1]), m: Number(isoMatch[2]) - 1, d: Number(isoMatch[3]) };
+  }
+  // Try US slash format: "03/01/2026"
+  const slashMatch = dateStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (slashMatch) {
+    return { y: Number(slashMatch[3]), m: Number(slashMatch[1]) - 1, d: Number(slashMatch[2]) };
+  }
+  // Fallback: let Date parse it, then extract UTC parts
+  const fallback = new Date(dateStr);
+  if (isNaN(fallback.getTime())) return null;
+  return { y: fallback.getUTCFullYear(), m: fallback.getUTCMonth(), d: fallback.getUTCDate() };
 }
 
-/** Integer day difference between two local-midnight dates (b - a). */
-function dayDiff(a: Date, b: Date): number {
-  return Math.round((b.getTime() - a.getTime()) / 86400000);
+/** Create a UTC-midnight date from year, month (0-based), day. */
+function utcDate(y: number, m: number, d: number): number {
+  return Date.UTC(y, m, d);
 }
+
+const MS_PER_DAY = 86400000;
 
 /**
  * Pro-rata allocate an amount across months based on rental period days.
+ * All arithmetic uses UTC timestamps to avoid any timezone ambiguity.
  * Returns a Map of monthKey → { amount, days }.
- * If dates are missing/invalid, falls back to a single-month assignment using fallbackDate.
  */
 function allocateToMonths(
   startDateStr: string | null | undefined,
@@ -240,44 +253,50 @@ function allocateToMonths(
   const result = new Map<string, AllocationEntry>();
   if (amount === 0) return result;
 
-  const startDate = startDateStr ? toLocalDate(startDateStr) : null;
-  const endDate = endDateStr ? toLocalDate(endDateStr) : null;
+  const startParts = startDateStr ? parseDateParts(startDateStr) : null;
+  const endParts = endDateStr ? parseDateParts(endDateStr) : null;
 
-  // If either date is missing/invalid, fall back to single-month assignment
-  if (!startDate || !endDate || endDate < startDate) {
+  if (!startParts || !endParts) {
     const mk = getMonthKey(fallbackDateStr);
     if (mk) result.set(mk, { amount, days: 1 });
     return result;
   }
 
-  // Calculate total rental days (inclusive)
-  const totalDays = dayDiff(startDate, endDate) + 1;
-  if (totalDays <= 0) {
+  const startMs = utcDate(startParts.y, startParts.m, startParts.d);
+  const endMs = utcDate(endParts.y, endParts.m, endParts.d);
+
+  if (endMs < startMs) {
     const mk = getMonthKey(fallbackDateStr);
     if (mk) result.set(mk, { amount, days: 1 });
     return result;
   }
 
+  const totalDays = (endMs - startMs) / MS_PER_DAY + 1;
   const dailyRate = amount / totalDays;
   let allocated = 0;
 
-  // Walk through each month the rental period touches
-  const cursor = new Date(startDate.getFullYear(), startDate.getMonth(), 1);
-  const lastMonthStart = new Date(endDate.getFullYear(), endDate.getMonth(), 1);
+  // Walk month by month from start to end
+  let curY = startParts.y;
+  let curM = startParts.m;
+  const endY = endParts.y;
+  const endM = endParts.m;
 
-  while (cursor <= lastMonthStart) {
-    const monthStart = new Date(cursor.getFullYear(), cursor.getMonth(), 1);
-    const monthEnd = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0); // last day of month
+  while (curY < endY || (curY === endY && curM <= endM)) {
+    const monthStartMs = utcDate(curY, curM, 1);
+    // Last day of this month = day 0 of next month
+    const monthEndMs = utcDate(curY, curM + 1, 0);
 
-    // Overlap: max(rentalStart, monthStart) to min(rentalEnd, monthEnd)
-    const overlapStart = startDate > monthStart ? startDate : monthStart;
-    const overlapEnd = endDate < monthEnd ? endDate : monthEnd;
-    const daysInMonth = overlapEnd >= overlapStart ? dayDiff(overlapStart, overlapEnd) + 1 : 0;
+    const overlapStartMs = Math.max(startMs, monthStartMs);
+    const overlapEndMs = Math.min(endMs, monthEndMs);
+    const daysInMonth = overlapEndMs >= overlapStartMs
+      ? (overlapEndMs - overlapStartMs) / MS_PER_DAY + 1
+      : 0;
 
     if (daysInMonth > 0) {
-      const mk = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}`;
-      // For the last month in the range, assign remainder to avoid rounding drift
-      if (cursor.getTime() === lastMonthStart.getTime()) {
+      const mk = `${curY}-${String(curM + 1).padStart(2, "0")}`;
+      const isLastMonth = curY === endY && curM === endM;
+      if (isLastMonth) {
+        // Assign remainder to avoid rounding drift
         result.set(mk, { amount: Math.round((amount - allocated) * 100) / 100, days: daysInMonth });
       } else {
         const monthAmount = Math.round(dailyRate * daysInMonth * 100) / 100;
@@ -287,7 +306,8 @@ function allocateToMonths(
     }
 
     // Advance to next month
-    cursor.setMonth(cursor.getMonth() + 1);
+    curM++;
+    if (curM > 11) { curM = 0; curY++; }
   }
 
   return result;
