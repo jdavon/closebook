@@ -684,6 +684,7 @@ export function DebtReconciliationTab({ entityId }: DebtReconciliationTabProps) 
                               }))}
                             value={selectedAccountId}
                             onValueChange={setSelectedAccountId}
+                            className="flex-1 min-w-0"
                           />
                           <Button
                             size="sm"
