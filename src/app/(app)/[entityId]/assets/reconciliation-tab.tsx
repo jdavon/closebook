@@ -146,11 +146,9 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
 
     setEntityAccounts((acctData ?? []) as EntityAccount[]);
 
-    // 2. Fetch configured account mappings for this entity
-    const { data: mappingData } = await supabase
-      .from("asset_recon_gl_links")
-      .select("id, recon_group, account_id")
-      .eq("entity_id", entityId);
+    // 2. Fetch configured account mappings for this entity (via API to bypass RLS)
+    const linkRes = await fetch(`/api/assets/recon-links?entityId=${entityId}`);
+    const mappingData = linkRes.ok ? await linkRes.json() : [];
 
     const mapped: Record<string, { id: string; account_id: string }[]> = {};
     for (const group of RECON_GROUPS) {
@@ -296,18 +294,19 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
     if (!selectedAccountId) return;
     setSaving(groupKey);
 
-    const { error } = await supabase.from("asset_recon_gl_links").insert({
-      entity_id: entityId,
-      recon_group: groupKey,
-      account_id: selectedAccountId,
+    const res = await fetch("/api/assets/recon-links", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        entity_id: entityId,
+        recon_group: groupKey,
+        account_id: selectedAccountId,
+      }),
     });
 
-    if (error) {
-      toast.error(
-        error.message.includes("duplicate")
-          ? "Account already mapped to this group"
-          : error.message
-      );
+    if (!res.ok) {
+      const err = await res.json();
+      toast.error(err.error || "Failed to link account");
     } else {
       toast.success("Account linked");
       setAddingToGroup(null);
@@ -322,7 +321,7 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
     groupKey: string
   ) => {
     setSaving(groupKey);
-    await supabase.from("asset_recon_gl_links").delete().eq("id", mappingId);
+    await fetch(`/api/assets/recon-links?id=${mappingId}`, { method: "DELETE" });
     loadData();
     setSaving(null);
   };
