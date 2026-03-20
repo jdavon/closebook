@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useParams } from "next/navigation";
 import {
   Card,
@@ -28,7 +28,6 @@ import {
   FileText,
   RefreshCw,
   Loader2,
-  ChevronRight,
   BookOpen,
 } from "lucide-react";
 import { formatCurrency } from "@/lib/utils/dates";
@@ -41,6 +40,7 @@ import {
 } from "@/lib/utils/revenue-projection";
 import {
   ComposedChart,
+  BarChart,
   Bar,
   Line,
   XAxis,
@@ -192,7 +192,7 @@ export default function RevenueProjectionPage() {
   const [data, setData] = useState<RevenueProjectionResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [dateMode, setDateMode] = useState<DateMode>("rental_period");
+  const [dateMode, setDateMode] = useState<DateMode>("invoice_date");
   const [invoiceMonthFilter, setInvoiceMonthFilter] = useState<string>("all");
 
   const fetchData = async (mode?: DateMode) => {
@@ -267,46 +267,6 @@ export default function RevenueProjectionPage() {
       return inv.month === invoiceMonthFilter;
     });
   }, [data, invoiceMonthFilter]);
-
-  // Group filtered invoices by customer
-  const customerGroups = useMemo(() => {
-    const groups = new Map<string, { customer: string; invoices: ClosedInvoice[]; totalRevenue: number; totalAllocated: number }>();
-    const showAllocation = dateMode === "rental_period" && invoiceMonthFilter !== "all";
-    for (const inv of filteredInvoices) {
-      const key = inv.customer || "Unknown";
-      if (!groups.has(key)) {
-        groups.set(key, { customer: key, invoices: [], totalRevenue: 0, totalAllocated: 0 });
-      }
-      const g = groups.get(key)!;
-      g.invoices.push(inv);
-      g.totalRevenue += inv.subTotal;
-      if (showAllocation) {
-        const alloc = inv.allocations?.find((a) => a.month === invoiceMonthFilter);
-        g.totalAllocated += alloc ? alloc.amount : inv.subTotal;
-      }
-    }
-    return Array.from(groups.values()).sort((a, b) => {
-      const aVal = showAllocation ? b.totalAllocated : b.totalRevenue;
-      const bVal = showAllocation ? a.totalAllocated : a.totalRevenue;
-      return aVal - bVal;
-    });
-  }, [filteredInvoices, dateMode, invoiceMonthFilter]);
-
-  const [expandedCustomers, setExpandedCustomers] = useState<Set<string>>(new Set());
-
-  // Reset expanded state when filter changes
-  useEffect(() => {
-    setExpandedCustomers(new Set());
-  }, [invoiceMonthFilter, dateMode]);
-
-  const toggleCustomer = useCallback((customer: string) => {
-    setExpandedCustomers((prev) => {
-      const next = new Set(prev);
-      if (next.has(customer)) next.delete(customer);
-      else next.add(customer);
-      return next;
-    });
-  }, []);
 
 
   if (loading && !data) {
@@ -424,7 +384,7 @@ export default function RevenueProjectionPage() {
         <KPICard
           title="YTD Revenue"
           value={formatCurrency(data.ytdRevenue)}
-          description="All invoices this year"
+          description="Closed invoices this year"
           icon={<DollarSign className="text-muted-foreground h-4 w-4" />}
         />
         <KPICard
@@ -551,6 +511,7 @@ export default function RevenueProjectionPage() {
                   <ComposedChart
                     data={data.monthlyData.map((m) => ({
                       ...m,
+                      // Show deferred as negative for diverging bar chart
                       deferredNeg: m.deferred > 0 ? -m.deferred : 0,
                     }))}
                     margin={{ top: 10, right: 30, left: 10, bottom: 0 }}
@@ -700,166 +661,155 @@ export default function RevenueProjectionPage() {
               ) : (
                 <div className="overflow-x-auto">
                   {(() => {
+                    // Show allocation column when in rental_period mode and filtering a specific month
                     const showAllocation = dateMode === "rental_period" && invoiceMonthFilter !== "all";
+                    // Helper to get the allocation for the filtered month
                     const getAlloc = (inv: ClosedInvoice) =>
                       inv.allocations?.find((a) => a.month === invoiceMonthFilter);
-                    const colCount = showAllocation ? 7 : 7;
                     return (
                       <Table>
                         <TableHeader>
                           <TableRow>
-                            <TableHead className="w-8" />
+                            <TableHead>Invoice #</TableHead>
+                            <TableHead>Status</TableHead>
                             <TableHead>Customer</TableHead>
-                            <TableHead className="text-right">Invoices</TableHead>
+                            <TableHead>Order</TableHead>
+                            <TableHead>Invoice Date</TableHead>
+                            <TableHead>Billing Period</TableHead>
                             {showAllocation ? (
                               <>
-                                <TableHead className="text-right">Invoice Total</TableHead>
-                                <TableHead className="text-right">Allocated</TableHead>
+                                <TableHead className="text-right">
+                                  Invoice Total
+                                </TableHead>
+                                <TableHead className="text-right">
+                                  Allocated
+                                </TableHead>
+                                <TableHead className="text-right">
+                                  %
+                                </TableHead>
+                                <TableHead className="text-right">
+                                  Days
+                                </TableHead>
                               </>
                             ) : (
                               <>
-                                <TableHead className="text-right">Revenue</TableHead>
-                                <TableHead className="text-right">Tax</TableHead>
-                                <TableHead className="text-right">Total</TableHead>
+                                <TableHead>Month</TableHead>
+                                <TableHead className="text-right">
+                                  Revenue
+                                </TableHead>
+                                <TableHead className="text-right">
+                                  Tax
+                                </TableHead>
+                                <TableHead className="text-right">
+                                  Total
+                                </TableHead>
                               </>
                             )}
+                            <TableHead>Type</TableHead>
                           </TableRow>
                         </TableHeader>
                         <TableBody>
-                          {customerGroups.map((group) => {
-                            const isExpanded = expandedCustomers.has(group.customer);
-                            const groupTax = group.invoices.reduce((s, i) => s + i.tax, 0);
-                            const groupGross = group.invoices.reduce((s, i) => s + i.grossTotal, 0);
+                          {filteredInvoices.map((inv) => {
+                            const alloc = showAllocation ? getAlloc(inv) : null;
                             return (
-                              <React.Fragment key={group.customer}>
-                                {/* Customer summary row */}
-                                <TableRow
-                                  className="hover:bg-muted/50 cursor-pointer"
-                                  onClick={() => toggleCustomer(group.customer)}
-                                >
-                                  <TableCell className="w-8 px-2">
-                                    <ChevronRight
-                                      className={`h-4 w-4 text-muted-foreground transition-transform ${
-                                        isExpanded ? "rotate-90" : ""
-                                      }`}
-                                    />
-                                  </TableCell>
-                                  <TableCell className="font-medium">
-                                    {group.customer}
-                                  </TableCell>
-                                  <TableCell className="text-muted-foreground text-right tabular-nums">
-                                    {group.invoices.length}
-                                  </TableCell>
-                                  {showAllocation ? (
-                                    <>
-                                      <TableCell className="text-muted-foreground text-right tabular-nums">
-                                        {formatCurrency(group.totalRevenue)}
-                                      </TableCell>
-                                      <TableCell className="text-right font-semibold tabular-nums">
-                                        {formatCurrency(group.totalAllocated)}
-                                      </TableCell>
-                                    </>
-                                  ) : (
-                                    <>
-                                      <TableCell className="text-right font-semibold tabular-nums">
-                                        {formatCurrency(group.totalRevenue)}
-                                      </TableCell>
-                                      <TableCell className="text-muted-foreground text-right tabular-nums">
-                                        {formatCurrency(groupTax)}
-                                      </TableCell>
-                                      <TableCell className="text-right tabular-nums">
-                                        {formatCurrency(groupGross)}
-                                      </TableCell>
-                                    </>
-                                  )}
-                                </TableRow>
-                                {/* Expanded invoice detail rows */}
-                                {isExpanded && group.invoices.map((inv) => {
-                                  const alloc = showAllocation ? getAlloc(inv) : null;
-                                  return (
-                                    <TableRow key={inv.invoiceId} className="bg-muted/30">
-                                      <TableCell />
-                                      <TableCell className="pl-8" colSpan={showAllocation ? 1 : 1}>
-                                        <div className="flex flex-col gap-0.5">
-                                          <span className="flex items-center gap-1.5 text-sm font-medium">
-                                            {inv.invoiceNumber}
-                                            {inv.status && inv.status !== "CLOSED" && inv.status !== "PROCESSED" && (
-                                              <Badge variant={inv.status === "APPROVED" ? "secondary" : "outline"} className="text-[10px] px-1.5 py-0">
-                                                {inv.status}
-                                              </Badge>
-                                            )}
-                                          </span>
-                                          <span className="text-muted-foreground max-w-[260px] truncate text-xs">
-                                            {inv.orderDescription || inv.orderNumber}
-                                          </span>
-                                        </div>
-                                      </TableCell>
-                                      <TableCell>
-                                        <div className="flex flex-col gap-0.5 text-xs">
-                                          <span className="text-muted-foreground whitespace-nowrap">
-                                            {formatDate(inv.invoiceDate)}
-                                          </span>
-                                          {(inv.billingStartDate || inv.billingEndDate) && (
-                                            <span className="text-muted-foreground whitespace-nowrap">
-                                              {formatDate(inv.billingStartDate)} – {formatDate(inv.billingEndDate)}
+                              <TableRow key={inv.invoiceId}>
+                                <TableCell className="font-medium">
+                                  {inv.invoiceNumber}
+                                </TableCell>
+                                <TableCell>
+                                  <Badge variant={
+                                    inv.status === "CLOSED" || inv.status === "PROCESSED"
+                                      ? "default"
+                                      : inv.status === "APPROVED"
+                                        ? "secondary"
+                                        : "outline"
+                                  }>
+                                    {inv.status || "—"}
+                                  </Badge>
+                                </TableCell>
+                                <TableCell>{inv.customer}</TableCell>
+                                <TableCell className="max-w-[180px] truncate">
+                                  {inv.orderDescription || inv.orderNumber}
+                                </TableCell>
+                                <TableCell className="text-muted-foreground whitespace-nowrap">
+                                  {formatDate(inv.invoiceDate)}
+                                </TableCell>
+                                <TableCell className="text-muted-foreground whitespace-nowrap text-xs">
+                                  {inv.billingStartDate || inv.billingEndDate
+                                    ? `${formatDate(inv.billingStartDate)} – ${formatDate(inv.billingEndDate)}`
+                                    : "—"}
+                                </TableCell>
+                                {showAllocation ? (
+                                  <>
+                                    <TableCell className="text-muted-foreground text-right tabular-nums">
+                                      {formatCurrency(inv.subTotal)}
+                                    </TableCell>
+                                    <TableCell className="text-right font-medium tabular-nums">
+                                      {alloc ? formatCurrency(alloc.amount) : formatCurrency(inv.subTotal)}
+                                    </TableCell>
+                                    <TableCell className="text-right tabular-nums">
+                                      {alloc ? `${alloc.percentage}%` : "100%"}
+                                    </TableCell>
+                                    <TableCell className="text-muted-foreground text-right tabular-nums">
+                                      {alloc ? alloc.days : "—"}
+                                    </TableCell>
+                                  </>
+                                ) : (
+                                  <>
+                                    <TableCell>
+                                      <Badge variant="outline">
+                                        {inv.month
+                                          ? inv.month.replace(
+                                              /^(\d{4})-(\d{2})$/,
+                                              (_, y, m) => {
+                                                const months = [
+                                                  "Jan","Feb","Mar","Apr","May","Jun",
+                                                  "Jul","Aug","Sep","Oct","Nov","Dec",
+                                                ];
+                                                return `${months[Number(m) - 1]} ${y.slice(2)}`;
+                                              },
+                                            )
+                                          : "—"}
+                                      </Badge>
+                                      {dateMode === "rental_period" && inv.allocations && (
+                                        <div className="mt-1 flex flex-wrap gap-1">
+                                          {inv.allocations.map((a) => (
+                                            <span
+                                              key={a.month}
+                                              className="bg-muted text-muted-foreground rounded px-1.5 py-0.5 text-[10px]"
+                                            >
+                                              {a.label}: {a.percentage}%
                                             </span>
-                                          )}
+                                          ))}
                                         </div>
-                                      </TableCell>
-                                      {showAllocation ? (
-                                        <>
-                                          <TableCell className="text-muted-foreground text-right tabular-nums text-sm">
-                                            {formatCurrency(inv.subTotal)}
-                                            {alloc && (
-                                              <span className="text-muted-foreground ml-1 text-xs">
-                                                ({alloc.percentage}%, {alloc.days}d)
-                                              </span>
-                                            )}
-                                          </TableCell>
-                                          <TableCell className="text-right font-medium tabular-nums text-sm">
-                                            {alloc ? formatCurrency(alloc.amount) : formatCurrency(inv.subTotal)}
-                                          </TableCell>
-                                        </>
-                                      ) : (
-                                        <>
-                                          <TableCell className="text-right tabular-nums text-sm">
-                                            {formatCurrency(inv.subTotal)}
-                                            {dateMode === "rental_period" && inv.allocations && (
-                                              <div className="mt-0.5 flex flex-wrap justify-end gap-1">
-                                                {inv.allocations.map((a) => (
-                                                  <span
-                                                    key={a.month}
-                                                    className="bg-muted text-muted-foreground rounded px-1 py-0.5 text-[10px]"
-                                                  >
-                                                    {a.label}: {a.percentage}%
-                                                  </span>
-                                                ))}
-                                              </div>
-                                            )}
-                                          </TableCell>
-                                          <TableCell className="text-muted-foreground text-right tabular-nums text-sm">
-                                            {formatCurrency(inv.tax)}
-                                          </TableCell>
-                                          <TableCell className="text-right tabular-nums text-sm">
-                                            {formatCurrency(inv.grossTotal)}
-                                          </TableCell>
-                                        </>
                                       )}
-                                    </TableRow>
-                                  );
-                                })}
-                              </React.Fragment>
+                                    </TableCell>
+                                    <TableCell className="text-right font-medium tabular-nums">
+                                      {formatCurrency(inv.subTotal)}
+                                    </TableCell>
+                                    <TableCell className="text-muted-foreground text-right tabular-nums">
+                                      {formatCurrency(inv.tax)}
+                                    </TableCell>
+                                    <TableCell className="text-right tabular-nums">
+                                      {formatCurrency(inv.grossTotal)}
+                                    </TableCell>
+                                  </>
+                                )}
+                                <TableCell>
+                                  <Badge variant="secondary">
+                                    {EQUIPMENT_TYPE_LABELS[inv.equipmentType] ||
+                                      inv.equipmentType}
+                                  </Badge>
+                                </TableCell>
+                              </TableRow>
                             );
                           })}
-                          {/* Grand total row */}
                           <TableRow className="border-t-2 font-semibold">
-                            <TableCell />
-                            <TableCell>
-                              Total ({filteredInvoices.length} invoices, {customerGroups.length} customers)
-                            </TableCell>
-                            <TableCell />
                             {showAllocation ? (
                               <>
+                                <TableCell colSpan={6}>
+                                  Total ({filteredInvoices.length} invoices)
+                                </TableCell>
                                 <TableCell className="text-muted-foreground text-right tabular-nums">
                                   {formatCurrency(
                                     filteredInvoices.reduce((s, i) => s + i.subTotal, 0),
@@ -867,12 +817,20 @@ export default function RevenueProjectionPage() {
                                 </TableCell>
                                 <TableCell className="text-right tabular-nums">
                                   {formatCurrency(
-                                    customerGroups.reduce((s, g) => s + g.totalAllocated, 0),
+                                    filteredInvoices.reduce((s, inv) => {
+                                      const alloc = getAlloc(inv);
+                                      return s + (alloc ? alloc.amount : inv.subTotal);
+                                    }, 0),
                                   )}
                                 </TableCell>
+                                <TableCell />
+                                <TableCell />
                               </>
                             ) : (
                               <>
+                                <TableCell colSpan={7}>
+                                  Total ({filteredInvoices.length} invoices)
+                                </TableCell>
                                 <TableCell className="text-right tabular-nums">
                                   {formatCurrency(
                                     filteredInvoices.reduce((s, i) => s + i.subTotal, 0),
@@ -890,6 +848,7 @@ export default function RevenueProjectionPage() {
                                 </TableCell>
                               </>
                             )}
+                            <TableCell />
                           </TableRow>
                         </TableBody>
                       </Table>
@@ -1046,7 +1005,7 @@ export default function RevenueProjectionPage() {
 
         {/* Accruals Tab — JE Schedule */}
         <TabsContent value="accruals" className="space-y-6">
-          <AccrualSchedule monthlyData={data.monthlyData} invoices={data.closedInvoices} />
+          <AccrualSchedule monthlyData={data.monthlyData} />
         </TabsContent>
       </Tabs>
     </div>
@@ -1055,141 +1014,52 @@ export default function RevenueProjectionPage() {
 
 // ─── Sub-components ─────────────────────────────────────────────────────────
 
-function getMonthKeyLocal(dateStr: string | null | undefined): string {
-  if (!dateStr) return "";
-  // Parse ISO "2026-03-01" or "2026-03-01T..."
-  const iso = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (iso) return `${iso[1]}-${iso[2]}`;
-  // Parse US slash "03/01/2026"
-  const slash = dateStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
-  if (slash) return `${slash[3]}-${slash[1].padStart(2, "0")}`;
-  const d = new Date(dateStr);
-  if (isNaN(d.getTime())) return "";
-  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
-}
+function AccrualSchedule({ monthlyData }: { monthlyData: MonthlyRevenue[] }) {
+  // Only show months that have any billed or earned activity
+  const activeMonths = monthlyData.filter((m) => m.billed > 0 || m.earned > 0);
 
-/** Client-side pro-rata allocation matching server logic */
-function allocateToMonthsLocal(
-  startStr: string | null | undefined,
-  endStr: string | null | undefined,
-  amount: number,
-  fallbackStr: string | null | undefined,
-): Map<string, number> {
-  const result = new Map<string, number>();
-  if (amount === 0) return result;
+  // Build a lookup from the full monthlyData array so we can find the prior month
+  const monthIndex = new Map<string, MonthlyRevenue>();
+  for (const m of monthlyData) monthIndex.set(m.month, m);
 
-  const parse = (s: string) => {
-    const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
-    if (iso) return { y: +iso[1], m: +iso[2] - 1, d: +iso[3] };
-    const slash = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
-    if (slash) return { y: +slash[3], m: +slash[1] - 1, d: +slash[2] };
-    return null;
+  // Get prior month key from a "YYYY-MM" string
+  const getPriorMonthKey = (mk: string) => {
+    const [y, m] = mk.split("-").map(Number);
+    const d = new Date(y, m - 2, 1); // m-1 is current (0-indexed), so m-2 is prior
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
   };
 
-  const sp = startStr ? parse(startStr) : null;
-  const ep = endStr ? parse(endStr) : null;
-  if (!sp || !ep) {
-    const mk = getMonthKeyLocal(fallbackStr);
-    if (mk) result.set(mk, amount);
-    return result;
-  }
+  // For each active month, compute reversal (from prior month) and net
+  const scheduleRows = activeMonths.map((m) => {
+    const priorKey = getPriorMonthKey(m.month);
+    const prior = monthIndex.get(priorKey);
+    // Reversal = opposite of prior month's entry
+    const reversalAccrued = prior?.accrued ?? 0; // prior accrual gets reversed
+    const reversalDeferred = prior?.deferred ?? 0; // prior deferral gets reversed
+    // Net impact on revenue = (new accrual - new deferral) - (reversed accrual - reversed deferral)
+    // Reversal of accrual reduces revenue, reversal of deferral increases revenue
+    const netRevenueImpact = (m.accrued - m.deferred) - (reversalAccrued - reversalDeferred);
+    return {
+      ...m,
+      reversalAccrued,
+      reversalDeferred,
+      netRevenueImpact,
+      priorLabel: prior?.label ?? priorKey,
+    };
+  });
 
-  const MS = 86400000;
-  const startMs = Date.UTC(sp.y, sp.m, sp.d);
-  const endMs = Date.UTC(ep.y, ep.m, ep.d);
-  if (endMs < startMs) {
-    const mk = getMonthKeyLocal(fallbackStr);
-    if (mk) result.set(mk, amount);
-    return result;
-  }
-
-  const totalDays = (endMs - startMs) / MS + 1;
-  const dailyRate = amount / totalDays;
-  let allocated = 0;
-  let cY = sp.y, cM = sp.m;
-
-  while (cY < ep.y || (cY === ep.y && cM <= ep.m)) {
-    const mStart = Date.UTC(cY, cM, 1);
-    const mEnd = Date.UTC(cY, cM + 1, 0);
-    const oStart = Math.max(startMs, mStart);
-    const oEnd = Math.min(endMs, mEnd);
-    const days = oEnd >= oStart ? (oEnd - oStart) / MS + 1 : 0;
-    if (days > 0) {
-      const mk = `${cY}-${String(cM + 1).padStart(2, "0")}`;
-      const isLast = cY === ep.y && cM === ep.m;
-      const amt = isLast
-        ? Math.round((amount - allocated) * 100) / 100
-        : Math.round(dailyRate * days * 100) / 100;
-      result.set(mk, amt);
-      if (!isLast) allocated += amt;
-    }
-    cM++;
-    if (cM > 11) { cM = 0; cY++; }
-  }
-  return result;
-}
-
-interface InvoiceMonthDetail {
-  invoiceId: string;
-  invoiceNumber: string;
-  customer: string;
-  orderDescription: string;
-  invoiceDate: string;
-  billingStartDate: string;
-  billingEndDate: string;
-  subTotal: number;
-  billedInMonth: number;
-  earnedInMonth: number;
-  diff: number; // positive = accrual, negative = deferral
-}
-
-function getInvoiceDetailsForMonth(month: string, invoices: ClosedInvoice[]): InvoiceMonthDetail[] {
-  const details: InvoiceMonthDetail[] = [];
-  for (const inv of invoices) {
-    const billedMonth = getMonthKeyLocal(inv.invoiceDate);
-    const billedInMonth = billedMonth === month ? inv.subTotal : 0;
-    const earnedMap = allocateToMonthsLocal(
-      inv.billingStartDate, inv.billingEndDate, inv.subTotal, inv.invoiceDate,
-    );
-    const earnedInMonth = earnedMap.get(month) ?? 0;
-    // Only include if this invoice touches this month AND has a mismatch
-    if ((billedInMonth > 0 || earnedInMonth > 0) && Math.abs(earnedInMonth - billedInMonth) > 0.01) {
-      details.push({
-        invoiceId: inv.invoiceId,
-        invoiceNumber: inv.invoiceNumber,
-        customer: inv.customer,
-        orderDescription: inv.orderDescription || inv.orderNumber,
-        invoiceDate: inv.invoiceDate,
-        billingStartDate: inv.billingStartDate,
-        billingEndDate: inv.billingEndDate,
-        subTotal: inv.subTotal,
-        billedInMonth,
-        earnedInMonth,
-        diff: Math.round((earnedInMonth - billedInMonth) * 100) / 100,
-      });
-    }
-  }
-  return details.sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff));
-}
-
-function AccrualSchedule({ monthlyData, invoices }: { monthlyData: MonthlyRevenue[]; invoices: ClosedInvoice[] }) {
-  const activeMonths = monthlyData.filter((m) => m.billed > 0 || m.earned > 0);
-  const [expandedMonth, setExpandedMonth] = useState<string | null>(null);
-
-  const totals = activeMonths.reduce(
+  const totals = scheduleRows.reduce(
     (acc, m) => ({
       billed: acc.billed + m.billed,
       earned: acc.earned + m.earned,
       accrued: acc.accrued + m.accrued,
       deferred: acc.deferred + m.deferred,
+      reversalAccrued: acc.reversalAccrued + m.reversalAccrued,
+      reversalDeferred: acc.reversalDeferred + m.reversalDeferred,
+      netRevenueImpact: acc.netRevenueImpact + m.netRevenueImpact,
     }),
-    { billed: 0, earned: 0, accrued: 0, deferred: 0 },
+    { billed: 0, earned: 0, accrued: 0, deferred: 0, reversalAccrued: 0, reversalDeferred: 0, netRevenueImpact: 0 },
   );
-
-  const invoiceDetails = useMemo(() => {
-    if (!expandedMonth) return [];
-    return getInvoiceDetailsForMonth(expandedMonth, invoices);
-  }, [expandedMonth, invoices]);
 
   return (
     <>
@@ -1198,11 +1068,11 @@ function AccrualSchedule({ monthlyData, invoices }: { monthlyData: MonthlyRevenu
         <CardHeader>
           <CardTitle>Accrual & Deferral Schedule</CardTitle>
           <CardDescription>
-            Monthly earned vs billed revenue — click a month to see invoice details
+            Monthly earned vs billed revenue with prior-month reversals — use for QuickBooks journal entries
           </CardDescription>
         </CardHeader>
         <CardContent>
-          {activeMonths.length === 0 ? (
+          {scheduleRows.length === 0 ? (
             <p className="text-muted-foreground py-8 text-center text-sm">
               No revenue data available.
             </p>
@@ -1211,158 +1081,44 @@ function AccrualSchedule({ monthlyData, invoices }: { monthlyData: MonthlyRevenu
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="w-8" />
                     <TableHead>Month</TableHead>
                     <TableHead className="text-right">Billed</TableHead>
                     <TableHead className="text-right">Earned</TableHead>
-                    <TableHead className="text-right">Accrued</TableHead>
-                    <TableHead className="text-right">Deferred</TableHead>
-                    <TableHead className="text-right">Net Adj.</TableHead>
-                    <TableHead>Type</TableHead>
+                    <TableHead className="text-right border-l border-gray-200">Reverse Accrual</TableHead>
+                    <TableHead className="text-right">Reverse Deferral</TableHead>
+                    <TableHead className="text-right border-l border-gray-200">New Accrual</TableHead>
+                    <TableHead className="text-right">New Deferral</TableHead>
+                    <TableHead className="text-right border-l border-gray-200">Net Revenue Adj.</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {activeMonths.map((m) => {
-                    const netAdj = m.accrued - m.deferred;
-                    const hasAdj = m.accrued > 0 || m.deferred > 0;
-                    const isExpanded = expandedMonth === m.month;
-                    return (
-                      <React.Fragment key={m.month}>
-                        <TableRow
-                          className={hasAdj ? "hover:bg-muted/50 cursor-pointer" : ""}
-                          onClick={() => hasAdj && setExpandedMonth(isExpanded ? null : m.month)}
-                        >
-                          <TableCell className="w-8 px-2">
-                            {hasAdj && (
-                              <ChevronRight
-                                className={`h-4 w-4 text-muted-foreground transition-transform ${isExpanded ? "rotate-90" : ""}`}
-                              />
-                            )}
-                          </TableCell>
-                          <TableCell className="font-medium">{m.label}</TableCell>
-                          <TableCell className="text-right tabular-nums">
-                            {formatCurrency(m.billed)}
-                          </TableCell>
-                          <TableCell className="text-right tabular-nums">
-                            {formatCurrency(m.earned)}
-                          </TableCell>
-                          <TableCell className="text-right tabular-nums text-teal-700">
-                            {m.accrued > 0 ? formatCurrency(m.accrued) : "—"}
-                          </TableCell>
-                          <TableCell className="text-right tabular-nums text-amber-700">
-                            {m.deferred > 0 ? formatCurrency(m.deferred) : "—"}
-                          </TableCell>
-                          <TableCell className={`text-right tabular-nums font-medium ${netAdj > 0 ? "text-teal-700" : netAdj < 0 ? "text-amber-700" : ""}`}>
-                            {netAdj === 0 ? "—" : formatCurrency(netAdj)}
-                          </TableCell>
-                          <TableCell>
-                            {m.accrued > 0 && m.deferred === 0 && (
-                              <Badge className="bg-teal-100 text-teal-800 hover:bg-teal-100">Accrual</Badge>
-                            )}
-                            {m.deferred > 0 && m.accrued === 0 && (
-                              <Badge className="bg-amber-100 text-amber-800 hover:bg-amber-100">Deferral</Badge>
-                            )}
-                            {m.accrued > 0 && m.deferred > 0 && (
-                              <Badge variant="outline">Mixed</Badge>
-                            )}
-                            {m.accrued === 0 && m.deferred === 0 && (
-                              <Badge variant="secondary">Matched</Badge>
-                            )}
-                          </TableCell>
-                        </TableRow>
-                        {/* Expanded invoice details */}
-                        {isExpanded && invoiceDetails.length > 0 && (
-                          <TableRow>
-                            <TableCell colSpan={8} className="p-0">
-                              <div className="bg-muted/30 border-y px-6 py-3">
-                                <p className="text-sm font-medium mb-2 text-muted-foreground">
-                                  {invoiceDetails.length} invoice{invoiceDetails.length !== 1 ? "s" : ""} with timing differences in {m.label}
-                                </p>
-                                <Table>
-                                  <TableHeader>
-                                    <TableRow>
-                                      <TableHead>Invoice #</TableHead>
-                                      <TableHead>Customer</TableHead>
-                                      <TableHead>Description</TableHead>
-                                      <TableHead className="whitespace-nowrap">Invoice Date</TableHead>
-                                      <TableHead className="whitespace-nowrap">Billing Period</TableHead>
-                                      <TableHead className="text-right">Invoice Total</TableHead>
-                                      <TableHead className="text-right">Billed in Mo.</TableHead>
-                                      <TableHead className="text-right">Earned in Mo.</TableHead>
-                                      <TableHead className="text-right">Adjustment</TableHead>
-                                      <TableHead>Type</TableHead>
-                                    </TableRow>
-                                  </TableHeader>
-                                  <TableBody>
-                                    {invoiceDetails.map((d) => (
-                                      <TableRow key={d.invoiceId}>
-                                        <TableCell className="font-medium">{d.invoiceNumber}</TableCell>
-                                        <TableCell className="max-w-[140px] truncate">{d.customer}</TableCell>
-                                        <TableCell className="max-w-[180px] truncate text-muted-foreground text-sm">
-                                          {d.orderDescription}
-                                        </TableCell>
-                                        <TableCell className="text-muted-foreground whitespace-nowrap text-xs">
-                                          {formatDate(d.invoiceDate)}
-                                        </TableCell>
-                                        <TableCell className="text-muted-foreground whitespace-nowrap text-xs">
-                                          {d.billingStartDate || d.billingEndDate
-                                            ? `${formatDate(d.billingStartDate)} – ${formatDate(d.billingEndDate)}`
-                                            : "—"}
-                                        </TableCell>
-                                        <TableCell className="text-right tabular-nums text-muted-foreground">
-                                          {formatCurrency(d.subTotal)}
-                                        </TableCell>
-                                        <TableCell className="text-right tabular-nums">
-                                          {d.billedInMonth > 0 ? formatCurrency(d.billedInMonth) : "—"}
-                                        </TableCell>
-                                        <TableCell className="text-right tabular-nums">
-                                          {d.earnedInMonth > 0 ? formatCurrency(d.earnedInMonth) : "—"}
-                                        </TableCell>
-                                        <TableCell className={`text-right tabular-nums font-medium ${d.diff > 0 ? "text-teal-700" : "text-amber-700"}`}>
-                                          {formatCurrency(d.diff)}
-                                        </TableCell>
-                                        <TableCell>
-                                          {d.diff > 0 ? (
-                                            <Badge className="bg-teal-100 text-teal-800 hover:bg-teal-100 text-[10px] px-1.5">Accrual</Badge>
-                                          ) : (
-                                            <Badge className="bg-amber-100 text-amber-800 hover:bg-amber-100 text-[10px] px-1.5">Deferral</Badge>
-                                          )}
-                                        </TableCell>
-                                      </TableRow>
-                                    ))}
-                                    <TableRow className="border-t font-semibold">
-                                      <TableCell colSpan={6}>
-                                        Total ({invoiceDetails.length} invoices)
-                                      </TableCell>
-                                      <TableCell className="text-right tabular-nums">
-                                        {formatCurrency(invoiceDetails.reduce((s, d) => s + d.billedInMonth, 0))}
-                                      </TableCell>
-                                      <TableCell className="text-right tabular-nums">
-                                        {formatCurrency(invoiceDetails.reduce((s, d) => s + d.earnedInMonth, 0))}
-                                      </TableCell>
-                                      <TableCell className={`text-right tabular-nums ${invoiceDetails.reduce((s, d) => s + d.diff, 0) > 0 ? "text-teal-700" : "text-amber-700"}`}>
-                                        {formatCurrency(invoiceDetails.reduce((s, d) => s + d.diff, 0))}
-                                      </TableCell>
-                                      <TableCell />
-                                    </TableRow>
-                                  </TableBody>
-                                </Table>
-                              </div>
-                            </TableCell>
-                          </TableRow>
-                        )}
-                        {isExpanded && invoiceDetails.length === 0 && (
-                          <TableRow>
-                            <TableCell colSpan={8} className="bg-muted/30 text-center text-sm text-muted-foreground py-4">
-                              No individual invoice timing differences found for this month.
-                            </TableCell>
-                          </TableRow>
-                        )}
-                      </React.Fragment>
-                    );
-                  })}
+                  {scheduleRows.map((m) => (
+                    <TableRow key={m.month}>
+                      <TableCell className="font-medium">{m.label}</TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {formatCurrency(m.billed)}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {formatCurrency(m.earned)}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums text-rose-600 border-l border-gray-200">
+                        {m.reversalAccrued > 0 ? `(${formatCurrency(m.reversalAccrued)})` : "—"}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums text-rose-600">
+                        {m.reversalDeferred > 0 ? `(${formatCurrency(m.reversalDeferred)})` : "—"}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums text-teal-700 border-l border-gray-200">
+                        {m.accrued > 0 ? formatCurrency(m.accrued) : "—"}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums text-amber-700">
+                        {m.deferred > 0 ? formatCurrency(m.deferred) : "—"}
+                      </TableCell>
+                      <TableCell className={`text-right tabular-nums font-medium border-l border-gray-200 ${m.netRevenueImpact > 0 ? "text-teal-700" : m.netRevenueImpact < 0 ? "text-amber-700" : ""}`}>
+                        {m.netRevenueImpact === 0 ? "—" : formatCurrency(m.netRevenueImpact)}
+                      </TableCell>
+                    </TableRow>
+                  ))}
                   <TableRow className="border-t-2 font-semibold">
-                    <TableCell />
                     <TableCell>Total</TableCell>
                     <TableCell className="text-right tabular-nums">
                       {formatCurrency(totals.billed)}
@@ -1370,16 +1126,21 @@ function AccrualSchedule({ monthlyData, invoices }: { monthlyData: MonthlyRevenu
                     <TableCell className="text-right tabular-nums">
                       {formatCurrency(totals.earned)}
                     </TableCell>
-                    <TableCell className="text-right tabular-nums text-teal-700">
+                    <TableCell className="text-right tabular-nums text-rose-600 border-l border-gray-200">
+                      {totals.reversalAccrued > 0 ? `(${formatCurrency(totals.reversalAccrued)})` : "—"}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums text-rose-600">
+                      {totals.reversalDeferred > 0 ? `(${formatCurrency(totals.reversalDeferred)})` : "—"}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums text-teal-700 border-l border-gray-200">
                       {totals.accrued > 0 ? formatCurrency(totals.accrued) : "—"}
                     </TableCell>
                     <TableCell className="text-right tabular-nums text-amber-700">
                       {totals.deferred > 0 ? formatCurrency(totals.deferred) : "—"}
                     </TableCell>
-                    <TableCell className={`text-right tabular-nums font-medium ${totals.accrued - totals.deferred > 0 ? "text-teal-700" : "text-amber-700"}`}>
-                      {formatCurrency(totals.accrued - totals.deferred)}
+                    <TableCell className={`text-right tabular-nums font-medium border-l border-gray-200 ${totals.netRevenueImpact > 0 ? "text-teal-700" : "text-amber-700"}`}>
+                      {formatCurrency(totals.netRevenueImpact)}
                     </TableCell>
-                    <TableCell />
                   </TableRow>
                 </TableBody>
               </Table>
@@ -1393,90 +1154,189 @@ function AccrualSchedule({ monthlyData, invoices }: { monthlyData: MonthlyRevenu
         <CardHeader>
           <CardTitle>Journal Entry Details</CardTitle>
           <CardDescription>
-            Monthly adjusting entries for QuickBooks — post at month-end, reverse at beginning of next month
+            Each month shows the reversal of the prior month&apos;s entry, then the new month-end adjusting entry, with net impact
           </CardDescription>
         </CardHeader>
         <CardContent>
-          {activeMonths.filter((m) => m.accrued > 0 || m.deferred > 0).length === 0 ? (
+          {scheduleRows.filter((m) => m.accrued > 0 || m.deferred > 0 || m.reversalAccrued > 0 || m.reversalDeferred > 0).length === 0 ? (
             <p className="text-muted-foreground py-8 text-center text-sm">
               No adjustments needed — billed and earned revenue match for all months.
             </p>
           ) : (
-            <div className="space-y-4">
-              {activeMonths
-                .filter((m) => m.accrued > 0 || m.deferred > 0)
-                .map((m) => (
-                  <div key={m.month} className="rounded-lg border p-4">
-                    <h4 className="font-semibold mb-3">{m.label}</h4>
-                    <div className="overflow-x-auto">
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead className="w-[60px]">#</TableHead>
-                            <TableHead>Account</TableHead>
-                            <TableHead>Memo</TableHead>
-                            <TableHead className="text-right">Debit</TableHead>
-                            <TableHead className="text-right">Credit</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {m.accrued > 0 && (
-                            <>
-                              <TableRow>
-                                <TableCell className="text-muted-foreground">1</TableCell>
-                                <TableCell className="font-medium">Accrued Revenue (Asset)</TableCell>
-                                <TableCell className="text-muted-foreground text-sm">
-                                  Revenue earned but not yet billed — {m.label}
+            <div className="space-y-6">
+              {scheduleRows
+                .filter((m) => m.accrued > 0 || m.deferred > 0 || m.reversalAccrued > 0 || m.reversalDeferred > 0)
+                .map((m) => {
+                  const hasReversal = m.reversalAccrued > 0 || m.reversalDeferred > 0;
+                  const hasNewEntry = m.accrued > 0 || m.deferred > 0;
+                  let lineNum = 0;
+                  return (
+                    <div key={m.month} className="rounded-lg border p-4">
+                      <div className="flex items-center justify-between mb-3">
+                        <h4 className="font-semibold">{m.label}</h4>
+                        {m.netRevenueImpact !== 0 && (
+                          <span className={`text-sm font-medium ${m.netRevenueImpact > 0 ? "text-teal-700" : "text-amber-700"}`}>
+                            Net revenue impact: {formatCurrency(m.netRevenueImpact)}
+                          </span>
+                        )}
+                      </div>
+                      <div className="overflow-x-auto">
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead className="w-[60px]">#</TableHead>
+                              <TableHead>Account</TableHead>
+                              <TableHead>Memo</TableHead>
+                              <TableHead className="text-right">Debit</TableHead>
+                              <TableHead className="text-right">Credit</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {/* ── Reversal of prior month's entry ── */}
+                            {hasReversal && (
+                              <>
+                                <TableRow className="bg-rose-50/50">
+                                  <TableCell colSpan={5} className="text-xs font-semibold text-rose-700 uppercase tracking-wide py-1.5">
+                                    Reversal of {m.priorLabel} Entry
+                                  </TableCell>
+                                </TableRow>
+                                {m.reversalAccrued > 0 && (
+                                  <>
+                                    <TableRow>
+                                      <TableCell className="text-muted-foreground">{++lineNum}</TableCell>
+                                      <TableCell className="font-medium">Rental Revenue (Income)</TableCell>
+                                      <TableCell className="text-muted-foreground text-sm">
+                                        Reverse {m.priorLabel} accrued revenue
+                                      </TableCell>
+                                      <TableCell className="text-right tabular-nums font-medium text-rose-600">
+                                        {formatCurrency(m.reversalAccrued)}
+                                      </TableCell>
+                                      <TableCell className="text-right tabular-nums">—</TableCell>
+                                    </TableRow>
+                                    <TableRow>
+                                      <TableCell className="text-muted-foreground">{++lineNum}</TableCell>
+                                      <TableCell className="font-medium">Accrued Revenue (Asset)</TableCell>
+                                      <TableCell className="text-muted-foreground text-sm">
+                                        Reverse {m.priorLabel} accrued revenue
+                                      </TableCell>
+                                      <TableCell className="text-right tabular-nums">—</TableCell>
+                                      <TableCell className="text-right tabular-nums font-medium text-rose-600">
+                                        {formatCurrency(m.reversalAccrued)}
+                                      </TableCell>
+                                    </TableRow>
+                                  </>
+                                )}
+                                {m.reversalDeferred > 0 && (
+                                  <>
+                                    <TableRow>
+                                      <TableCell className="text-muted-foreground">{++lineNum}</TableCell>
+                                      <TableCell className="font-medium">Deferred Revenue (Liability)</TableCell>
+                                      <TableCell className="text-muted-foreground text-sm">
+                                        Reverse {m.priorLabel} deferred revenue
+                                      </TableCell>
+                                      <TableCell className="text-right tabular-nums font-medium text-rose-600">
+                                        {formatCurrency(m.reversalDeferred)}
+                                      </TableCell>
+                                      <TableCell className="text-right tabular-nums">—</TableCell>
+                                    </TableRow>
+                                    <TableRow>
+                                      <TableCell className="text-muted-foreground">{++lineNum}</TableCell>
+                                      <TableCell className="font-medium">Rental Revenue (Income)</TableCell>
+                                      <TableCell className="text-muted-foreground text-sm">
+                                        Reverse {m.priorLabel} deferred revenue
+                                      </TableCell>
+                                      <TableCell className="text-right tabular-nums">—</TableCell>
+                                      <TableCell className="text-right tabular-nums font-medium text-rose-600">
+                                        {formatCurrency(m.reversalDeferred)}
+                                      </TableCell>
+                                    </TableRow>
+                                  </>
+                                )}
+                              </>
+                            )}
+                            {/* ── New month-end adjusting entry ── */}
+                            {hasNewEntry && (
+                              <>
+                                <TableRow className={hasReversal ? "bg-blue-50/50 border-t-2" : "bg-blue-50/50"}>
+                                  <TableCell colSpan={5} className="text-xs font-semibold text-blue-700 uppercase tracking-wide py-1.5">
+                                    {m.label} Month-End Adjusting Entry
+                                  </TableCell>
+                                </TableRow>
+                                {m.accrued > 0 && (
+                                  <>
+                                    <TableRow>
+                                      <TableCell className="text-muted-foreground">{++lineNum}</TableCell>
+                                      <TableCell className="font-medium">Accrued Revenue (Asset)</TableCell>
+                                      <TableCell className="text-muted-foreground text-sm">
+                                        Revenue earned but not yet billed — {m.label}
+                                      </TableCell>
+                                      <TableCell className="text-right tabular-nums font-medium text-teal-700">
+                                        {formatCurrency(m.accrued)}
+                                      </TableCell>
+                                      <TableCell className="text-right tabular-nums">—</TableCell>
+                                    </TableRow>
+                                    <TableRow>
+                                      <TableCell className="text-muted-foreground">{++lineNum}</TableCell>
+                                      <TableCell className="font-medium">Rental Revenue (Income)</TableCell>
+                                      <TableCell className="text-muted-foreground text-sm">
+                                        Accrued rental revenue — {m.label}
+                                      </TableCell>
+                                      <TableCell className="text-right tabular-nums">—</TableCell>
+                                      <TableCell className="text-right tabular-nums font-medium text-teal-700">
+                                        {formatCurrency(m.accrued)}
+                                      </TableCell>
+                                    </TableRow>
+                                  </>
+                                )}
+                                {m.deferred > 0 && (
+                                  <>
+                                    <TableRow>
+                                      <TableCell className="text-muted-foreground">{++lineNum}</TableCell>
+                                      <TableCell className="font-medium">Rental Revenue (Income)</TableCell>
+                                      <TableCell className="text-muted-foreground text-sm">
+                                        Revenue billed but not yet earned — {m.label}
+                                      </TableCell>
+                                      <TableCell className="text-right tabular-nums font-medium text-amber-700">
+                                        {formatCurrency(m.deferred)}
+                                      </TableCell>
+                                      <TableCell className="text-right tabular-nums">—</TableCell>
+                                    </TableRow>
+                                    <TableRow>
+                                      <TableCell className="text-muted-foreground">{++lineNum}</TableCell>
+                                      <TableCell className="font-medium">Deferred Revenue (Liability)</TableCell>
+                                      <TableCell className="text-muted-foreground text-sm">
+                                        Deferred rental revenue — {m.label}
+                                      </TableCell>
+                                      <TableCell className="text-right tabular-nums">—</TableCell>
+                                      <TableCell className="text-right tabular-nums font-medium text-amber-700">
+                                        {formatCurrency(m.deferred)}
+                                      </TableCell>
+                                    </TableRow>
+                                  </>
+                                )}
+                              </>
+                            )}
+                            {/* ── Net summary row ── */}
+                            {hasReversal && hasNewEntry && (
+                              <TableRow className="border-t-2 bg-gray-50/50">
+                                <TableCell />
+                                <TableCell colSpan={2} className="font-semibold text-sm">
+                                  Net Impact on Revenue
                                 </TableCell>
-                                <TableCell className="text-right tabular-nums font-medium text-teal-700">
-                                  {formatCurrency(m.accrued)}
+                                <TableCell className={`text-right tabular-nums font-semibold ${m.netRevenueImpact < 0 ? "text-amber-700" : ""}`}>
+                                  {m.netRevenueImpact < 0 ? formatCurrency(Math.abs(m.netRevenueImpact)) : "—"}
                                 </TableCell>
-                                <TableCell className="text-right tabular-nums">—</TableCell>
+                                <TableCell className={`text-right tabular-nums font-semibold ${m.netRevenueImpact > 0 ? "text-teal-700" : ""}`}>
+                                  {m.netRevenueImpact > 0 ? formatCurrency(m.netRevenueImpact) : "—"}
+                                </TableCell>
                               </TableRow>
-                              <TableRow>
-                                <TableCell className="text-muted-foreground">2</TableCell>
-                                <TableCell className="font-medium">Rental Revenue (Income)</TableCell>
-                                <TableCell className="text-muted-foreground text-sm">
-                                  Accrued rental revenue — {m.label}
-                                </TableCell>
-                                <TableCell className="text-right tabular-nums">—</TableCell>
-                                <TableCell className="text-right tabular-nums font-medium text-teal-700">
-                                  {formatCurrency(m.accrued)}
-                                </TableCell>
-                              </TableRow>
-                            </>
-                          )}
-                          {m.deferred > 0 && (
-                            <>
-                              <TableRow>
-                                <TableCell className="text-muted-foreground">{m.accrued > 0 ? 3 : 1}</TableCell>
-                                <TableCell className="font-medium">Rental Revenue (Income)</TableCell>
-                                <TableCell className="text-muted-foreground text-sm">
-                                  Revenue billed but not yet earned — {m.label}
-                                </TableCell>
-                                <TableCell className="text-right tabular-nums font-medium text-amber-700">
-                                  {formatCurrency(m.deferred)}
-                                </TableCell>
-                                <TableCell className="text-right tabular-nums">—</TableCell>
-                              </TableRow>
-                              <TableRow>
-                                <TableCell className="text-muted-foreground">{m.accrued > 0 ? 4 : 2}</TableCell>
-                                <TableCell className="font-medium">Deferred Revenue (Liability)</TableCell>
-                                <TableCell className="text-muted-foreground text-sm">
-                                  Deferred rental revenue — {m.label}
-                                </TableCell>
-                                <TableCell className="text-right tabular-nums">—</TableCell>
-                                <TableCell className="text-right tabular-nums font-medium text-amber-700">
-                                  {formatCurrency(m.deferred)}
-                                </TableCell>
-                              </TableRow>
-                            </>
-                          )}
-                        </TableBody>
-                      </Table>
+                            )}
+                          </TableBody>
+                        </Table>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
             </div>
           )}
         </CardContent>
