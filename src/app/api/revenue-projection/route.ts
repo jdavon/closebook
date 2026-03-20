@@ -25,8 +25,13 @@ export async function POST(request: Request) {
     const rw = new RentalWorksClient(process.env.RW_BASE_URL!);
     await rw.ensureAuth(process.env.RW_USERNAME!, process.env.RW_PASSWORD!);
 
-    // Date boundaries — always use 36-month lookback (superset for all date modes)
+    // Date boundaries
     const now = new Date();
+    const thirteenMonthsAgo = new Date(
+      now.getFullYear(),
+      now.getMonth() - 13,
+      1,
+    );
     const thirtySixMonthsAgo = new Date(
       now.getFullYear(),
       now.getMonth() - 36,
@@ -38,11 +43,15 @@ export async function POST(request: Request) {
       1,
     );
 
-    const invoiceStartDate = formatRWDate(thirtySixMonthsAgo);
+    const invoiceStartDate = formatRWDate(thirteenMonthsAgo);
+    const billingStartDate = formatRWDate(thirtySixMonthsAgo);
     const orderStartDate = formatRWDate(threeMonthsAgo);
 
-    // Fetch invoices, orders, and quotes in parallel
-    const [invoiceResult, orderResult, quoteResult] = await Promise.all([
+    // Fetch two sets of invoices:
+    // 1. By InvoiceDate (13 months) — exact match for invoice_date mode
+    // 2. By BillingEndDate (36 months) — captures long-term rentals for billing/rental modes
+    // Plus orders and quotes in parallel
+    const [invoiceByDate, invoiceByBilling, orderResult, quoteResult] = await Promise.all([
       rw.browse<RWInvoiceRow>("invoice", {
         pagesize: 2000,
         searchfields: ["InvoiceDate"],
@@ -50,6 +59,15 @@ export async function POST(request: Request) {
         searchfieldvalues: [invoiceStartDate],
         searchfieldtypes: ["date"],
         orderby: "InvoiceDate",
+        orderbydirection: "desc",
+      }),
+      rw.browse<RWInvoiceRow>("invoice", {
+        pagesize: 2000,
+        searchfields: ["BillingEndDate"],
+        searchfieldoperators: [">="],
+        searchfieldvalues: [billingStartDate],
+        searchfieldtypes: ["date"],
+        orderby: "BillingEndDate",
         orderbydirection: "desc",
       }),
       rw.browse<RWOrderRow>("order", {
@@ -72,9 +90,21 @@ export async function POST(request: Request) {
       }),
     ]);
 
+    // Merge and deduplicate invoices by InvoiceId
+    const invoiceMap = new Map<string, RWInvoiceRow>();
+    for (const inv of invoiceByDate.rows) {
+      invoiceMap.set(inv.InvoiceId, inv);
+    }
+    for (const inv of invoiceByBilling.rows) {
+      if (!invoiceMap.has(inv.InvoiceId)) {
+        invoiceMap.set(inv.InvoiceId, inv);
+      }
+    }
+    const mergedInvoices = Array.from(invoiceMap.values());
+
     // Process with default invoice_date mode; client will re-process for other modes
     const result = processRevenueData(
-      invoiceResult.rows,
+      mergedInvoices,
       orderResult.rows,
       quoteResult.rows,
       "invoice_date",
@@ -83,7 +113,7 @@ export async function POST(request: Request) {
     return NextResponse.json({
       ...result,
       // Include raw rows so the client can re-process without another API call
-      _rawInvoices: invoiceResult.rows,
+      _rawInvoices: mergedInvoices,
       _rawOrders: orderResult.rows,
       _rawQuotes: quoteResult.rows,
     });

@@ -172,10 +172,11 @@ function toNum(val: string | number | undefined | null): number {
 
 function getMonthKey(dateStr: string | null | undefined): string {
   if (!dateStr) return "";
-  const d = new Date(dateStr);
-  if (isNaN(d.getTime())) return "";
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
+  // Use parseDateParts for consistent UTC handling across server & client
+  const parts = parseDateParts(dateStr);
+  if (!parts) return "";
+  const y = parts.y;
+  const m = String(parts.m + 1).padStart(2, "0");
   return `${y}-${m}`;
 }
 
@@ -328,7 +329,7 @@ export function processRevenueData(
 ): RevenueProjectionResponse {
   const now = new Date();
   const currentMonthKey = getMonthKey(now.toISOString());
-  const currentYear = now.getFullYear();
+  const currentYear = now.getUTCFullYear();
 
   const useRentalPeriod = dateMode === "rental_period";
 
@@ -501,8 +502,8 @@ export function processRevenueData(
     const allInvoicesForYtd = [...closedInvoices, ...pendingInvoices];
     ytdRevenue = allInvoicesForYtd
       .filter((inv) => {
-        const d = new Date(getInvoiceGroupDate(inv));
-        return !isNaN(d.getTime()) && d.getFullYear() === currentYear;
+        const parts = parseDateParts(getInvoiceGroupDate(inv));
+        return parts !== null && parts.y === currentYear;
       })
       .reduce((sum, inv) => sum + toNum(inv.InvoiceSubTotal), 0);
   }
@@ -548,8 +549,8 @@ export function processRevenueData(
         }
       }
     } else {
-      const d = new Date(getInvoiceGroupDate(inv));
-      if (isNaN(d.getTime()) || d.getFullYear() !== currentYear) continue;
+      const dp = parseDateParts(getInvoiceGroupDate(inv));
+      if (!dp || dp.y !== currentYear) continue;
       equipTotals[type] = (equipTotals[type] || 0) + toNum(inv.InvoiceSubTotal);
     }
   }
