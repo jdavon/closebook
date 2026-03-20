@@ -51,6 +51,20 @@ export async function GET(request: Request) {
 
   const supabase = createAdminClient();
 
+  // Reset connections stuck in "syncing" (timed-out) or "error" (failed last run)
+  // so the cron can retry them. A connection stuck in "syncing" for >10 minutes
+  // almost certainly timed out without hitting the catch block.
+  await supabase
+    .from("qbo_connections")
+    .update({ sync_status: "idle", sync_error: null })
+    .eq("sync_status", "error");
+
+  await supabase
+    .from("qbo_connections")
+    .update({ sync_status: "idle", sync_error: null })
+    .eq("sync_status", "syncing")
+    .lt("last_sync_at", new Date(Date.now() - 10 * 60 * 1000).toISOString());
+
   // Get all active connections
   const { data: connections } = await supabase
     .from("qbo_connections")
