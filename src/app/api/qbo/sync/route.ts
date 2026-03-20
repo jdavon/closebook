@@ -4,6 +4,21 @@ import { createAdminClient } from "@/lib/supabase/admin";
 
 export const maxDuration = 120; // Single entity sync with accounts, classes, TB, and P&L by class
 
+/** Fetch with a timeout (default 30s) to prevent hanging on unresponsive APIs */
+async function fetchWithTimeout(
+  url: string,
+  options: RequestInit = {},
+  timeoutMs = 30_000
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function refreshTokenIfNeeded(
   connection: {
     id: string;
@@ -28,7 +43,7 @@ async function refreshTokenIfNeeded(
     "base64"
   );
 
-  const response = await fetch(
+  const response = await fetchWithTimeout(
     "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer",
     {
       method: "POST",
@@ -41,11 +56,14 @@ async function refreshTokenIfNeeded(
         grant_type: "refresh_token",
         refresh_token: connection.refresh_token,
       }),
-    }
+    },
+    15_000 // 15s timeout for token refresh
   );
 
   if (!response.ok) {
-    throw new Error("Token refresh failed");
+    const body = await response.text().catch(() => "");
+    console.error(`Token refresh failed: HTTP ${response.status}`, body);
+    throw new Error(`Token refresh failed (HTTP ${response.status})`);
   }
 
   const tokens = await response.json();
@@ -116,7 +134,7 @@ export async function POST(request: Request) {
   }
 
   // Create sync log
-  const { data: syncLog } = await adminClient
+  const { data: syncLog, error: syncLogError } = await adminClient
     .from("qbo_sync_logs")
     .insert({
       qbo_connection_id: connection.id,
@@ -125,6 +143,11 @@ export async function POST(request: Request) {
     })
     .select()
     .single();
+
+  if (syncLogError) {
+    console.error("Failed to create sync log:", syncLogError);
+  }
+  console.log(`QBO sync started: entity=${entityId} type=${syncType} period=${targetYear}-${targetMonth} logId=${syncLog?.id}`);
 
   // Update connection status
   await adminClient
@@ -184,7 +207,7 @@ export async function POST(request: Request) {
           let fetchFailed = false;
 
           while (hasMore) {
-            const accountsResponse = await fetch(
+            const accountsResponse = await fetchWithTimeout(
               `${apiBaseUrl}/v3/company/${connection.realm_id}/query?query=${encodeURIComponent(
                 `SELECT * FROM Account STARTPOSITION ${startPosition} MAXRESULTS ${PAGE_SIZE}`
               )}`,
@@ -261,7 +284,7 @@ export async function POST(request: Request) {
             progress: 32,
           });
 
-          const classesResponse = await fetch(
+          const classesResponse = await fetchWithTimeout(
             `${apiBaseUrl}/v3/company/${connection.realm_id}/query?query=${encodeURIComponent(
               "SELECT * FROM Class MAXRESULTS 1000"
             )}`,
@@ -352,7 +375,7 @@ export async function POST(request: Request) {
           progress: 45,
         });
 
-        const tbResponse = await fetch(
+        const tbResponse = await fetchWithTimeout(
           `${apiBaseUrl}/v3/company/${connection.realm_id}/reports/TrialBalance?start_date=${startDate}&end_date=${endDate}`,
           {
             headers: {
@@ -645,7 +668,7 @@ export async function POST(request: Request) {
             progress: 91,
           });
 
-          const plResponse = await fetch(
+          const plResponse = await fetchWithTimeout(
             `${apiBaseUrl}/v3/company/${connection.realm_id}/reports/ProfitAndLoss?start_date=${startDate}&end_date=${endDate}&summarize_column_by=Classes`,
             {
               headers: {
@@ -1119,24 +1142,29 @@ export async function POST(request: Request) {
       } catch (err) {
         const errorMessage =
           err instanceof Error ? err.message : "Unknown error";
+        console.error("QBO sync error:", errorMessage, err);
 
-        await adminClient
-          .from("qbo_connections")
-          .update({
-            sync_status: "error",
-            sync_error: errorMessage,
-          })
-          .eq("id", connection.id);
-
-        if (syncLog) {
+        try {
           await adminClient
-            .from("qbo_sync_logs")
+            .from("qbo_connections")
             .update({
-              status: "failed",
-              error_message: errorMessage,
-              completed_at: new Date().toISOString(),
+              sync_status: "error",
+              sync_error: errorMessage,
             })
-            .eq("id", syncLog.id);
+            .eq("id", connection.id);
+
+          if (syncLog) {
+            await adminClient
+              .from("qbo_sync_logs")
+              .update({
+                status: "failed",
+                error_message: errorMessage,
+                completed_at: new Date().toISOString(),
+              })
+              .eq("id", syncLog.id);
+          }
+        } catch (dbErr) {
+          console.error("Failed to update sync log after error:", dbErr);
         }
 
         send({

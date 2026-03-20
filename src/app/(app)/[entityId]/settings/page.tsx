@@ -222,12 +222,17 @@ export default function EntitySettingsPage() {
 
       if (lastEvent.error) {
         toast.error(String(lastEvent.error));
-      } else {
+      } else if (lastEvent.done) {
         toast.success(
           `Sync completed for ${getPeriodLabel(year, month)} — ${lastEvent.recordsSynced ?? 0} records`
         );
-        loadData();
+      } else {
+        // Stream ended without a completion event — likely function timeout
+        toast.error(
+          `Sync interrupted (last step: ${lastEvent.detail || lastEvent.step || "unknown"}). The server may have timed out.`
+        );
       }
+      loadData();
     } catch {
       toast.error("Sync failed");
     }
