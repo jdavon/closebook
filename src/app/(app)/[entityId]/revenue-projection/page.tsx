@@ -192,6 +192,8 @@ export default function RevenueProjectionPage() {
   const entityId = params.entityId as string;
 
   const [data, setData] = useState<RevenueProjectionResponse | null>(null);
+  // Separate state for accruals tab — always uses invoice_date mode
+  const [accrualData, setAccrualData] = useState<RevenueProjectionResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [dateMode, setDateMode] = useState<DateMode>("invoice_date");
@@ -213,6 +215,11 @@ export default function RevenueProjectionPage() {
       }
       const result = await res.json();
       setData(result);
+
+      // If this fetch IS invoice_date mode, also use it for accruals
+      if (activeMode === "invoice_date") {
+        setAccrualData(result);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load data");
     } finally {
@@ -220,13 +227,34 @@ export default function RevenueProjectionPage() {
     }
   };
 
+  // Fetch invoice_date data separately for accruals tab when switching away
+  const fetchAccrualData = async () => {
+    try {
+      const res = await fetch("/api/revenue-projection", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ entityId, dateMode: "invoice_date" }),
+      });
+      if (!res.ok) return;
+      const result = await res.json();
+      setAccrualData(result);
+    } catch {
+      // Silently fail — accruals tab will show stale or no data
+    }
+  };
+
   const handleDateModeChange = (mode: DateMode) => {
     setDateMode(mode);
     fetchData(mode);
+    // If switching away from invoice_date and we don't have accrual data yet,
+    // fetch it in the background
+    if (mode !== "invoice_date" && !accrualData) {
+      fetchAccrualData();
+    }
   };
 
   useEffect(() => {
-    fetchData();
+    fetchData(); // Default is invoice_date, so accrualData gets set too
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entityId]);
 
@@ -1005,9 +1033,20 @@ export default function RevenueProjectionPage() {
           </Card>
         </TabsContent>
 
-        {/* Accruals Tab — JE Schedule */}
+        {/* Accruals Tab — JE Schedule (always uses invoice_date data) */}
         <TabsContent value="accruals" className="space-y-6">
-          <AccrualSchedule monthlyData={data.monthlyData} closedInvoices={data.closedInvoices} />
+          {accrualData ? (
+            <>
+              {dateMode !== "invoice_date" && (
+                <div className="rounded-md border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+                  <strong>Note:</strong> The accrual schedule always uses <strong>Invoice Date</strong> mode to compare billed vs. earned revenue, regardless of the date view selected above.
+                </div>
+              )}
+              <AccrualSchedule monthlyData={accrualData.monthlyData} closedInvoices={accrualData.closedInvoices} />
+            </>
+          ) : (
+            <p className="text-muted-foreground py-8 text-center text-sm">Loading accrual data…</p>
+          )}
         </TabsContent>
       </Tabs>
     </div>
