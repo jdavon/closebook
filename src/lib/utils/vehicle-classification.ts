@@ -5,10 +5,23 @@ import type {
 } from "@/lib/types/database";
 
 export interface VehicleClassification {
-  class: VehicleClass;
+  class: string;
   className: string;
-  reportingGroup: VehicleReportingGroup;
+  reportingGroup: string;
   masterType: VehicleMasterType;
+  isCustom?: boolean;
+}
+
+/** Row shape returned by the custom_vehicle_classes API */
+export interface CustomVehicleClassRow {
+  id: string;
+  entity_id: string;
+  class_code: string;
+  class_name: string;
+  reporting_group: string;
+  master_type: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export const VEHICLE_CLASSIFICATIONS: Record<VehicleClass, VehicleClassification> = {
@@ -57,33 +70,69 @@ export const VEHICLE_CLASSIFICATIONS: Record<VehicleClass, VehicleClassification
   "52":  { class: "52",  className: "5th Wheel Stakebed",             reportingGroup: "Stakebed",          masterType: "Vehicle" },
 };
 
+/** Convert DB rows to VehicleClassification objects */
+export function customRowsToClassifications(
+  rows: CustomVehicleClassRow[]
+): VehicleClassification[] {
+  return rows.map((r) => ({
+    class: r.class_code,
+    className: r.class_name,
+    reportingGroup: r.reporting_group,
+    masterType: r.master_type as VehicleMasterType,
+    isCustom: true,
+  }));
+}
+
+/** Build a merged lookup map of built-in + custom classes */
+function buildMergedMap(
+  customClasses?: VehicleClassification[]
+): Record<string, VehicleClassification> {
+  const map: Record<string, VehicleClassification> = { ...VEHICLE_CLASSIFICATIONS };
+  if (customClasses) {
+    for (const c of customClasses) {
+      map[c.class] = c;
+    }
+  }
+  return map;
+}
+
 export function getVehicleClassification(
-  classCode: VehicleClass | string | null
+  classCode: VehicleClass | string | null,
+  customClasses?: VehicleClassification[]
 ): VehicleClassification | null {
   if (!classCode) return null;
+  if (customClasses) {
+    const custom = customClasses.find((c) => c.class === classCode);
+    if (custom) return custom;
+  }
   return VEHICLE_CLASSIFICATIONS[classCode as VehicleClass] ?? null;
 }
 
 export function getReportingGroup(
-  classCode: VehicleClass | string | null
-): VehicleReportingGroup | null {
-  return getVehicleClassification(classCode)?.reportingGroup ?? null;
+  classCode: VehicleClass | string | null,
+  customClasses?: VehicleClassification[]
+): string | null {
+  return getVehicleClassification(classCode, customClasses)?.reportingGroup ?? null;
 }
 
 export function getMasterType(
-  classCode: VehicleClass | string | null
+  classCode: VehicleClass | string | null,
+  customClasses?: VehicleClassification[]
 ): VehicleMasterType | null {
-  return getVehicleClassification(classCode)?.masterType ?? null;
+  return getVehicleClassification(classCode, customClasses)?.masterType ?? null;
 }
 
-export function getClassLabel(classCode: VehicleClass | string): string {
-  const c = VEHICLE_CLASSIFICATIONS[classCode as VehicleClass];
+export function getClassLabel(
+  classCode: VehicleClass | string,
+  customClasses?: VehicleClassification[]
+): string {
+  const c = getVehicleClassification(classCode, customClasses);
   if (!c) return classCode;
   return `Class ${c.class}: ${c.className}`;
 }
 
-export function getAllClasses(): VehicleClassification[] {
-  return Object.values(VEHICLE_CLASSIFICATIONS).sort((a, b) => {
+function sortClasses(classes: VehicleClassification[]): VehicleClassification[] {
+  return [...classes].sort((a, b) => {
     const aNum = parseInt(a.class);
     const bNum = parseInt(b.class);
     if (!isNaN(aNum) && !isNaN(bNum)) return aNum - bNum;
@@ -93,11 +142,20 @@ export function getAllClasses(): VehicleClassification[] {
   });
 }
 
-export function getClassesGroupedByMasterType(): Array<{
+export function getAllClasses(
+  customClasses?: VehicleClassification[]
+): VehicleClassification[] {
+  const map = buildMergedMap(customClasses);
+  return sortClasses(Object.values(map));
+}
+
+export function getClassesGroupedByMasterType(
+  customClasses?: VehicleClassification[]
+): Array<{
   masterType: VehicleMasterType;
   classes: VehicleClassification[];
 }> {
-  const all = getAllClasses();
+  const all = getAllClasses(customClasses);
   return [
     {
       masterType: "Vehicle",
@@ -110,7 +168,7 @@ export function getClassesGroupedByMasterType(): Array<{
   ];
 }
 
-/** All distinct reporting groups in display order */
+/** All distinct reporting groups from built-in classes (display order) */
 export const REPORTING_GROUPS: VehicleReportingGroup[] = [
   "Car",
   "Cargo Van",
@@ -121,3 +179,16 @@ export const REPORTING_GROUPS: VehicleReportingGroup[] = [
   "Cast Trailer",
   "Makeup Trailer",
 ];
+
+/** Get all reporting groups including any custom ones */
+export function getAllReportingGroups(
+  customClasses?: VehicleClassification[]
+): string[] {
+  const groups = new Set<string>(REPORTING_GROUPS);
+  if (customClasses) {
+    for (const c of customClasses) {
+      groups.add(c.reportingGroup);
+    }
+  }
+  return Array.from(groups);
+}

@@ -33,6 +33,9 @@ import {
   getVehicleClassification,
   getClassesGroupedByMasterType,
   getClassLabel,
+  customRowsToClassifications,
+  type VehicleClassification,
+  type CustomVehicleClassRow,
 } from "@/lib/utils/vehicle-classification";
 import type {
   BookDepreciationMethod,
@@ -61,6 +64,7 @@ export default function NewAssetPage() {
   const supabase = createClient();
 
   const [accounts, setAccounts] = useState<Account[]>([]);
+  const [customClasses, setCustomClasses] = useState<VehicleClassification[]>([]);
   const [creating, setCreating] = useState(false);
 
   // Vehicle Info
@@ -73,10 +77,10 @@ export default function NewAssetPage() {
   const [vin, setVin] = useState("");
   const [licensePlate, setLicensePlate] = useState("");
   const [licenseState, setLicenseState] = useState("");
-  const [vehicleClass, setVehicleClass] = useState<VehicleClass | "">("");
+  const [vehicleClass, setVehicleClass] = useState<string>("");
 
   // Derive reporting group and master type from class selection
-  const classification = vehicleClass ? getVehicleClassification(vehicleClass) : null;
+  const classification = vehicleClass ? getVehicleClassification(vehicleClass, customClasses) : null;
   const [mileage, setMileage] = useState("");
   const [titleNumber, setTitleNumber] = useState("");
   const [registrationExpiry, setRegistrationExpiry] = useState("");
@@ -114,9 +118,18 @@ export default function NewAssetPage() {
     setAccounts((data as Account[]) ?? []);
   }, [supabase, entityId]);
 
+  const loadCustomClasses = useCallback(async () => {
+    const res = await fetch(`/api/assets/classes?entityId=${entityId}`);
+    if (res.ok) {
+      const rows: CustomVehicleClassRow[] = await res.json();
+      setCustomClasses(customRowsToClassifications(rows));
+    }
+  }, [entityId]);
+
   useEffect(() => {
     loadAccounts();
-  }, [loadAccounts]);
+    loadCustomClasses();
+  }, [loadAccounts, loadCustomClasses]);
 
   // Auto-generate asset name from vehicle fields
   useEffect(() => {
@@ -314,18 +327,18 @@ export default function NewAssetPage() {
                     <Label htmlFor="vehicleClass">Vehicle Class</Label>
                     <Select
                       value={vehicleClass}
-                      onValueChange={(v) => setVehicleClass(v as VehicleClass)}
+                      onValueChange={(v) => setVehicleClass(v)}
                     >
                       <SelectTrigger id="vehicleClass">
                         <SelectValue placeholder="Select class..." />
                       </SelectTrigger>
                       <SelectContent>
-                        {getClassesGroupedByMasterType().map((group) => (
+                        {getClassesGroupedByMasterType(customClasses).map((group) => (
                           <SelectGroup key={group.masterType}>
                             <SelectLabel>{group.masterType}s</SelectLabel>
                             {group.classes.map((c) => (
                               <SelectItem key={c.class} value={c.class}>
-                                {getClassLabel(c.class)}
+                                {getClassLabel(c.class, customClasses)}
                               </SelectItem>
                             ))}
                           </SelectGroup>

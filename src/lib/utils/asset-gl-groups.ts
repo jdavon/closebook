@@ -1,25 +1,68 @@
-import { getMasterType } from "./vehicle-classification";
+import { getMasterType, type VehicleClassification } from "./vehicle-classification";
+
+export type ReconLineType = "cost" | "accum_depr";
 
 export interface GLAccountGroup {
   key: string;
   displayName: string;
-  /** Master account number in master_accounts table (e.g. "M1700") */
-  masterAccountNumber: string;
   masterType: "Vehicle" | "Trailer";
 }
 
+export interface ReconGroup extends GLAccountGroup {
+  lineType: ReconLineType;
+  /** The parent GL group key this recon line belongs to */
+  parentKey: string;
+}
+
+/**
+ * Two master-type groups — used by the roll-forward tab and anywhere
+ * assets are grouped by Vehicle vs Trailer at the NBV level.
+ */
 export const GL_ACCOUNT_GROUPS: GLAccountGroup[] = [
   {
     key: "vehicles_net",
     displayName: "Vehicles (Net)",
-    masterAccountNumber: "M1700",
     masterType: "Vehicle",
   },
   {
     key: "trailers_net",
     displayName: "Trailers (Net)",
-    masterAccountNumber: "M1800",
     masterType: "Trailer",
+  },
+];
+
+/**
+ * Four reconciliation groups: cost and accumulated depreciation for each master type.
+ * Each group is independently linked to entity GL accounts via asset_recon_gl_links.
+ */
+export const RECON_GROUPS: ReconGroup[] = [
+  {
+    key: "vehicles_cost",
+    displayName: "Vehicles — Cost",
+    masterType: "Vehicle",
+    lineType: "cost",
+    parentKey: "vehicles_net",
+  },
+  {
+    key: "vehicles_accum_depr",
+    displayName: "Vehicles — Accumulated Depreciation",
+    masterType: "Vehicle",
+    lineType: "accum_depr",
+    parentKey: "vehicles_net",
+  },
+  {
+    key: "trailers_cost",
+    displayName: "Trailers — Cost",
+    masterType: "Trailer",
+    lineType: "cost",
+    parentKey: "trailers_net",
+  },
+  {
+    key: "trailers_accum_depr",
+    displayName: "Trailers — Accumulated Depreciation",
+    masterType: "Trailer",
+    lineType: "accum_depr",
+    parentKey: "trailers_net",
   },
 ];
 
@@ -31,9 +74,10 @@ export const UNALLOCATED_KEY = "unallocated";
  * Returns "vehicles_net" for Vehicle master type, "trailers_net" for Trailer.
  */
 export function getAssetGLGroup(
-  vehicleClass: string | null
+  vehicleClass: string | null,
+  customClasses?: VehicleClassification[]
 ): string | null {
-  const mt = getMasterType(vehicleClass);
+  const mt = getMasterType(vehicleClass, customClasses);
   if (!mt) return null;
   const group = GL_ACCOUNT_GROUPS.find((g) => g.masterType === mt);
   return group?.key ?? null;

@@ -48,7 +48,7 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Plus, ArrowRight, Car, Search, Upload, Trash2, DollarSign, ChevronsUpDown, Check } from "lucide-react";
+import { Plus, ArrowRight, Car, Search, Upload, Trash2, DollarSign, ChevronsUpDown, Check, Settings } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { formatCurrency } from "@/lib/utils/dates";
@@ -71,11 +71,16 @@ import {
   getReportingGroup,
   getMasterType,
   REPORTING_GROUPS,
+  getAllReportingGroups,
+  customRowsToClassifications,
+  type VehicleClassification,
+  type CustomVehicleClassRow,
 } from "@/lib/utils/vehicle-classification";
 import type { VehicleClass } from "@/lib/types/database";
 import { ReconciliationTab } from "./reconciliation-tab";
 import { RollForwardTab } from "./roll-forward-tab";
 import { SoldTab } from "./sold-tab";
+import { ClassSettings } from "./class-settings";
 
 interface FixedAsset {
   id: string;
@@ -132,6 +137,22 @@ export default function AssetsPage() {
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
+  // Custom classes
+  const [customClasses, setCustomClasses] = useState<VehicleClassification[]>([]);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
+  const loadCustomClasses = useCallback(async () => {
+    const res = await fetch(`/api/assets/classes?entityId=${entityId}`);
+    if (res.ok) {
+      const rows: CustomVehicleClassRow[] = await res.json();
+      setCustomClasses(customRowsToClassifications(rows));
+    }
+  }, [entityId]);
+
+  useEffect(() => {
+    loadCustomClasses();
+  }, [loadCustomClasses]);
+
   // Sold Vehicle dialog state
   const [soldOpen, setSoldOpen] = useState(false);
   const [soldAssetId, setSoldAssetId] = useState("");
@@ -168,13 +189,13 @@ export default function AssetsPage() {
   const filteredAssets = assets.filter((a) => {
     // Master type filter
     if (masterTypeFilter !== "all") {
-      const mt = getMasterType(a.vehicle_class);
+      const mt = getMasterType(a.vehicle_class, customClasses);
       if (mt !== masterTypeFilter) return false;
     }
 
     // Reporting group filter
     if (reportingGroupFilter !== "all") {
-      const rg = getReportingGroup(a.vehicle_class);
+      const rg = getReportingGroup(a.vehicle_class, customClasses);
       if (rg !== reportingGroupFilter) return false;
     }
 
@@ -184,7 +205,7 @@ export default function AssetsPage() {
       const name = a.asset_name.toLowerCase();
       const vin = (a.vin ?? "").toLowerCase();
       const desc = `${a.vehicle_year ?? ""} ${a.vehicle_make ?? ""} ${a.vehicle_model ?? ""}`.toLowerCase();
-      const classification = getVehicleClassification(a.vehicle_class);
+      const classification = getVehicleClassification(a.vehicle_class, customClasses);
       const classInfo = classification
         ? `${classification.className} ${classification.reportingGroup}`.toLowerCase()
         : "";
@@ -340,6 +361,10 @@ export default function AssetsPage() {
               Delete ({selectedIds.size})
             </Button>
           )}
+          <Button variant="outline" onClick={() => setSettingsOpen(true)}>
+            <Settings className="mr-2 h-4 w-4" />
+            Edit Settings
+          </Button>
           <Link href={`/${entityId}/assets/import`}>
             <Button variant="outline">
               <Upload className="mr-2 h-4 w-4" />
@@ -435,7 +460,7 @@ export default function AssetsPage() {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All Groups</SelectItem>
-            {REPORTING_GROUPS.map((group) => (
+            {getAllReportingGroups(customClasses).map((group) => (
               <SelectItem key={group} value={group}>
                 {group}
               </SelectItem>
@@ -518,7 +543,7 @@ export default function AssetsPage() {
               </TableHeader>
               <TableBody>
                 {filteredAssets.map((asset) => {
-                  const classification = getVehicleClassification(asset.vehicle_class);
+                  const classification = getVehicleClassification(asset.vehicle_class, customClasses);
                   return (
                     <TableRow key={asset.id}>
                       <TableCell>
@@ -789,6 +814,13 @@ export default function AssetsPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <ClassSettings
+        entityId={entityId}
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
+        onClassesChanged={loadCustomClasses}
+      />
     </div>
   );
 }

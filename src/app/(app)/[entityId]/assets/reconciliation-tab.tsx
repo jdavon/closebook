@@ -31,25 +31,44 @@ import {
   AlertTriangle,
   ChevronDown,
   ChevronRight,
+  Settings,
 } from "lucide-react";
 import { formatCurrency } from "@/lib/utils/dates";
 import {
-  GL_ACCOUNT_GROUPS,
+  RECON_GROUPS,
   UNALLOCATED_KEY,
   getAssetGLGroup,
+  type ReconGroup,
 } from "@/lib/utils/asset-gl-groups";
+import {
+  customRowsToClassifications,
+  type VehicleClassification,
+  type CustomVehicleClassRow,
+} from "@/lib/utils/vehicle-classification";
 
 interface ReconciliationTabProps {
   entityId: string;
 }
 
-interface AssetWithDepr {
+interface AssetRow {
   id: string;
   asset_name: string;
   vehicle_class: string | null;
   acquisition_cost: number;
+  book_accumulated_depreciation: number;
   book_net_value: number;
-  depr_book_net_value: number | null;
+}
+
+/** Per-period depreciation row */
+interface DeprRow {
+  fixed_asset_id: string;
+  book_accumulated: number;
+  book_net_value: number;
+}
+
+interface SubledgerGroup {
+  total: number;
+  assets: Array<AssetRow & { periodValue: number }>;
 }
 
 interface ReconciliationRecord {
@@ -78,144 +97,137 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [notes, setNotes] = useState<Record<string, string>>({});
 
-  // Data
-  const [glBalances, setGlBalances] = useState<
-    Record<string, number>
-  >({});
+  const [customClasses, setCustomClasses] = useState<VehicleClassification[]>([]);
+  const [glBalances, setGlBalances] = useState<Record<string, number>>({});
   const [subledgerBalances, setSubledgerBalances] = useState<
-    Record<string, { total: number; assets: AssetWithDepr[] }>
+    Record<string, SubledgerGroup>
   >({});
   const [reconciliations, setReconciliations] = useState<
     Record<string, ReconciliationRecord>
   >({});
+  const [missingLinks, setMissingLinks] = useState<string[]>([]);
 
   const loadData = useCallback(async () => {
     setLoading(true);
 
-    // 1. Look up the entity's organization_id
-    const { data: entityData, error: entityErr } = await supabase
-      .from("entities")
-      .select("organization_id")
-      .eq("id", entityId)
-      .single();
-    const orgId = entityData?.organization_id;
-    if (entityErr) console.error("[Recon] Entity lookup error:", entityErr.message);
-    if (!orgId) console.warn("[Recon] No orgId found for entity", entityId);
+    // 0. Load custom classes
+    const ccRes = await fetch(`/api/assets/classes?entityId=${entityId}`);
+    let cc: VehicleClassification[] = [];
+    if (ccRes.ok) {
+      const rows: CustomVehicleClassRow[] = await ccRes.json();
+      cc = customRowsToClassifications(rows);
+      setCustomClasses(cc);
+    }
 
-    // 2. Fetch GL balances via master_accounts → master_account_mappings → gl_balances
-    //    This is the same path the financial statements use.
+    // 1. Fetch GL account links for this entity
+    const { data: linkData } = await supabase
+      .from("asset_recon_gl_links")
+      .select("recon_group, account_id")
+      .eq("entity_id", entityId);
+
+    const linkMap: Record<string, string> = {};
+    for (const row of linkData ?? []) {
+      linkMap[row.recon_group] = row.account_id;
+    }
+
+    // Check which recon groups are missing a link
+    const missing = RECON_GROUPS
+      .filter((g) => !linkMap[g.key])
+      .map((g) => g.key);
+    setMissingLinks(missing);
+
+    // 2. Fetch GL balances from linked accounts
     const balances: Record<string, number> = {};
-    for (const group of GL_ACCOUNT_GROUPS) {
+    for (const group of RECON_GROUPS) {
       balances[group.key] = 0;
+      const accountId = linkMap[group.key];
+      if (!accountId) continue;
 
-      if (!orgId) continue;
-
-      // Find the master account by name (more reliable than account_number which
-      // may not have been set to the template value during initial setup).
-      const { data: masterAccts, error: maErr } = await supabase
-        .from("master_accounts")
-        .select("id, account_number")
-        .eq("organization_id", orgId)
-        .eq("name", group.displayName);
-
-      if (maErr) console.error(`[Recon] Master account lookup error for "${group.displayName}":`, maErr.message);
-
-      const masterAcct = masterAccts?.[0];
-      if (!masterAcct) {
-        console.warn(`[Recon] No master account found for "${group.displayName}" (org: ${orgId})`);
-        continue;
-      }
-      console.log(`[Recon] Found master account "${group.displayName}": id=${masterAcct.id}, acctNum=${masterAcct.account_number}`);
-
-      // Find all entity account IDs mapped to this master account
-      const { data: mappings, error: mapErr } = await supabase
-        .from("master_account_mappings")
-        .select("account_id")
-        .eq("master_account_id", masterAcct.id)
-        .eq("entity_id", entityId);
-
-      if (mapErr) console.error(`[Recon] Mapping lookup error:`, mapErr.message);
-
-      const accountIds = (mappings ?? []).map((m) => m.account_id);
-      if (accountIds.length === 0) {
-        console.warn(`[Recon] No entity account mappings found for master "${group.displayName}" + entity ${entityId}`);
-        continue;
-      }
-      console.log(`[Recon] Found ${accountIds.length} mapped entity accounts for "${group.displayName}"`);
-
-      // Sum GL balances for these mapped accounts in the selected period
-      const { data: glData, error: glErr } = await supabase
+      const { data: glData } = await supabase
         .from("gl_balances")
         .select("ending_balance")
         .eq("entity_id", entityId)
         .eq("period_year", periodYear)
         .eq("period_month", periodMonth)
-        .in("account_id", accountIds);
+        .eq("account_id", accountId);
 
-      if (glErr) console.error(`[Recon] GL balances error:`, glErr.message);
-
-      const total = (glData ?? []).reduce(
+      balances[group.key] = (glData ?? []).reduce(
         (sum, row) => sum + Number(row.ending_balance ?? 0),
         0
       );
-      console.log(`[Recon] GL balance for "${group.displayName}" (${periodMonth}/${periodYear}): ${total} from ${glData?.length ?? 0} rows`);
-      balances[group.key] = total;
     }
     setGlBalances(balances);
 
-    // 3. Fetch all assets with their depreciation for this period
+    // 3. Fetch all assets with accum depr
     const { data: assetsData } = await supabase
       .from("fixed_assets")
-      .select("id, asset_name, vehicle_class, acquisition_cost, book_net_value")
+      .select(
+        "id, asset_name, vehicle_class, acquisition_cost, book_accumulated_depreciation, book_net_value"
+      )
       .eq("entity_id", entityId);
 
-    const assets = (assetsData ?? []) as {
-      id: string;
-      asset_name: string;
-      vehicle_class: string | null;
-      acquisition_cost: number;
-      book_net_value: number;
-    }[];
+    const assets = (assetsData ?? []) as AssetRow[];
 
-    // Fetch depreciation entries for this period
+    // 4. Fetch depreciation entries for this period (for period-specific accum depr)
     const assetIds = assets.map((a) => a.id);
-    let deprMap: Record<string, number> = {};
+    let deprMap: Record<string, DeprRow> = {};
     if (assetIds.length > 0) {
-      const { data: deprData } = await supabase
-        .from("fixed_asset_depreciation")
-        .select("fixed_asset_id, book_net_value")
-        .eq("period_year", periodYear)
-        .eq("period_month", periodMonth)
-        .in("fixed_asset_id", assetIds);
-      deprMap = Object.fromEntries(
-        (deprData ?? []).map((d) => [
-          d.fixed_asset_id,
-          Number(d.book_net_value ?? 0),
-        ])
-      );
+      // Paginate to handle large sets
+      for (let i = 0; i < assetIds.length; i += 500) {
+        const batch = assetIds.slice(i, i + 500);
+        const { data: deprData } = await supabase
+          .from("fixed_asset_depreciation")
+          .select("fixed_asset_id, book_accumulated, book_net_value")
+          .eq("period_year", periodYear)
+          .eq("period_month", periodMonth)
+          .in("fixed_asset_id", batch);
+
+        for (const d of (deprData ?? []) as DeprRow[]) {
+          deprMap[d.fixed_asset_id] = d;
+        }
+      }
     }
 
-    // Group by GL account group (+ catch-all for unallocated)
-    const grouped: Record<string, { total: number; assets: AssetWithDepr[] }> = {};
-    for (const group of GL_ACCOUNT_GROUPS) {
+    // 5. Group assets by recon group and compute totals
+    const grouped: Record<string, SubledgerGroup> = {};
+    for (const group of RECON_GROUPS) {
       grouped[group.key] = { total: 0, assets: [] };
     }
     grouped[UNALLOCATED_KEY] = { total: 0, assets: [] };
 
     for (const asset of assets) {
-      const groupKey = getAssetGLGroup(asset.vehicle_class) ?? UNALLOCATED_KEY;
-      const deprNbv = deprMap[asset.id] ?? null;
-      // Use depreciation table value if available, otherwise fall back to current book_net_value
-      const nbv = deprNbv ?? asset.book_net_value;
-      grouped[groupKey].total += nbv;
-      grouped[groupKey].assets.push({
-        ...asset,
-        depr_book_net_value: deprNbv,
-      });
+      const glGroup = getAssetGLGroup(asset.vehicle_class, cc);
+      if (!glGroup) {
+        // Unallocated — add to unallocated bucket (use NBV)
+        const depr = deprMap[asset.id];
+        const nbv = depr ? Number(depr.book_net_value) : asset.book_net_value;
+        grouped[UNALLOCATED_KEY].total += nbv;
+        grouped[UNALLOCATED_KEY].assets.push({ ...asset, periodValue: nbv });
+        continue;
+      }
+
+      const costKey = `${glGroup}_cost`;
+      const accumKey = `${glGroup}_accum_depr`;
+
+      const depr = deprMap[asset.id];
+      const cost = asset.acquisition_cost;
+      // Accum depr should be negative (contra-asset), matching GL convention
+      const accumDepr = depr
+        ? -Math.abs(Number(depr.book_accumulated))
+        : -Math.abs(asset.book_accumulated_depreciation);
+
+      if (grouped[costKey]) {
+        grouped[costKey].total += cost;
+        grouped[costKey].assets.push({ ...asset, periodValue: cost });
+      }
+      if (grouped[accumKey]) {
+        grouped[accumKey].total += accumDepr;
+        grouped[accumKey].assets.push({ ...asset, periodValue: accumDepr });
+      }
     }
     setSubledgerBalances(grouped);
 
-    // 4. Fetch existing reconciliation records
+    // 6. Fetch existing reconciliation records
     const { data: reconData } = await supabase
       .from("asset_reconciliations")
       .select("*")
@@ -274,7 +286,11 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
     if (recon) {
       await supabase
         .from("asset_reconciliations")
-        .update({ is_reconciled: false, reconciled_at: null, reconciled_by: null })
+        .update({
+          is_reconciled: false,
+          reconciled_at: null,
+          reconciled_by: null,
+        })
         .eq("id", recon.id);
     }
     setSaving(null);
@@ -291,6 +307,174 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
   };
 
   const years = Array.from({ length: 5 }, (_, i) => now.getFullYear() - i);
+
+  // Group recon groups by master type for display
+  const vehicleGroups = RECON_GROUPS.filter((g) => g.masterType === "Vehicle");
+  const trailerGroups = RECON_GROUPS.filter((g) => g.masterType === "Trailer");
+
+  function renderReconCard(group: ReconGroup) {
+    const glBal = glBalances[group.key] ?? 0;
+    const subBal = subledgerBalances[group.key]?.total ?? 0;
+    const variance = glBal - subBal;
+    const recon = reconciliations[group.key];
+    const isReconciled = recon?.is_reconciled ?? false;
+    const assetList = subledgerBalances[group.key]?.assets ?? [];
+    const isExpanded = expandedGroups.has(group.key);
+    const isMissing = missingLinks.includes(group.key);
+
+    return (
+      <Card key={group.key} className={isMissing ? "border-amber-300" : undefined}>
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-base">{group.displayName}</CardTitle>
+            {isMissing ? (
+              <Badge variant="outline" className="border-amber-500 text-amber-700 bg-amber-100">
+                <Settings className="mr-1 h-3 w-3" />
+                No GL Account
+              </Badge>
+            ) : isReconciled ? (
+              <Badge className="bg-green-100 text-green-800 hover:bg-green-100">
+                <CheckCircle2 className="mr-1 h-3.5 w-3.5" />
+                Reconciled
+              </Badge>
+            ) : Math.abs(variance) > 0.01 ? (
+              <Badge variant="destructive">
+                <AlertTriangle className="mr-1 h-3.5 w-3.5" />
+                Variance
+              </Badge>
+            ) : (
+              <Badge variant="outline">Pending</Badge>
+            )}
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid grid-cols-3 gap-4">
+            <div>
+              <p className="text-xs text-muted-foreground uppercase tracking-wider">
+                GL Balance
+              </p>
+              <p className="text-lg font-semibold tabular-nums">
+                {isMissing ? "—" : formatCurrency(glBal)}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground uppercase tracking-wider">
+                Subledger
+              </p>
+              <p className="text-lg font-semibold tabular-nums">
+                {formatCurrency(subBal)}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground uppercase tracking-wider">
+                Variance
+              </p>
+              <p
+                className={`text-lg font-semibold tabular-nums ${
+                  isMissing
+                    ? "text-muted-foreground"
+                    : Math.abs(variance) > 0.01
+                    ? "text-red-600"
+                    : "text-green-600"
+                }`}
+              >
+                {isMissing ? "—" : formatCurrency(variance)}
+              </p>
+            </div>
+          </div>
+
+          {/* Asset detail */}
+          <Collapsible
+            open={isExpanded}
+            onOpenChange={() => toggleGroup(group.key)}
+          >
+            <CollapsibleTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="w-full justify-start"
+              >
+                {isExpanded ? (
+                  <ChevronDown className="mr-2 h-4 w-4" />
+                ) : (
+                  <ChevronRight className="mr-2 h-4 w-4" />
+                )}
+                {assetList.length} asset{assetList.length !== 1 ? "s" : ""} in
+                group
+              </Button>
+            </CollapsibleTrigger>
+            <CollapsibleContent>
+              <div className="mt-2 max-h-60 overflow-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Asset</TableHead>
+                      <TableHead className="text-right">
+                        {group.lineType === "cost" ? "Cost" : "Accum Depr"}
+                      </TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {assetList.map((a) => (
+                      <TableRow key={a.id}>
+                        <TableCell className="text-sm">
+                          {a.asset_name}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums text-sm">
+                          {formatCurrency(a.periodValue)}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </CollapsibleContent>
+          </Collapsible>
+
+          {/* Notes */}
+          <Textarea
+            placeholder="Reconciliation notes..."
+            value={notes[group.key] ?? ""}
+            onChange={(e) =>
+              setNotes((prev) => ({ ...prev, [group.key]: e.target.value }))
+            }
+            className="text-sm"
+            rows={2}
+          />
+
+          {/* Actions */}
+          <div className="flex items-center justify-between">
+            {recon?.reconciled_at && (
+              <p className="text-xs text-muted-foreground">
+                Reconciled{" "}
+                {new Date(recon.reconciled_at).toLocaleDateString()}
+              </p>
+            )}
+            <div className="ml-auto flex gap-2">
+              {isReconciled ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handleUnreconcile(group.key)}
+                  disabled={saving === group.key}
+                >
+                  {saving === group.key ? "Saving..." : "Unreconcile"}
+                </Button>
+              ) : (
+                <Button
+                  size="sm"
+                  onClick={() => handleReconcile(group.key)}
+                  disabled={saving === group.key || isMissing}
+                >
+                  {saving === group.key ? "Saving..." : "Mark Reconciled"}
+                </Button>
+              )}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -331,170 +515,150 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
         </div>
       </div>
 
+      {/* Missing links warning */}
+      {missingLinks.length > 0 && (
+        <div className="rounded-lg border border-amber-300 bg-amber-50/60 p-4">
+          <div className="flex items-start gap-2">
+            <Settings className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" />
+            <div className="text-sm">
+              <p className="font-medium text-amber-800">
+                GL accounts not configured
+              </p>
+              <p className="text-amber-700 mt-1">
+                Open <strong>Edit Settings</strong> to link GL accounts for:{" "}
+                {missingLinks
+                  .map(
+                    (k) =>
+                      RECON_GROUPS.find((g) => g.key === k)?.displayName ?? k
+                  )
+                  .join(", ")}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {loading ? (
-        <p className="text-sm text-muted-foreground">Loading reconciliation data...</p>
+        <p className="text-sm text-muted-foreground">
+          Loading reconciliation data...
+        </p>
       ) : (
-        <div className="space-y-6">
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {GL_ACCOUNT_GROUPS.map((group) => {
-              const glBal = glBalances[group.key] ?? 0;
-              const subBal = subledgerBalances[group.key]?.total ?? 0;
-              const variance = glBal - subBal;
-              const recon = reconciliations[group.key];
-              const isReconciled = recon?.is_reconciled ?? false;
-              const assetList = subledgerBalances[group.key]?.assets ?? [];
-              const isExpanded = expandedGroups.has(group.key);
-
+        <div className="space-y-8">
+          {/* Vehicles section */}
+          <div className="space-y-4">
+            <h3 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
+              Vehicles
+            </h3>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {vehicleGroups.map(renderReconCard)}
+            </div>
+            {/* Net summary */}
+            {(() => {
+              const costBal = glBalances["vehicles_cost"] ?? 0;
+              const accumBal = glBalances["vehicles_accum_depr"] ?? 0;
+              const glNet = costBal + accumBal;
+              const subCost = subledgerBalances["vehicles_cost"]?.total ?? 0;
+              const subAccum =
+                subledgerBalances["vehicles_accum_depr"]?.total ?? 0;
+              const subNet = subCost + subAccum;
+              const netVariance = glNet - subNet;
               return (
-                <Card key={group.key}>
-                  <CardHeader className="pb-3">
-                    <div className="flex items-center justify-between">
-                      <CardTitle className="text-lg">{group.displayName}</CardTitle>
-                      {isReconciled ? (
-                        <Badge className="bg-green-100 text-green-800 hover:bg-green-100">
-                          <CheckCircle2 className="mr-1 h-3.5 w-3.5" />
-                          Reconciled
-                        </Badge>
-                      ) : Math.abs(variance) > 0.01 ? (
-                        <Badge variant="destructive">
-                          <AlertTriangle className="mr-1 h-3.5 w-3.5" />
-                          Variance
-                        </Badge>
-                      ) : (
-                        <Badge variant="outline">Pending</Badge>
-                      )}
+                <div className="rounded-lg border bg-muted/30 p-4">
+                  <div className="grid grid-cols-3 gap-4">
+                    <div>
+                      <p className="text-xs text-muted-foreground uppercase tracking-wider">
+                        GL Net (Vehicles)
+                      </p>
+                      <p className="text-lg font-semibold tabular-nums">
+                        {formatCurrency(glNet)}
+                      </p>
                     </div>
-                  </CardHeader>
-                  <CardContent className="space-y-4">
-                    {/* Summary */}
-                    <div className="grid grid-cols-3 gap-4">
-                      <div>
-                        <p className="text-xs text-muted-foreground uppercase tracking-wider">
-                          GL Balance
-                        </p>
-                        <p className="text-lg font-semibold tabular-nums">
-                          {formatCurrency(glBal)}
-                        </p>
-                      </div>
-                      <div>
-                        <p className="text-xs text-muted-foreground uppercase tracking-wider">
-                          Subledger NBV
-                        </p>
-                        <p className="text-lg font-semibold tabular-nums">
-                          {formatCurrency(subBal)}
-                        </p>
-                      </div>
-                      <div>
-                        <p className="text-xs text-muted-foreground uppercase tracking-wider">
-                          Variance
-                        </p>
-                        <p
-                          className={`text-lg font-semibold tabular-nums ${
-                            Math.abs(variance) > 0.01
-                              ? "text-red-600"
-                              : "text-green-600"
-                          }`}
-                        >
-                          {formatCurrency(variance)}
-                        </p>
-                      </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground uppercase tracking-wider">
+                        Subledger Net
+                      </p>
+                      <p className="text-lg font-semibold tabular-nums">
+                        {formatCurrency(subNet)}
+                      </p>
                     </div>
-
-                    {/* Asset Detail Expandable */}
-                    <Collapsible
-                      open={isExpanded}
-                      onOpenChange={() => toggleGroup(group.key)}
-                    >
-                      <CollapsibleTrigger asChild>
-                        <Button variant="ghost" size="sm" className="w-full justify-start">
-                          {isExpanded ? (
-                            <ChevronDown className="mr-2 h-4 w-4" />
-                          ) : (
-                            <ChevronRight className="mr-2 h-4 w-4" />
-                          )}
-                          {assetList.length} asset{assetList.length !== 1 ? "s" : ""} in
-                          group
-                        </Button>
-                      </CollapsibleTrigger>
-                      <CollapsibleContent>
-                        <div className="mt-2 max-h-60 overflow-auto">
-                          <Table>
-                            <TableHeader>
-                              <TableRow>
-                                <TableHead>Asset</TableHead>
-                                <TableHead className="text-right">Cost</TableHead>
-                                <TableHead className="text-right">Book NBV</TableHead>
-                              </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                              {assetList.map((a) => (
-                                <TableRow key={a.id}>
-                                  <TableCell className="text-sm">
-                                    {a.asset_name}
-                                  </TableCell>
-                                  <TableCell className="text-right tabular-nums text-sm">
-                                    {formatCurrency(a.acquisition_cost)}
-                                  </TableCell>
-                                  <TableCell className="text-right tabular-nums text-sm">
-                                    {formatCurrency(
-                                      a.depr_book_net_value ?? a.book_net_value
-                                    )}
-                                  </TableCell>
-                                </TableRow>
-                              ))}
-                            </TableBody>
-                          </Table>
-                        </div>
-                      </CollapsibleContent>
-                    </Collapsible>
-
-                    {/* Notes */}
-                    <Textarea
-                      placeholder="Reconciliation notes..."
-                      value={notes[group.key] ?? ""}
-                      onChange={(e) =>
-                        setNotes((prev) => ({ ...prev, [group.key]: e.target.value }))
-                      }
-                      className="text-sm"
-                      rows={2}
-                    />
-
-                    {/* Actions */}
-                    <div className="flex items-center justify-between">
-                      {recon?.reconciled_at && (
-                        <p className="text-xs text-muted-foreground">
-                          Reconciled{" "}
-                          {new Date(recon.reconciled_at).toLocaleDateString()}
-                        </p>
-                      )}
-                      <div className="ml-auto flex gap-2">
-                        {isReconciled ? (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => handleUnreconcile(group.key)}
-                            disabled={saving === group.key}
-                          >
-                            {saving === group.key ? "Saving..." : "Unreconcile"}
-                          </Button>
-                        ) : (
-                          <Button
-                            size="sm"
-                            onClick={() => handleReconcile(group.key)}
-                            disabled={saving === group.key}
-                          >
-                            {saving === group.key ? "Saving..." : "Mark Reconciled"}
-                          </Button>
-                        )}
-                      </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground uppercase tracking-wider">
+                        Net Variance
+                      </p>
+                      <p
+                        className={`text-lg font-semibold tabular-nums ${
+                          Math.abs(netVariance) > 0.01
+                            ? "text-red-600"
+                            : "text-green-600"
+                        }`}
+                      >
+                        {formatCurrency(netVariance)}
+                      </p>
                     </div>
-                  </CardContent>
-                </Card>
+                  </div>
+                </div>
               );
-            })}
+            })()}
           </div>
 
-          {/* Unallocated Assets — always show if any exist */}
+          {/* Trailers section */}
+          <div className="space-y-4">
+            <h3 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
+              Trailers
+            </h3>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {trailerGroups.map(renderReconCard)}
+            </div>
+            {/* Net summary */}
+            {(() => {
+              const costBal = glBalances["trailers_cost"] ?? 0;
+              const accumBal = glBalances["trailers_accum_depr"] ?? 0;
+              const glNet = costBal + accumBal;
+              const subCost = subledgerBalances["trailers_cost"]?.total ?? 0;
+              const subAccum =
+                subledgerBalances["trailers_accum_depr"]?.total ?? 0;
+              const subNet = subCost + subAccum;
+              const netVariance = glNet - subNet;
+              return (
+                <div className="rounded-lg border bg-muted/30 p-4">
+                  <div className="grid grid-cols-3 gap-4">
+                    <div>
+                      <p className="text-xs text-muted-foreground uppercase tracking-wider">
+                        GL Net (Trailers)
+                      </p>
+                      <p className="text-lg font-semibold tabular-nums">
+                        {formatCurrency(glNet)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground uppercase tracking-wider">
+                        Subledger Net
+                      </p>
+                      <p className="text-lg font-semibold tabular-nums">
+                        {formatCurrency(subNet)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground uppercase tracking-wider">
+                        Net Variance
+                      </p>
+                      <p
+                        className={`text-lg font-semibold tabular-nums ${
+                          Math.abs(netVariance) > 0.01
+                            ? "text-red-600"
+                            : "text-green-600"
+                        }`}
+                      >
+                        {formatCurrency(netVariance)}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+
+          {/* Unallocated Assets */}
           {(() => {
             const unallocated = subledgerBalances[UNALLOCATED_KEY];
             if (!unallocated || unallocated.assets.length === 0) return null;
@@ -504,16 +668,21 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
               <Card className="border-amber-300 bg-amber-50/40">
                 <CardHeader className="pb-3">
                   <div className="flex items-center justify-between">
-                    <CardTitle className="text-lg">Unallocated Assets</CardTitle>
-                    <Badge variant="outline" className="border-amber-500 text-amber-700 bg-amber-100">
+                    <CardTitle className="text-lg">
+                      Unallocated Assets
+                    </CardTitle>
+                    <Badge
+                      variant="outline"
+                      className="border-amber-500 text-amber-700 bg-amber-100"
+                    >
                       <AlertTriangle className="mr-1 h-3.5 w-3.5" />
                       Needs Classification
                     </Badge>
                   </div>
                   <p className="text-sm text-muted-foreground">
-                    These assets have no vehicle class or an unrecognized class and are not
-                    included in any GL reconciliation group. Assign a vehicle class to each
-                    asset so it maps to the correct GL account.
+                    These assets have no vehicle class or an unrecognized class.
+                    Assign a vehicle class to each asset so it maps to the
+                    correct GL account group.
                   </p>
                 </CardHeader>
                 <CardContent className="space-y-4">
@@ -524,7 +693,10 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
                       </p>
                       <p className="text-lg font-semibold tabular-nums">
                         {formatCurrency(
-                          unallocated.assets.reduce((s, a) => s + a.acquisition_cost, 0)
+                          unallocated.assets.reduce(
+                            (s, a) => s + a.acquisition_cost,
+                            0
+                          )
                         )}
                       </p>
                     </div>
@@ -543,7 +715,11 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
                     onOpenChange={() => toggleGroup(UNALLOCATED_KEY)}
                   >
                     <CollapsibleTrigger asChild>
-                      <Button variant="ghost" size="sm" className="w-full justify-start">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="w-full justify-start"
+                      >
                         {isExpanded ? (
                           <ChevronDown className="mr-2 h-4 w-4" />
                         ) : (
@@ -559,9 +735,9 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
                           <TableHeader>
                             <TableRow>
                               <TableHead>Asset</TableHead>
-                              <TableHead>Vehicle Class</TableHead>
+                              <TableHead>Class</TableHead>
                               <TableHead className="text-right">Cost</TableHead>
-                              <TableHead className="text-right">Book NBV</TableHead>
+                              <TableHead className="text-right">NBV</TableHead>
                             </TableRow>
                           </TableHeader>
                           <TableBody>
@@ -577,9 +753,7 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
                                   {formatCurrency(a.acquisition_cost)}
                                 </TableCell>
                                 <TableCell className="text-right tabular-nums text-sm">
-                                  {formatCurrency(
-                                    a.depr_book_net_value ?? a.book_net_value
-                                  )}
+                                  {formatCurrency(a.periodValue)}
                                 </TableCell>
                               </TableRow>
                             ))}

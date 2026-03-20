@@ -49,6 +49,9 @@ import {
   getVehicleClassification,
   getClassesGroupedByMasterType,
   getClassLabel,
+  customRowsToClassifications,
+  type VehicleClassification,
+  type CustomVehicleClassRow,
 } from "@/lib/utils/vehicle-classification";
 import type {
   BookDepreciationMethod,
@@ -137,6 +140,7 @@ export default function AssetDetailPage() {
 
   const [asset, setAsset] = useState<FixedAssetData | null>(null);
   const [accounts, setAccounts] = useState<Account[]>([]);
+  const [customClasses, setCustomClasses] = useState<VehicleClassification[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -206,6 +210,14 @@ export default function AssetDetailPage() {
     }
 
     setAccounts((accountsResult.data as Account[]) ?? []);
+
+    // Load custom classes
+    const res = await fetch(`/api/assets/classes?entityId=${entityId}`);
+    if (res.ok) {
+      const rows: CustomVehicleClassRow[] = await res.json();
+      setCustomClasses(customRowsToClassifications(rows));
+    }
+
     setLoading(false);
   }, [supabase, assetId, entityId]);
 
@@ -685,12 +697,12 @@ export default function AssetDetailPage() {
                       <SelectValue placeholder="Select class..." />
                     </SelectTrigger>
                     <SelectContent>
-                      {getClassesGroupedByMasterType().map((group) => (
+                      {getClassesGroupedByMasterType(customClasses).map((group) => (
                         <SelectGroup key={group.masterType}>
                           <SelectLabel>{group.masterType}s</SelectLabel>
                           {group.classes.map((c) => (
                             <SelectItem key={c.class} value={c.class}>
-                              {getClassLabel(c.class)}
+                              {getClassLabel(c.class, customClasses)}
                             </SelectItem>
                           ))}
                         </SelectGroup>
@@ -705,7 +717,7 @@ export default function AssetDetailPage() {
                   <div className="space-y-2">
                     <Label>Reporting Group</Label>
                     <Input
-                      value={getVehicleClassification(vehicleClass)?.reportingGroup ?? "---"}
+                      value={getVehicleClassification(vehicleClass, customClasses)?.reportingGroup ?? "---"}
                       disabled
                       className="bg-muted"
                     />
@@ -713,7 +725,7 @@ export default function AssetDetailPage() {
                   <div className="space-y-2">
                     <Label>Master Type</Label>
                     <Input
-                      value={getVehicleClassification(vehicleClass)?.masterType ?? "---"}
+                      value={getVehicleClassification(vehicleClass, customClasses)?.masterType ?? "---"}
                       disabled
                       className="bg-muted"
                     />

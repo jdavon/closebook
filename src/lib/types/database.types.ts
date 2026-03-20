@@ -4694,6 +4694,63 @@ export type Database = {
         }
         Relationships: []
       }
+      custom_vehicle_classes: {
+        Row: {
+          id: string
+          entity_id: string
+          class_code: string
+          class_name: string
+          reporting_group: string
+          master_type: string
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          entity_id: string
+          class_code: string
+          class_name: string
+          reporting_group: string
+          master_type: string
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          entity_id?: string
+          class_code?: string
+          class_name?: string
+          reporting_group?: string
+          master_type?: string
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      asset_recon_gl_links: {
+        Row: {
+          id: string
+          entity_id: string
+          recon_group: string
+          account_id: string
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          entity_id: string
+          recon_group: string
+          account_id: string
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          entity_id?: string
+          recon_group?: string
+          account_id?: string
+          created_at?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
