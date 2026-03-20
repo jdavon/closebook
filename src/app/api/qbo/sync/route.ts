@@ -584,22 +584,20 @@ export async function POST(request: Request) {
               progress: 92,
             });
 
-            for (const row of unmatchedRows) {
-              await adminClient.from("tb_unmatched_rows").upsert(
-                {
-                  entity_id: entityId,
-                  period_year: targetYear,
-                  period_month: targetMonth,
-                  qbo_account_name: row.name,
-                  qbo_account_id: row.qboId,
-                  debit: row.debit,
-                  credit: row.credit,
-                },
-                {
-                  onConflict: "entity_id,period_year,period_month,qbo_account_name",
-                }
-              );
-            }
+            await adminClient.from("tb_unmatched_rows").upsert(
+              unmatchedRows.map(row => ({
+                entity_id: entityId,
+                period_year: targetYear,
+                period_month: targetMonth,
+                qbo_account_name: row.name,
+                qbo_account_id: row.qboId,
+                debit: row.debit,
+                credit: row.credit,
+              })),
+              {
+                onConflict: "entity_id,period_year,period_month,qbo_account_name",
+              }
+            );
           }
 
           // Clean up: remove previously-unmatched rows that are now matched
@@ -618,30 +616,32 @@ export async function POST(request: Request) {
           // If an account was in a previous TB but no longer appears, its
           // GL balance row would persist and throw off the debit/credit totals.
           if (matchedAccountIds.length > 0) {
-            const { data: staleRows } = await adminClient
+            // Fetch all GL balance rows for this period, then filter in-memory
+            // to avoid massive .not("in", ...) query strings that can hang
+            const { data: allGlRows } = await adminClient
               .from("gl_balances")
               .select("id, account_id")
               .eq("entity_id", entityId)
               .eq("period_year", targetYear)
-              .eq("period_month", targetMonth)
-              .not(
-                "account_id",
-                "in",
-                `(${matchedAccountIds.join(",")})`
-              );
+              .eq("period_month", targetMonth);
 
-            if (staleRows && staleRows.length > 0) {
-              await adminClient
-                .from("gl_balances")
-                .delete()
-                .in(
-                  "id",
-                  staleRows.map((r: { id: string }) => r.id)
-                );
+            const matchedSet = new Set(matchedAccountIds);
+            const staleIds = (allGlRows ?? [])
+              .filter((r: { id: string; account_id: string }) => !matchedSet.has(r.account_id))
+              .map((r: { id: string }) => r.id);
+
+            if (staleIds.length > 0) {
+              // Delete in batches to avoid query size limits
+              for (let i = 0; i < staleIds.length; i += 500) {
+                await adminClient
+                  .from("gl_balances")
+                  .delete()
+                  .in("id", staleIds.slice(i, i + 500));
+              }
 
               send({
                 step: "matching",
-                detail: `Removed ${staleRows.length} stale GL balance rows from prior syncs`,
+                detail: `Removed ${staleIds.length} stale GL balance rows from prior syncs`,
                 progress: 93,
               });
             }
@@ -917,6 +917,25 @@ export async function POST(request: Request) {
               });
             }
 
+            // Pre-fetch all accounts for this entity once (avoids N×4 DB queries)
+            const { data: allAccounts } = await adminClient
+              .from("accounts")
+              .select("id, classification, qbo_id, name, fully_qualified_name, account_number")
+              .eq("entity_id", entityId);
+
+            // Build lookup maps for fast matching
+            const acctByQboId = new Map<string, { id: string; classification: string | null }>();
+            const acctByFqn = new Map<string, { id: string; classification: string | null }>();
+            const acctByName = new Map<string, { id: string; classification: string | null }>();
+            const acctByNumName = new Map<string, { id: string; classification: string | null }>();
+            for (const a of allAccounts ?? []) {
+              const entry = { id: a.id, classification: a.classification };
+              if (a.qbo_id) acctByQboId.set(a.qbo_id, entry);
+              if (a.fully_qualified_name) acctByFqn.set(a.fully_qualified_name, entry);
+              if (a.name) acctByName.set(a.name, entry);
+              if (a.account_number && a.name) acctByNumName.set(`${a.account_number} ${a.name}`, entry);
+            }
+
             const matchedClassBalanceIds: string[] = [];
             let classBalancesUpserted = 0;
             let classBalanceErrors = 0;
@@ -924,52 +943,28 @@ export async function POST(request: Request) {
             const unmatchedAccountNames: string[] = [];
             let valuesSkippedNull = 0;
 
+            // Build all upsert rows in memory first (no DB calls per row)
+            const classBalanceRows: Array<{
+              entity_id: string;
+              account_id: string;
+              qbo_class_id: string;
+              period_year: number;
+              period_month: number;
+              net_change: number;
+              synced_at: string;
+            }> = [];
+
             for (const row of plAccountRows) {
-              // Match account using 3-tier strategy (also fetch classification for sign detection)
+              // Match account using in-memory lookup maps
               let account: { id: string; classification: string | null } | null = null;
 
-              if (row.qboId) {
-                const { data: qboMatch } = await adminClient
-                  .from("accounts")
-                  .select("id, classification")
-                  .eq("entity_id", entityId)
-                  .eq("qbo_id", row.qboId)
-                  .maybeSingle();
-                account = qboMatch;
-              }
-              if (!account) {
-                const { data: fqnMatch } = await adminClient
-                  .from("accounts")
-                  .select("id, classification")
-                  .eq("entity_id", entityId)
-                  .eq("fully_qualified_name", row.accountName)
-                  .maybeSingle();
-                account = fqnMatch;
-              }
-              if (!account) {
-                const { data: nameMatch } = await adminClient
-                  .from("accounts")
-                  .select("id, classification")
-                  .eq("entity_id", entityId)
-                  .eq("name", row.accountName)
-                  .maybeSingle();
-                account = nameMatch;
-              }
-              // 4th tier: P&L rows show "49000 Production Supplies Rental"
-              // but DB stores account_number="49000" and name="Production Supplies Rental".
-              // Try matching by stripping leading account number from the row name.
+              if (row.qboId) account = acctByQboId.get(row.qboId) ?? null;
+              if (!account) account = acctByFqn.get(row.accountName) ?? null;
+              if (!account) account = acctByName.get(row.accountName) ?? null;
               if (!account) {
                 const numMatch = row.accountName.match(/^(\d+)\s+(.+)$/);
                 if (numMatch) {
-                  const [, acctNum, acctName] = numMatch;
-                  const { data: numNameMatch } = await adminClient
-                    .from("accounts")
-                    .select("id, classification")
-                    .eq("entity_id", entityId)
-                    .eq("account_number", acctNum)
-                    .eq("name", acctName)
-                    .maybeSingle();
-                  account = numNameMatch;
+                  account = acctByNumName.get(`${numMatch[1]} ${numMatch[2]}`) ?? null;
                 }
               }
               if (!account) {
@@ -980,61 +975,56 @@ export async function POST(request: Request) {
                 continue;
               }
 
-              // Use account classification to determine sign, NOT the P&L section name.
-              // P&L section names can be custom (e.g. "Labor & Services") and don't
-              // reliably contain "income" or "revenue". Classification is definitive.
-              // Revenue accounts need negation to match gl_balances (debit - credit) convention.
               const isRevenueAccount =
                 (account.classification ?? "").toLowerCase() === "revenue";
 
               for (const classCol of classColumns) {
                 if (!classCol.classDbId) continue;
 
-                // Use the column index directly into the full values array
                 const rawValue = row.values[classCol.index];
                 if (rawValue === null || rawValue === undefined) {
                   valuesSkippedNull++;
                   continue;
                 }
 
-                // P&L shows income as positive. GL stores revenue as negative (credit convention).
-                // Negate revenue accounts to match gl_balances sign convention.
                 const netChange = isRevenueAccount ? rawValue * -1 : rawValue;
 
-                const { data: upsertedRow, error: upsertError } = await adminClient
-                  .from("gl_class_balances")
-                  .upsert(
-                    {
-                      entity_id: entityId,
-                      account_id: account.id,
-                      qbo_class_id: classCol.classDbId,
-                      period_year: targetYear,
-                      period_month: targetMonth,
-                      net_change: netChange,
-                      synced_at: new Date().toISOString(),
-                    },
-                    {
-                      onConflict:
-                        "entity_id,account_id,qbo_class_id,period_year,period_month",
-                    }
-                  )
-                  .select("id")
-                  .maybeSingle();
+                classBalanceRows.push({
+                  entity_id: entityId,
+                  account_id: account.id,
+                  qbo_class_id: classCol.classDbId,
+                  period_year: targetYear,
+                  period_month: targetMonth,
+                  net_change: netChange,
+                  synced_at: new Date().toISOString(),
+                });
+              }
+            }
 
-                if (upsertError) {
-                  classBalanceErrors++;
-                  // Report first few errors
-                  if (classBalanceErrors <= 3) {
-                    send({
-                      step: "pl_by_class",
-                      detail: `Upsert error for "${row.accountName}" class "${classCol.title}": ${upsertError.message}`,
-                      progress: 93,
-                    });
-                  }
-                } else if (upsertedRow) {
-                  matchedClassBalanceIds.push(upsertedRow.id);
-                  classBalancesUpserted++;
+            // Batch upsert in chunks of 200
+            const BATCH_SIZE = 200;
+            for (let i = 0; i < classBalanceRows.length; i += BATCH_SIZE) {
+              const batch = classBalanceRows.slice(i, i + BATCH_SIZE);
+              const { data: upsertedRows, error: upsertError } = await adminClient
+                .from("gl_class_balances")
+                .upsert(batch, {
+                  onConflict:
+                    "entity_id,account_id,qbo_class_id,period_year,period_month",
+                })
+                .select("id");
+
+              if (upsertError) {
+                classBalanceErrors += batch.length;
+                if (classBalanceErrors <= batch.length + 3) {
+                  send({
+                    step: "pl_by_class",
+                    detail: `Batch upsert error (rows ${i}-${i + batch.length}): ${upsertError.message}`,
+                    progress: 93,
+                  });
                 }
+              } else if (upsertedRows) {
+                for (const r of upsertedRows) matchedClassBalanceIds.push(r.id);
+                classBalancesUpserted += upsertedRows.length;
               }
             }
 
@@ -1045,32 +1035,32 @@ export async function POST(request: Request) {
               progress: 93,
             });
 
-            // Clean up stale class balance rows
-            if (matchedClassBalanceIds.length > 0) {
-              const { data: staleClassRows } = await adminClient
+            // Clean up stale class balance rows: fetch all for this period, then delete those not in matched set
+            {
+              const { data: allPeriodRows } = await adminClient
                 .from("gl_class_balances")
                 .select("id")
                 .eq("entity_id", entityId)
                 .eq("period_year", targetYear)
-                .eq("period_month", targetMonth)
-                .not(
-                  "id",
-                  "in",
-                  `(${matchedClassBalanceIds.join(",")})`
-                );
+                .eq("period_month", targetMonth);
 
-              if (staleClassRows && staleClassRows.length > 0) {
-                await adminClient
-                  .from("gl_class_balances")
-                  .delete()
-                  .in(
-                    "id",
-                    staleClassRows.map((r: { id: string }) => r.id)
-                  );
+              const matchedSet = new Set(matchedClassBalanceIds);
+              const staleIds = (allPeriodRows ?? [])
+                .map((r: { id: string }) => r.id)
+                .filter((id: string) => !matchedSet.has(id));
+
+              if (staleIds.length > 0) {
+                // Delete in batches to avoid query size limits
+                for (let i = 0; i < staleIds.length; i += 500) {
+                  await adminClient
+                    .from("gl_class_balances")
+                    .delete()
+                    .in("id", staleIds.slice(i, i + 500));
+                }
 
                 send({
                   step: "pl_by_class",
-                  detail: `Removed ${staleClassRows.length} stale class balance rows`,
+                  detail: `Removed ${staleIds.length} stale class balance rows`,
                   progress: 93,
                 });
               }
