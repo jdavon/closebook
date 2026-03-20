@@ -20,6 +20,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { AccountCombobox } from "@/components/ui/account-combobox";
 import {
   Collapsible,
   CollapsibleContent,
@@ -31,7 +32,8 @@ import {
   AlertTriangle,
   ChevronDown,
   ChevronRight,
-  Settings,
+  Plus,
+  X,
 } from "lucide-react";
 import { formatCurrency } from "@/lib/utils/dates";
 import {
@@ -45,9 +47,18 @@ import {
   type VehicleClassification,
   type CustomVehicleClassRow,
 } from "@/lib/utils/vehicle-classification";
+import { toast } from "sonner";
 
 interface ReconciliationTabProps {
   entityId: string;
+}
+
+interface EntityAccount {
+  id: string;
+  account_number: string | null;
+  name: string;
+  classification: string;
+  account_type: string;
 }
 
 interface AssetRow {
@@ -59,7 +70,6 @@ interface AssetRow {
   book_net_value: number;
 }
 
-/** Per-period depreciation row */
 interface DeprRow {
   fixed_asset_id: string;
   book_accumulated: number;
@@ -98,6 +108,10 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
   const [notes, setNotes] = useState<Record<string, string>>({});
 
   const [customClasses, setCustomClasses] = useState<VehicleClassification[]>([]);
+  const [entityAccounts, setEntityAccounts] = useState<EntityAccount[]>([]);
+  const [mappedAccounts, setMappedAccounts] = useState<
+    Record<string, { id: string; account_id: string }[]>
+  >({});
   const [glBalances, setGlBalances] = useState<Record<string, number>>({});
   const [subledgerBalances, setSubledgerBalances] = useState<
     Record<string, SubledgerGroup>
@@ -105,7 +119,10 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
   const [reconciliations, setReconciliations] = useState<
     Record<string, ReconciliationRecord>
   >({});
-  const [missingLinks, setMissingLinks] = useState<string[]>([]);
+
+  // Account picker state
+  const [addingToGroup, setAddingToGroup] = useState<string | null>(null);
+  const [selectedAccountId, setSelectedAccountId] = useState<string>("");
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -119,46 +136,71 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
       setCustomClasses(cc);
     }
 
-    // 1. Fetch GL account links for this entity
-    const { data: linkData } = await supabase
+    // 1. Fetch all entity accounts (for the picker)
+    const { data: acctData } = await supabase
+      .from("accounts")
+      .select("id, account_number, name, classification, account_type")
+      .eq("entity_id", entityId)
+      .eq("is_active", true)
+      .order("account_number");
+
+    setEntityAccounts((acctData ?? []) as EntityAccount[]);
+
+    // 2. Fetch configured account mappings for this entity
+    const { data: mappingData } = await supabase
       .from("asset_recon_gl_links")
-      .select("recon_group, account_id")
+      .select("id, recon_group, account_id")
       .eq("entity_id", entityId);
 
-    const linkMap: Record<string, string> = {};
-    for (const row of linkData ?? []) {
-      linkMap[row.recon_group] = row.account_id;
-    }
-
-    // Check which recon groups are missing a link
-    const missing = RECON_GROUPS
-      .filter((g) => !linkMap[g.key])
-      .map((g) => g.key);
-    setMissingLinks(missing);
-
-    // 2. Fetch GL balances from linked accounts
-    const balances: Record<string, number> = {};
+    const mapped: Record<string, { id: string; account_id: string }[]> = {};
     for (const group of RECON_GROUPS) {
-      balances[group.key] = 0;
-      const accountId = linkMap[group.key];
-      if (!accountId) continue;
+      mapped[group.key] = [];
+    }
+    for (const m of (mappingData ?? []) as {
+      id: string;
+      recon_group: string;
+      account_id: string;
+    }[]) {
+      if (!mapped[m.recon_group]) mapped[m.recon_group] = [];
+      mapped[m.recon_group].push({ id: m.id, account_id: m.account_id });
+    }
+    setMappedAccounts(mapped);
 
+    // 3. Fetch GL balances for all mapped accounts
+    const allAccountIds = Object.values(mapped)
+      .flat()
+      .map((m) => m.account_id);
+    const balances: Record<string, number> = {};
+
+    if (allAccountIds.length > 0) {
       const { data: glData } = await supabase
         .from("gl_balances")
-        .select("ending_balance")
+        .select("account_id, ending_balance")
         .eq("entity_id", entityId)
         .eq("period_year", periodYear)
         .eq("period_month", periodMonth)
-        .eq("account_id", accountId);
+        .in("account_id", allAccountIds);
 
-      balances[group.key] = (glData ?? []).reduce(
-        (sum, row) => sum + Number(row.ending_balance ?? 0),
-        0
-      );
+      const glMap: Record<string, number> = {};
+      for (const row of (glData ?? []) as {
+        account_id: string;
+        ending_balance: number;
+      }[]) {
+        glMap[row.account_id] = Number(row.ending_balance ?? 0);
+      }
+
+      for (const group of RECON_GROUPS) {
+        const groupAcctIds =
+          mapped[group.key]?.map((m) => m.account_id) ?? [];
+        balances[group.key] = groupAcctIds.reduce(
+          (sum, id) => sum + (glMap[id] ?? 0),
+          0
+        );
+      }
     }
     setGlBalances(balances);
 
-    // 3. Fetch all assets with accum depr
+    // 4. Fetch all assets with accum depr
     const { data: assetsData } = await supabase
       .from("fixed_assets")
       .select(
@@ -168,11 +210,10 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
 
     const assets = (assetsData ?? []) as AssetRow[];
 
-    // 4. Fetch depreciation entries for this period (for period-specific accum depr)
+    // 5. Fetch depreciation entries for this period
     const assetIds = assets.map((a) => a.id);
-    let deprMap: Record<string, DeprRow> = {};
+    const deprMap: Record<string, DeprRow> = {};
     if (assetIds.length > 0) {
-      // Paginate to handle large sets
       for (let i = 0; i < assetIds.length; i += 500) {
         const batch = assetIds.slice(i, i + 500);
         const { data: deprData } = await supabase
@@ -188,7 +229,7 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
       }
     }
 
-    // 5. Group assets by recon group and compute totals
+    // 6. Group assets by recon group and compute totals
     const grouped: Record<string, SubledgerGroup> = {};
     for (const group of RECON_GROUPS) {
       grouped[group.key] = { total: 0, assets: [] };
@@ -198,7 +239,6 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
     for (const asset of assets) {
       const glGroup = getAssetGLGroup(asset.vehicle_class, cc);
       if (!glGroup) {
-        // Unallocated — add to unallocated bucket (use NBV)
         const depr = deprMap[asset.id];
         const nbv = depr ? Number(depr.book_net_value) : asset.book_net_value;
         grouped[UNALLOCATED_KEY].total += nbv;
@@ -211,7 +251,6 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
 
       const depr = deprMap[asset.id];
       const cost = asset.acquisition_cost;
-      // Accum depr should be negative (contra-asset), matching GL convention
       const accumDepr = depr
         ? -Math.abs(Number(depr.book_accumulated))
         : -Math.abs(asset.book_accumulated_depreciation);
@@ -227,7 +266,7 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
     }
     setSubledgerBalances(grouped);
 
-    // 6. Fetch existing reconciliation records
+    // 7. Fetch existing reconciliation records
     const { data: reconData } = await supabase
       .from("asset_reconciliations")
       .select("*")
@@ -250,6 +289,43 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  // -- Account linking (same pattern as debt reconciliation) --
+
+  const handleAddAccount = async (groupKey: string) => {
+    if (!selectedAccountId) return;
+    setSaving(groupKey);
+
+    const { error } = await supabase.from("asset_recon_gl_links").insert({
+      entity_id: entityId,
+      recon_group: groupKey,
+      account_id: selectedAccountId,
+    });
+
+    if (error) {
+      toast.error(
+        error.message.includes("duplicate")
+          ? "Account already mapped to this group"
+          : error.message
+      );
+    } else {
+      toast.success("Account linked");
+      setAddingToGroup(null);
+      setSelectedAccountId("");
+      loadData();
+    }
+    setSaving(null);
+  };
+
+  const handleRemoveAccount = async (
+    mappingId: string,
+    groupKey: string
+  ) => {
+    setSaving(groupKey);
+    await supabase.from("asset_recon_gl_links").delete().eq("id", mappingId);
+    loadData();
+    setSaving(null);
+  };
 
   const handleReconcile = async (groupKey: string) => {
     setSaving(groupKey);
@@ -306,9 +382,15 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
     });
   };
 
+  const accountsById = Object.fromEntries(
+    entityAccounts.map((a) => [a.id, a])
+  );
+  const allMappedAccountIds = new Set(
+    Object.values(mappedAccounts).flat().map((m) => m.account_id)
+  );
+
   const years = Array.from({ length: 5 }, (_, i) => now.getFullYear() - i);
 
-  // Group recon groups by master type for display
   const vehicleGroups = RECON_GROUPS.filter((g) => g.masterType === "Vehicle");
   const trailerGroups = RECON_GROUPS.filter((g) => g.masterType === "Trailer");
 
@@ -320,116 +402,202 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
     const isReconciled = recon?.is_reconciled ?? false;
     const assetList = subledgerBalances[group.key]?.assets ?? [];
     const isExpanded = expandedGroups.has(group.key);
-    const isMissing = missingLinks.includes(group.key);
+    const groupMappings = mappedAccounts[group.key] ?? [];
+    const isAdding = addingToGroup === group.key;
 
     return (
-      <Card key={group.key} className={isMissing ? "border-amber-300" : undefined}>
+      <Card key={group.key}>
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between">
             <CardTitle className="text-base">{group.displayName}</CardTitle>
-            {isMissing ? (
-              <Badge variant="outline" className="border-amber-500 text-amber-700 bg-amber-100">
-                <Settings className="mr-1 h-3 w-3" />
-                No GL Account
-              </Badge>
-            ) : isReconciled ? (
+            {isReconciled ? (
               <Badge className="bg-green-100 text-green-800 hover:bg-green-100">
                 <CheckCircle2 className="mr-1 h-3.5 w-3.5" />
                 Reconciled
               </Badge>
-            ) : Math.abs(variance) > 0.01 ? (
+            ) : Math.abs(variance) > 0.01 && groupMappings.length > 0 ? (
               <Badge variant="destructive">
                 <AlertTriangle className="mr-1 h-3.5 w-3.5" />
                 Variance
               </Badge>
             ) : (
-              <Badge variant="outline">Pending</Badge>
+              <Badge variant="outline">
+                {groupMappings.length === 0 ? "No Accounts" : "Pending"}
+              </Badge>
             )}
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid grid-cols-3 gap-4">
-            <div>
-              <p className="text-xs text-muted-foreground uppercase tracking-wider">
-                GL Balance
+          {/* Mapped GL Accounts */}
+          <div className="space-y-2">
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+              GL Accounts
+            </p>
+            {groupMappings.length === 0 ? (
+              <p className="text-sm text-muted-foreground italic">
+                No GL accounts linked yet
               </p>
-              <p className="text-lg font-semibold tabular-nums">
-                {isMissing ? "—" : formatCurrency(glBal)}
-              </p>
-            </div>
-            <div>
-              <p className="text-xs text-muted-foreground uppercase tracking-wider">
-                Subledger
-              </p>
-              <p className="text-lg font-semibold tabular-nums">
-                {formatCurrency(subBal)}
-              </p>
-            </div>
-            <div>
-              <p className="text-xs text-muted-foreground uppercase tracking-wider">
-                Variance
-              </p>
-              <p
-                className={`text-lg font-semibold tabular-nums ${
-                  isMissing
-                    ? "text-muted-foreground"
-                    : Math.abs(variance) > 0.01
-                    ? "text-red-600"
-                    : "text-green-600"
-                }`}
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {groupMappings.map((mapping) => {
+                  const acct = accountsById[mapping.account_id];
+                  return (
+                    <Badge
+                      key={mapping.id}
+                      variant="secondary"
+                      className="text-xs font-mono gap-1"
+                    >
+                      {acct
+                        ? `${acct.account_number ?? ""} ${acct.name}`.trim()
+                        : mapping.account_id.slice(0, 8)}
+                      <button
+                        onClick={() =>
+                          handleRemoveAccount(mapping.id, group.key)
+                        }
+                        className="ml-1 hover:text-destructive"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </Badge>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Add account picker */}
+            {isAdding ? (
+              <div className="flex items-center gap-2">
+                <AccountCombobox
+                  accounts={entityAccounts
+                    .filter((a) => !allMappedAccountIds.has(a.id))
+                    .map((a) => ({
+                      id: a.id,
+                      account_number: a.account_number,
+                      name: a.name,
+                      account_type: a.account_type,
+                    }))}
+                  value={selectedAccountId}
+                  onValueChange={setSelectedAccountId}
+                  className="flex-1 min-w-0"
+                />
+                <Button
+                  size="sm"
+                  onClick={() => handleAddAccount(group.key)}
+                  disabled={!selectedAccountId || saving === group.key}
+                >
+                  Add
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => {
+                    setAddingToGroup(null);
+                    setSelectedAccountId("");
+                  }}
+                >
+                  Cancel
+                </Button>
+              </div>
+            ) : (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  setAddingToGroup(group.key);
+                  setSelectedAccountId("");
+                }}
               >
-                {isMissing ? "—" : formatCurrency(variance)}
-              </p>
-            </div>
+                <Plus className="mr-1 h-3.5 w-3.5" />
+                Link Account
+              </Button>
+            )}
           </div>
 
-          {/* Asset detail */}
-          <Collapsible
-            open={isExpanded}
-            onOpenChange={() => toggleGroup(group.key)}
-          >
-            <CollapsibleTrigger asChild>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="w-full justify-start"
-              >
-                {isExpanded ? (
-                  <ChevronDown className="mr-2 h-4 w-4" />
-                ) : (
-                  <ChevronRight className="mr-2 h-4 w-4" />
-                )}
-                {assetList.length} asset{assetList.length !== 1 ? "s" : ""} in
-                group
-              </Button>
-            </CollapsibleTrigger>
-            <CollapsibleContent>
-              <div className="mt-2 max-h-60 overflow-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Asset</TableHead>
-                      <TableHead className="text-right">
-                        {group.lineType === "cost" ? "Cost" : "Accum Depr"}
-                      </TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {assetList.map((a) => (
-                      <TableRow key={a.id}>
-                        <TableCell className="text-sm">
-                          {a.asset_name}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums text-sm">
-                          {formatCurrency(a.periodValue)}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+          {/* Summary - only show if accounts are mapped */}
+          {groupMappings.length > 0 && (
+            <div className="grid grid-cols-3 gap-4">
+              <div>
+                <p className="text-xs text-muted-foreground uppercase tracking-wider">
+                  GL Balance
+                </p>
+                <p className="text-lg font-semibold tabular-nums">
+                  {formatCurrency(glBal)}
+                </p>
               </div>
-            </CollapsibleContent>
-          </Collapsible>
+              <div>
+                <p className="text-xs text-muted-foreground uppercase tracking-wider">
+                  Subledger
+                </p>
+                <p className="text-lg font-semibold tabular-nums">
+                  {formatCurrency(subBal)}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground uppercase tracking-wider">
+                  Variance
+                </p>
+                <p
+                  className={`text-lg font-semibold tabular-nums ${
+                    Math.abs(variance) > 0.01
+                      ? "text-red-600"
+                      : "text-green-600"
+                  }`}
+                >
+                  {formatCurrency(variance)}
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Asset detail */}
+          {assetList.length > 0 && (
+            <Collapsible
+              open={isExpanded}
+              onOpenChange={() => toggleGroup(group.key)}
+            >
+              <CollapsibleTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="w-full justify-start"
+                >
+                  {isExpanded ? (
+                    <ChevronDown className="mr-2 h-4 w-4" />
+                  ) : (
+                    <ChevronRight className="mr-2 h-4 w-4" />
+                  )}
+                  {assetList.length} asset{assetList.length !== 1 ? "s" : ""}{" "}
+                  in group
+                </Button>
+              </CollapsibleTrigger>
+              <CollapsibleContent>
+                <div className="mt-2 max-h-60 overflow-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Asset</TableHead>
+                        <TableHead className="text-right">
+                          {group.lineType === "cost" ? "Cost" : "Accum Depr"}
+                        </TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {assetList.map((a) => (
+                        <TableRow key={a.id}>
+                          <TableCell className="text-sm">
+                            {a.asset_name}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums text-sm">
+                            {formatCurrency(a.periodValue)}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              </CollapsibleContent>
+            </Collapsible>
+          )}
 
           {/* Notes */}
           <Textarea
@@ -464,7 +632,9 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
                 <Button
                   size="sm"
                   onClick={() => handleReconcile(group.key)}
-                  disabled={saving === group.key || isMissing}
+                  disabled={
+                    saving === group.key || groupMappings.length === 0
+                  }
                 >
                   {saving === group.key ? "Saving..." : "Mark Reconciled"}
                 </Button>
@@ -515,29 +685,6 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
         </div>
       </div>
 
-      {/* Missing links warning */}
-      {missingLinks.length > 0 && (
-        <div className="rounded-lg border border-amber-300 bg-amber-50/60 p-4">
-          <div className="flex items-start gap-2">
-            <Settings className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" />
-            <div className="text-sm">
-              <p className="font-medium text-amber-800">
-                GL accounts not configured
-              </p>
-              <p className="text-amber-700 mt-1">
-                Open <strong>Edit Settings</strong> to link GL accounts for:{" "}
-                {missingLinks
-                  .map(
-                    (k) =>
-                      RECON_GROUPS.find((g) => g.key === k)?.displayName ?? k
-                  )
-                  .join(", ")}
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
-
       {loading ? (
         <p className="text-sm text-muted-foreground">
           Loading reconciliation data...
@@ -557,7 +704,8 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
               const costBal = glBalances["vehicles_cost"] ?? 0;
               const accumBal = glBalances["vehicles_accum_depr"] ?? 0;
               const glNet = costBal + accumBal;
-              const subCost = subledgerBalances["vehicles_cost"]?.total ?? 0;
+              const subCost =
+                subledgerBalances["vehicles_cost"]?.total ?? 0;
               const subAccum =
                 subledgerBalances["vehicles_accum_depr"]?.total ?? 0;
               const subNet = subCost + subAccum;
@@ -614,7 +762,8 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
               const costBal = glBalances["trailers_cost"] ?? 0;
               const accumBal = glBalances["trailers_accum_depr"] ?? 0;
               const glNet = costBal + accumBal;
-              const subCost = subledgerBalances["trailers_cost"]?.total ?? 0;
+              const subCost =
+                subledgerBalances["trailers_cost"]?.total ?? 0;
               const subAccum =
                 subledgerBalances["trailers_accum_depr"]?.total ?? 0;
               const subNet = subCost + subAccum;
@@ -680,9 +829,9 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
                     </Badge>
                   </div>
                   <p className="text-sm text-muted-foreground">
-                    These assets have no vehicle class or an unrecognized class.
-                    Assign a vehicle class to each asset so it maps to the
-                    correct GL account group.
+                    These assets have no vehicle class or an unrecognized
+                    class. Assign a vehicle class to each asset so it maps to
+                    the correct GL account group.
                   </p>
                 </CardHeader>
                 <CardContent className="space-y-4">
@@ -736,8 +885,12 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
                             <TableRow>
                               <TableHead>Asset</TableHead>
                               <TableHead>Class</TableHead>
-                              <TableHead className="text-right">Cost</TableHead>
-                              <TableHead className="text-right">NBV</TableHead>
+                              <TableHead className="text-right">
+                                Cost
+                              </TableHead>
+                              <TableHead className="text-right">
+                                NBV
+                              </TableHead>
                             </TableRow>
                           </TableHeader>
                           <TableBody>
