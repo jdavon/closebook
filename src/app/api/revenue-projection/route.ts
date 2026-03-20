@@ -4,7 +4,6 @@ import {
   type RWInvoiceRow,
   type RWOrderRow,
   type RWQuoteRow,
-  type DateMode,
 } from "@/lib/utils/revenue-projection";
 
 export const maxDuration = 60;
@@ -12,10 +11,7 @@ export const maxDuration = 60;
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { entityId, dateMode = "invoice_date" } = body as {
-      entityId: string;
-      dateMode?: DateMode;
-    };
+    const { entityId } = body as { entityId: string };
 
     if (!entityId) {
       return NextResponse.json(
@@ -29,11 +25,11 @@ export async function POST(request: Request) {
     const rw = new RentalWorksClient(process.env.RW_BASE_URL!);
     await rw.ensureAuth(process.env.RW_USERNAME!, process.env.RW_PASSWORD!);
 
-    // Date boundaries
+    // Date boundaries — always use 36-month lookback (superset for all date modes)
     const now = new Date();
-    const thirteenMonthsAgo = new Date(
+    const thirtySixMonthsAgo = new Date(
       now.getFullYear(),
-      now.getMonth() - 13,
+      now.getMonth() - 36,
       1,
     );
     const threeMonthsAgo = new Date(
@@ -42,27 +38,18 @@ export async function POST(request: Request) {
       1,
     );
 
-    // For billing_date and rental_period modes, widen the lookback to 36 months
-    // because some invoices have InvoiceDates far older than their billing
-    // periods (e.g. long-term rentals invoiced once with rolling billing periods).
-    const useBillingDate = dateMode === "billing_date";
-    const useRentalPeriod = dateMode === "rental_period";
-    const invoiceDateField = useBillingDate ? "BillingEndDate" : "InvoiceDate";
-    const invoiceLookbackDate = useBillingDate || useRentalPeriod
-      ? new Date(now.getFullYear(), now.getMonth() - 36, 1)
-      : thirteenMonthsAgo;
-    const invoiceStartDate = formatRWDate(invoiceLookbackDate);
+    const invoiceStartDate = formatRWDate(thirtySixMonthsAgo);
     const orderStartDate = formatRWDate(threeMonthsAgo);
 
     // Fetch invoices, orders, and quotes in parallel
     const [invoiceResult, orderResult, quoteResult] = await Promise.all([
       rw.browse<RWInvoiceRow>("invoice", {
         pagesize: 2000,
-        searchfields: [invoiceDateField],
+        searchfields: ["InvoiceDate"],
         searchfieldoperators: [">="],
         searchfieldvalues: [invoiceStartDate],
         searchfieldtypes: ["date"],
-        orderby: invoiceDateField,
+        orderby: "InvoiceDate",
         orderbydirection: "desc",
       }),
       rw.browse<RWOrderRow>("order", {
@@ -85,14 +72,21 @@ export async function POST(request: Request) {
       }),
     ]);
 
+    // Process with default invoice_date mode; client will re-process for other modes
     const result = processRevenueData(
       invoiceResult.rows,
       orderResult.rows,
       quoteResult.rows,
-      dateMode,
+      "invoice_date",
     );
 
-    return NextResponse.json(result);
+    return NextResponse.json({
+      ...result,
+      // Include raw rows so the client can re-process without another API call
+      _rawInvoices: invoiceResult.rows,
+      _rawOrders: orderResult.rows,
+      _rawQuotes: quoteResult.rows,
+    });
   } catch (err) {
     console.error("POST /api/revenue-projection error:", err);
     return NextResponse.json(

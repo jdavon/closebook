@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { useParams } from "next/navigation";
 import {
   Card,
@@ -35,10 +35,14 @@ import {
 import { formatCurrency } from "@/lib/utils/dates";
 import {
   EQUIPMENT_TYPE_LABELS,
+  processRevenueData,
   type RevenueProjectionResponse,
   type ClosedInvoice,
   type MonthlyRevenue,
   type DateMode,
+  type RWInvoiceRow,
+  type RWOrderRow,
+  type RWQuoteRow,
 } from "@/lib/utils/revenue-projection";
 import {
   ComposedChart,
@@ -191,35 +195,32 @@ export default function RevenueProjectionPage() {
   const params = useParams();
   const entityId = params.entityId as string;
 
-  const [data, setData] = useState<RevenueProjectionResponse | null>(null);
-  // Separate state for accruals tab — always uses invoice_date mode
-  const [accrualData, setAccrualData] = useState<RevenueProjectionResponse | null>(null);
+  // Raw rows from the API — cached so we can re-process client-side on mode change
+  const [rawInvoices, setRawInvoices] = useState<RWInvoiceRow[] | null>(null);
+  const [rawOrders, setRawOrders] = useState<RWOrderRow[] | null>(null);
+  const [rawQuotes, setRawQuotes] = useState<RWQuoteRow[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [dateMode, setDateMode] = useState<DateMode>("invoice_date");
   const [invoiceMonthFilter, setInvoiceMonthFilter] = useState<string>("all");
 
-  const fetchData = async (mode?: DateMode) => {
-    const activeMode = mode ?? dateMode;
+  const fetchData = async () => {
     setLoading(true);
     setError(null);
     try {
       const res = await fetch("/api/revenue-projection", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ entityId, dateMode: activeMode }),
+        body: JSON.stringify({ entityId }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.error || `Request failed: ${res.status}`);
       }
       const result = await res.json();
-      setData(result);
-
-      // If this fetch IS invoice_date mode, also use it for accruals
-      if (activeMode === "invoice_date") {
-        setAccrualData(result);
-      }
+      setRawInvoices(result._rawInvoices);
+      setRawOrders(result._rawOrders);
+      setRawQuotes(result._rawQuotes);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load data");
     } finally {
@@ -227,36 +228,27 @@ export default function RevenueProjectionPage() {
     }
   };
 
-  // Fetch invoice_date data separately for accruals tab when switching away
-  const fetchAccrualData = async () => {
-    try {
-      const res = await fetch("/api/revenue-projection", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ entityId, dateMode: "invoice_date" }),
-      });
-      if (!res.ok) return;
-      const result = await res.json();
-      setAccrualData(result);
-    } catch {
-      // Silently fail — accruals tab will show stale or no data
-    }
-  };
-
   const handleDateModeChange = (mode: DateMode) => {
     setDateMode(mode);
-    fetchData(mode);
-    // If switching away from invoice_date and we don't have accrual data yet,
-    // fetch it in the background
-    if (mode !== "invoice_date" && !accrualData) {
-      fetchAccrualData();
-    }
   };
 
   useEffect(() => {
-    fetchData(); // Default is invoice_date, so accrualData gets set too
+    fetchData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entityId]);
+
+  // Derive processed data client-side — instant on date mode switch
+  const data = useMemo(() => {
+    if (!rawInvoices || !rawOrders || !rawQuotes) return null;
+    return processRevenueData(rawInvoices, rawOrders, rawQuotes, dateMode);
+  }, [rawInvoices, rawOrders, rawQuotes, dateMode]);
+
+  // Accruals tab always uses invoice_date mode
+  const accrualData = useMemo(() => {
+    if (!rawInvoices || !rawOrders || !rawQuotes) return null;
+    if (dateMode === "invoice_date") return data;
+    return processRevenueData(rawInvoices, rawOrders, rawQuotes, "invoice_date");
+  }, [rawInvoices, rawOrders, rawQuotes, dateMode, data]);
 
   // Derive unique months from invoices for filter dropdown
   // In rental_period mode, include all months that any invoice spans via allocations
@@ -298,6 +290,45 @@ export default function RevenueProjectionPage() {
     });
   }, [data, invoiceMonthFilter]);
 
+  // Group filtered invoices by customer
+  const customerGroups = useMemo(() => {
+    const groups = new Map<string, { customer: string; invoices: ClosedInvoice[]; totalRevenue: number; totalAllocated: number }>();
+    const showAllocation = dateMode === "rental_period" && invoiceMonthFilter !== "all";
+    for (const inv of filteredInvoices) {
+      const key = inv.customer || "Unknown";
+      if (!groups.has(key)) {
+        groups.set(key, { customer: key, invoices: [], totalRevenue: 0, totalAllocated: 0 });
+      }
+      const g = groups.get(key)!;
+      g.invoices.push(inv);
+      g.totalRevenue += inv.subTotal;
+      if (showAllocation) {
+        const alloc = inv.allocations?.find((a) => a.month === invoiceMonthFilter);
+        g.totalAllocated += alloc ? alloc.amount : inv.subTotal;
+      }
+    }
+    return Array.from(groups.values()).sort((a, b) => {
+      const aVal = showAllocation ? b.totalAllocated : b.totalRevenue;
+      const bVal = showAllocation ? a.totalAllocated : a.totalRevenue;
+      return aVal - bVal;
+    });
+  }, [filteredInvoices, dateMode, invoiceMonthFilter]);
+
+  const [expandedCustomers, setExpandedCustomers] = useState<Set<string>>(new Set());
+
+  // Reset expanded state when filter changes
+  useEffect(() => {
+    setExpandedCustomers(new Set());
+  }, [invoiceMonthFilter, dateMode]);
+
+  const toggleCustomer = useCallback((customer: string) => {
+    setExpandedCustomers((prev) => {
+      const next = new Set(prev);
+      if (next.has(customer)) next.delete(customer);
+      else next.add(customer);
+      return next;
+    });
+  }, []);
 
   if (loading && !data) {
     return (
@@ -691,155 +722,162 @@ export default function RevenueProjectionPage() {
               ) : (
                 <div className="overflow-x-auto">
                   {(() => {
-                    // Show allocation column when in rental_period mode and filtering a specific month
                     const showAllocation = dateMode === "rental_period" && invoiceMonthFilter !== "all";
-                    // Helper to get the allocation for the filtered month
                     const getAlloc = (inv: ClosedInvoice) =>
                       inv.allocations?.find((a) => a.month === invoiceMonthFilter);
                     return (
                       <Table>
                         <TableHeader>
                           <TableRow>
-                            <TableHead>Invoice #</TableHead>
-                            <TableHead>Status</TableHead>
+                            <TableHead className="w-8" />
                             <TableHead>Customer</TableHead>
-                            <TableHead>Order</TableHead>
-                            <TableHead>Invoice Date</TableHead>
-                            <TableHead>Billing Period</TableHead>
+                            <TableHead className="text-right">Invoices</TableHead>
                             {showAllocation ? (
                               <>
-                                <TableHead className="text-right">
-                                  Invoice Total
-                                </TableHead>
-                                <TableHead className="text-right">
-                                  Allocated
-                                </TableHead>
-                                <TableHead className="text-right">
-                                  %
-                                </TableHead>
-                                <TableHead className="text-right">
-                                  Days
-                                </TableHead>
+                                <TableHead className="text-right">Invoice Total</TableHead>
+                                <TableHead className="text-right">Allocated</TableHead>
                               </>
                             ) : (
                               <>
-                                <TableHead>Month</TableHead>
-                                <TableHead className="text-right">
-                                  Revenue
-                                </TableHead>
-                                <TableHead className="text-right">
-                                  Tax
-                                </TableHead>
-                                <TableHead className="text-right">
-                                  Total
-                                </TableHead>
+                                <TableHead className="text-right">Revenue</TableHead>
+                                <TableHead className="text-right">Tax</TableHead>
+                                <TableHead className="text-right">Total</TableHead>
                               </>
                             )}
-                            <TableHead>Type</TableHead>
                           </TableRow>
                         </TableHeader>
                         <TableBody>
-                          {filteredInvoices.map((inv) => {
-                            const alloc = showAllocation ? getAlloc(inv) : null;
+                          {customerGroups.map((group) => {
+                            const isExpanded = expandedCustomers.has(group.customer);
+                            const groupTax = group.invoices.reduce((s, i) => s + i.tax, 0);
+                            const groupGross = group.invoices.reduce((s, i) => s + i.grossTotal, 0);
                             return (
-                              <TableRow key={inv.invoiceId}>
-                                <TableCell className="font-medium">
-                                  {inv.invoiceNumber}
-                                </TableCell>
-                                <TableCell>
-                                  <Badge variant={
-                                    inv.status === "CLOSED" || inv.status === "PROCESSED"
-                                      ? "default"
-                                      : inv.status === "APPROVED"
-                                        ? "secondary"
-                                        : "outline"
-                                  }>
-                                    {inv.status || "—"}
-                                  </Badge>
-                                </TableCell>
-                                <TableCell>{inv.customer}</TableCell>
-                                <TableCell className="max-w-[180px] truncate">
-                                  {inv.orderDescription || inv.orderNumber}
-                                </TableCell>
-                                <TableCell className="text-muted-foreground whitespace-nowrap">
-                                  {formatDate(inv.invoiceDate)}
-                                </TableCell>
-                                <TableCell className="text-muted-foreground whitespace-nowrap text-xs">
-                                  {inv.billingStartDate || inv.billingEndDate
-                                    ? `${formatDate(inv.billingStartDate)} – ${formatDate(inv.billingEndDate)}`
-                                    : "—"}
-                                </TableCell>
-                                {showAllocation ? (
-                                  <>
-                                    <TableCell className="text-muted-foreground text-right tabular-nums">
-                                      {formatCurrency(inv.subTotal)}
-                                    </TableCell>
-                                    <TableCell className="text-right font-medium tabular-nums">
-                                      {alloc ? formatCurrency(alloc.amount) : formatCurrency(inv.subTotal)}
-                                    </TableCell>
-                                    <TableCell className="text-right tabular-nums">
-                                      {alloc ? `${alloc.percentage}%` : "100%"}
-                                    </TableCell>
-                                    <TableCell className="text-muted-foreground text-right tabular-nums">
-                                      {alloc ? alloc.days : "—"}
-                                    </TableCell>
-                                  </>
-                                ) : (
-                                  <>
-                                    <TableCell>
-                                      <Badge variant="outline">
-                                        {inv.month
-                                          ? inv.month.replace(
-                                              /^(\d{4})-(\d{2})$/,
-                                              (_, y, m) => {
-                                                const months = [
-                                                  "Jan","Feb","Mar","Apr","May","Jun",
-                                                  "Jul","Aug","Sep","Oct","Nov","Dec",
-                                                ];
-                                                return `${months[Number(m) - 1]} ${y.slice(2)}`;
-                                              },
-                                            )
-                                          : "—"}
-                                      </Badge>
-                                      {dateMode === "rental_period" && inv.allocations && (
-                                        <div className="mt-1 flex flex-wrap gap-1">
-                                          {inv.allocations.map((a) => (
-                                            <span
-                                              key={a.month}
-                                              className="bg-muted text-muted-foreground rounded px-1.5 py-0.5 text-[10px]"
-                                            >
-                                              {a.label}: {a.percentage}%
-                                            </span>
-                                          ))}
+                              <React.Fragment key={group.customer}>
+                                <TableRow
+                                  className="hover:bg-muted/50 cursor-pointer"
+                                  onClick={() => toggleCustomer(group.customer)}
+                                >
+                                  <TableCell className="w-8 px-2">
+                                    <ChevronRight
+                                      className={`h-4 w-4 text-muted-foreground transition-transform ${
+                                        isExpanded ? "rotate-90" : ""
+                                      }`}
+                                    />
+                                  </TableCell>
+                                  <TableCell className="font-medium">
+                                    {group.customer}
+                                  </TableCell>
+                                  <TableCell className="text-muted-foreground text-right tabular-nums">
+                                    {group.invoices.length}
+                                  </TableCell>
+                                  {showAllocation ? (
+                                    <>
+                                      <TableCell className="text-muted-foreground text-right tabular-nums">
+                                        {formatCurrency(group.totalRevenue)}
+                                      </TableCell>
+                                      <TableCell className="text-right font-semibold tabular-nums">
+                                        {formatCurrency(group.totalAllocated)}
+                                      </TableCell>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <TableCell className="text-right font-semibold tabular-nums">
+                                        {formatCurrency(group.totalRevenue)}
+                                      </TableCell>
+                                      <TableCell className="text-muted-foreground text-right tabular-nums">
+                                        {formatCurrency(groupTax)}
+                                      </TableCell>
+                                      <TableCell className="text-right tabular-nums">
+                                        {formatCurrency(groupGross)}
+                                      </TableCell>
+                                    </>
+                                  )}
+                                </TableRow>
+                                {isExpanded && group.invoices.map((inv) => {
+                                  const alloc = showAllocation ? getAlloc(inv) : null;
+                                  return (
+                                    <TableRow key={inv.invoiceId} className="bg-muted/30">
+                                      <TableCell />
+                                      <TableCell className="pl-8" colSpan={showAllocation ? 1 : 1}>
+                                        <div className="flex flex-col gap-0.5">
+                                          <span className="flex items-center gap-1.5 text-sm font-medium">
+                                            {inv.invoiceNumber}
+                                            {inv.status && inv.status !== "CLOSED" && inv.status !== "PROCESSED" && (
+                                              <Badge variant={inv.status === "APPROVED" ? "secondary" : "outline"} className="text-[10px] px-1.5 py-0">
+                                                {inv.status}
+                                              </Badge>
+                                            )}
+                                          </span>
+                                          <span className="text-muted-foreground max-w-[260px] truncate text-xs">
+                                            {inv.orderDescription || inv.orderNumber}
+                                          </span>
                                         </div>
+                                      </TableCell>
+                                      <TableCell>
+                                        <div className="flex flex-col gap-0.5 text-xs">
+                                          <span className="text-muted-foreground whitespace-nowrap">
+                                            {formatDate(inv.invoiceDate)}
+                                          </span>
+                                          {(inv.billingStartDate || inv.billingEndDate) && (
+                                            <span className="text-muted-foreground whitespace-nowrap">
+                                              {formatDate(inv.billingStartDate)} – {formatDate(inv.billingEndDate)}
+                                            </span>
+                                          )}
+                                        </div>
+                                      </TableCell>
+                                      {showAllocation ? (
+                                        <>
+                                          <TableCell className="text-muted-foreground text-right tabular-nums text-sm">
+                                            {formatCurrency(inv.subTotal)}
+                                            {alloc && (
+                                              <span className="text-muted-foreground ml-1 text-xs">
+                                                ({alloc.percentage}%, {alloc.days}d)
+                                              </span>
+                                            )}
+                                          </TableCell>
+                                          <TableCell className="text-right font-medium tabular-nums text-sm">
+                                            {alloc ? formatCurrency(alloc.amount) : formatCurrency(inv.subTotal)}
+                                          </TableCell>
+                                        </>
+                                      ) : (
+                                        <>
+                                          <TableCell className="text-right tabular-nums text-sm">
+                                            {formatCurrency(inv.subTotal)}
+                                            {dateMode === "rental_period" && inv.allocations && (
+                                              <div className="mt-0.5 flex flex-wrap justify-end gap-1">
+                                                {inv.allocations.map((a) => (
+                                                  <span
+                                                    key={a.month}
+                                                    className="bg-muted text-muted-foreground rounded px-1 py-0.5 text-[10px]"
+                                                  >
+                                                    {a.label}: {a.percentage}%
+                                                  </span>
+                                                ))}
+                                              </div>
+                                            )}
+                                          </TableCell>
+                                          <TableCell className="text-muted-foreground text-right tabular-nums text-sm">
+                                            {formatCurrency(inv.tax)}
+                                          </TableCell>
+                                          <TableCell className="text-right tabular-nums text-sm">
+                                            {formatCurrency(inv.grossTotal)}
+                                          </TableCell>
+                                        </>
                                       )}
-                                    </TableCell>
-                                    <TableCell className="text-right font-medium tabular-nums">
-                                      {formatCurrency(inv.subTotal)}
-                                    </TableCell>
-                                    <TableCell className="text-muted-foreground text-right tabular-nums">
-                                      {formatCurrency(inv.tax)}
-                                    </TableCell>
-                                    <TableCell className="text-right tabular-nums">
-                                      {formatCurrency(inv.grossTotal)}
-                                    </TableCell>
-                                  </>
-                                )}
-                                <TableCell>
-                                  <Badge variant="secondary">
-                                    {EQUIPMENT_TYPE_LABELS[inv.equipmentType] ||
-                                      inv.equipmentType}
-                                  </Badge>
-                                </TableCell>
-                              </TableRow>
+                                    </TableRow>
+                                  );
+                                })}
+                              </React.Fragment>
                             );
                           })}
                           <TableRow className="border-t-2 font-semibold">
+                            <TableCell />
+                            <TableCell>
+                              Total ({filteredInvoices.length} invoices, {customerGroups.length} customers)
+                            </TableCell>
+                            <TableCell />
                             {showAllocation ? (
                               <>
-                                <TableCell colSpan={6}>
-                                  Total ({filteredInvoices.length} invoices)
-                                </TableCell>
                                 <TableCell className="text-muted-foreground text-right tabular-nums">
                                   {formatCurrency(
                                     filteredInvoices.reduce((s, i) => s + i.subTotal, 0),
@@ -847,20 +885,12 @@ export default function RevenueProjectionPage() {
                                 </TableCell>
                                 <TableCell className="text-right tabular-nums">
                                   {formatCurrency(
-                                    filteredInvoices.reduce((s, inv) => {
-                                      const alloc = getAlloc(inv);
-                                      return s + (alloc ? alloc.amount : inv.subTotal);
-                                    }, 0),
+                                    customerGroups.reduce((s, g) => s + g.totalAllocated, 0),
                                   )}
                                 </TableCell>
-                                <TableCell />
-                                <TableCell />
                               </>
                             ) : (
                               <>
-                                <TableCell colSpan={7}>
-                                  Total ({filteredInvoices.length} invoices)
-                                </TableCell>
                                 <TableCell className="text-right tabular-nums">
                                   {formatCurrency(
                                     filteredInvoices.reduce((s, i) => s + i.subTotal, 0),
@@ -878,7 +908,6 @@ export default function RevenueProjectionPage() {
                                 </TableCell>
                               </>
                             )}
-                            <TableCell />
                           </TableRow>
                         </TableBody>
                       </Table>
