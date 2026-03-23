@@ -122,6 +122,8 @@ interface CommissionResult {
   commission_rate: number;
   commission_earned: number;
   is_payable: boolean;
+  is_paid: boolean;
+  paid_amount: number | null;
   calculated_at: string;
 }
 
@@ -437,6 +439,67 @@ export default function CommissionsPage() {
       toast.success(isPayable ? "Marked as payable" : "Unmarked as payable");
     } else {
       toast.error(data.error || "Failed to update");
+    }
+  }
+
+  async function handleMarkPaid(resultId: string, isPaid: boolean, paidAmount?: number) {
+    const res = await fetch("/api/commissions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "mark_paid",
+        resultId,
+        isPaid,
+        paidAmount: isPaid ? paidAmount : null,
+      }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      setResults((prev) =>
+        prev.map((r) =>
+          r.id === resultId
+            ? { ...r, is_paid: isPaid, paid_amount: isPaid ? (paidAmount ?? null) : null }
+            : r
+        )
+      );
+      setAnnualResults((prev) =>
+        prev.map((r) =>
+          r.id === resultId
+            ? { ...r, is_paid: isPaid, paid_amount: isPaid ? (paidAmount ?? null) : null }
+            : r
+        )
+      );
+      toast.success(isPaid ? "Marked as paid" : "Unmarked as paid");
+    } else {
+      toast.error(data.error || "Failed to update");
+    }
+  }
+
+  async function handleUpdatePaidAmount(resultId: string, paidAmount: number) {
+    const res = await fetch("/api/commissions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "update_paid_amount",
+        resultId,
+        paidAmount,
+      }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      setResults((prev) =>
+        prev.map((r) =>
+          r.id === resultId ? { ...r, paid_amount: paidAmount } : r
+        )
+      );
+      setAnnualResults((prev) =>
+        prev.map((r) =>
+          r.id === resultId ? { ...r, paid_amount: paidAmount } : r
+        )
+      );
+      toast.success("Paid amount updated");
+    } else {
+      toast.error(data.error || "Failed to update paid amount");
     }
   }
 
@@ -788,7 +851,18 @@ export default function CommissionsPage() {
                               )}
                               onClick={() => setPeriodMonth(m)}
                             >
-                              {r ? formatCurrency(earned) : "—"}
+                              <div className="flex items-center justify-end gap-1.5">
+                                {r && (
+                                  <div
+                                    className={cn(
+                                      "h-2.5 w-2.5 rounded-full shrink-0",
+                                      r.is_paid ? "bg-green-500" : "bg-red-500"
+                                    )}
+                                    title={r.is_paid ? "Paid" : "Not paid"}
+                                  />
+                                )}
+                                <span>{r ? formatCurrency(earned) : "—"}</span>
+                              </div>
                             </TableCell>
                           );
                         })}
@@ -961,7 +1035,9 @@ export default function CommissionsPage() {
                   <TableHead className="text-right">
                     Commission Earned
                   </TableHead>
-                  <TableHead className="text-center">Payable</TableHead>
+                  <TableHead className="text-center">Paid</TableHead>
+                  <TableHead className="text-right">Paid Amount</TableHead>
+                  <TableHead className="text-right">Variance</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
@@ -1025,15 +1101,66 @@ export default function CommissionsPage() {
                         >
                           {result && (
                             <Checkbox
-                              checked={result.is_payable}
-                              onCheckedChange={(checked) =>
-                                handleMarkPayable(
-                                  result.id,
-                                  checked as boolean
-                                )
-                              }
+                              checked={result.is_paid}
+                              onCheckedChange={(checked) => {
+                                const isPaid = checked as boolean;
+                                if (isPaid) {
+                                  // Default paid amount to commission earned
+                                  handleMarkPaid(result.id, true, Number(result.commission_earned));
+                                } else {
+                                  handleMarkPaid(result.id, false);
+                                }
+                              }}
                             />
                           )}
+                        </TableCell>
+                        <TableCell
+                          className="text-right"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          {result && result.is_paid && (
+                            <Input
+                              type="number"
+                              step="0.01"
+                              className="w-[130px] ml-auto text-right tabular-nums h-8 text-sm"
+                              value={result.paid_amount ?? ""}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setResults((prev) =>
+                                  prev.map((r) =>
+                                    r.id === result.id
+                                      ? { ...r, paid_amount: val === "" ? null : parseFloat(val) }
+                                      : r
+                                  )
+                                );
+                              }}
+                              onBlur={(e) => {
+                                const val = parseFloat(e.target.value);
+                                if (!isNaN(val)) {
+                                  handleUpdatePaidAmount(result.id, val);
+                                }
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                  (e.target as HTMLInputElement).blur();
+                                }
+                              }}
+                            />
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {result && result.is_paid && result.paid_amount != null ? (() => {
+                            const variance = Number(result.paid_amount) - Number(result.commission_earned);
+                            return (
+                              <span className={cn(
+                                variance === 0 && "text-muted-foreground",
+                                variance > 0 && "text-green-600",
+                                variance < 0 && "text-red-600"
+                              )}>
+                                {variance >= 0 ? "+" : ""}{formatCurrency(variance)}
+                              </span>
+                            );
+                          })() : "—"}
                         </TableCell>
                         <TableCell
                           className="text-right"
@@ -1062,7 +1189,7 @@ export default function CommissionsPage() {
                       {/* Expanded detail row */}
                       {isExpanded && profileAssignments.length > 0 && (
                         <TableRow key={`${profile.id}-detail`}>
-                          <TableCell colSpan={9} className="bg-muted/30 p-0">
+                          <TableCell colSpan={11} className="bg-muted/30 p-0">
                             <div className="px-8 py-4">
                               <Table>
                                 <TableHeader>
@@ -1150,7 +1277,7 @@ export default function CommissionsPage() {
                       {isExpanded && profileAssignments.length === 0 && (
                         <TableRow key={`${profile.id}-empty`}>
                           <TableCell
-                            colSpan={9}
+                            colSpan={11}
                             className="bg-muted/30 text-center py-4 text-muted-foreground"
                           >
                             No accounts assigned. Edit this salesperson to add
@@ -1180,6 +1307,32 @@ export default function CommissionsPage() {
                       {formatCurrency(summaryEarned)}
                     </TableCell>
                     <TableCell />
+                    <TableCell className="text-right tabular-nums">
+                      {formatCurrency(
+                        results
+                          .filter((r) => r.is_paid && r.paid_amount != null)
+                          .reduce((sum, r) => sum + Number(r.paid_amount), 0)
+                      )}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {(() => {
+                        const paidResults = results.filter((r) => r.is_paid && r.paid_amount != null);
+                        if (paidResults.length === 0) return "—";
+                        const totalVariance = paidResults.reduce(
+                          (sum, r) => sum + (Number(r.paid_amount) - Number(r.commission_earned)),
+                          0
+                        );
+                        return (
+                          <span className={cn(
+                            totalVariance === 0 && "text-muted-foreground",
+                            totalVariance > 0 && "text-green-600",
+                            totalVariance < 0 && "text-red-600"
+                          )}>
+                            {totalVariance >= 0 ? "+" : ""}{formatCurrency(totalVariance)}
+                          </span>
+                        );
+                      })()}
+                    </TableCell>
                     <TableCell />
                   </TableRow>
                 )}

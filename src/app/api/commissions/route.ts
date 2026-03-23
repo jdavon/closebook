@@ -492,6 +492,71 @@ export async function POST(request: Request) {
     return NextResponse.json({ success: true });
   }
 
+  // ── Mark as Paid ──────────────────────────────────────────────────
+  if (action === "mark_paid") {
+    const { resultId, isPaid, paidAmount } = body;
+
+    if (!resultId || isPaid == null) {
+      return NextResponse.json(
+        { error: "resultId and isPaid are required" },
+        { status: 400 }
+      );
+    }
+
+    const updateData: Record<string, unknown> = {
+      is_paid: isPaid,
+      marked_paid_at: isPaid ? new Date().toISOString() : null,
+      marked_paid_by: isPaid ? user.id : null,
+    };
+
+    // Set paid_amount when marking as paid, clear when unmarking
+    if (isPaid && paidAmount != null) {
+      updateData.paid_amount = paidAmount;
+    } else if (!isPaid) {
+      updateData.paid_amount = null;
+    }
+
+    const { error: updateError } = await adminClient
+      .from("commission_results")
+      .update(updateData)
+      .eq("id", resultId);
+
+    if (updateError) {
+      return NextResponse.json(
+        { error: updateError.message },
+        { status: 500 }
+      );
+    }
+
+    return NextResponse.json({ success: true });
+  }
+
+  // ── Update Paid Amount ────────────────────────────────────────────
+  if (action === "update_paid_amount") {
+    const { resultId, paidAmount } = body;
+
+    if (!resultId || paidAmount == null) {
+      return NextResponse.json(
+        { error: "resultId and paidAmount are required" },
+        { status: 400 }
+      );
+    }
+
+    const { error: updateError } = await adminClient
+      .from("commission_results")
+      .update({ paid_amount: paidAmount })
+      .eq("id", resultId);
+
+    if (updateError) {
+      return NextResponse.json(
+        { error: updateError.message },
+        { status: 500 }
+      );
+    }
+
+    return NextResponse.json({ success: true });
+  }
+
   // ── Delete Profile ──────────────────────────────────────────────────
   if (action === "delete_profile") {
     const { profileId } = body;

@@ -2262,6 +2262,10 @@ export type Database = {
           is_payable: boolean
           marked_payable_at: string | null
           marked_payable_by: string | null
+          is_paid: boolean
+          paid_amount: number | null
+          marked_paid_at: string | null
+          marked_paid_by: string | null
           calculated_at: string
         }
         Insert: {
@@ -2278,6 +2282,10 @@ export type Database = {
           is_payable?: boolean
           marked_payable_at?: string | null
           marked_payable_by?: string | null
+          is_paid?: boolean
+          paid_amount?: number | null
+          marked_paid_at?: string | null
+          marked_paid_by?: string | null
           calculated_at?: string
         }
         Update: {
@@ -2294,6 +2302,10 @@ export type Database = {
           is_payable?: boolean
           marked_payable_at?: string | null
           marked_payable_by?: string | null
+          is_paid?: boolean
+          paid_amount?: number | null
+          marked_paid_at?: string | null
+          marked_paid_by?: string | null
           calculated_at?: string
         }
         Relationships: [
