@@ -51,6 +51,7 @@ import {
   Upload,
   Calendar,
   Check,
+  Download,
   Pencil,
   X,
   Trash2,
@@ -847,6 +848,27 @@ export default function SubleaseDetailPage() {
       .eq("id", id);
     if (error) toast.error(error.message);
     else loadData();
+  }
+
+  async function handleDocumentDownload(filePath: string, fileName: string) {
+    try {
+      const res = await fetch("/api/storage/signed-download-url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bucket: "lease-documents", path: filePath }),
+      });
+      if (!res.ok) throw new Error("Failed to get download URL");
+      const { signedUrl } = await res.json();
+      const link = document.createElement("a");
+      link.href = signedUrl;
+      link.download = fileName;
+      link.target = "_blank";
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch {
+      toast.error("Failed to download document");
+    }
   }
 
   async function handleDocumentUpload(e: React.ChangeEvent<HTMLInputElement>) {
@@ -2389,13 +2411,20 @@ export default function SubleaseDetailPage() {
                       <TableHead>Type</TableHead>
                       <TableHead>Size</TableHead>
                       <TableHead>Uploaded</TableHead>
+                      <TableHead className="w-10"></TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {documents.map((doc) => (
                       <TableRow key={doc.id}>
-                        <TableCell className="font-medium">
-                          {doc.file_name}
+                        <TableCell>
+                          <button
+                            type="button"
+                            className="font-medium text-primary hover:underline cursor-pointer text-left"
+                            onClick={() => handleDocumentDownload(doc.file_path, doc.file_name)}
+                          >
+                            {doc.file_name}
+                          </button>
                         </TableCell>
                         <TableCell>
                           {SUBLEASE_DOC_TYPE_LABELS[doc.document_type]}
@@ -2407,6 +2436,16 @@ export default function SubleaseDetailPage() {
                         </TableCell>
                         <TableCell className="text-muted-foreground">
                           {new Date(doc.created_at).toLocaleDateString()}
+                        </TableCell>
+                        <TableCell>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8"
+                            onClick={() => handleDocumentDownload(doc.file_path, doc.file_name)}
+                          >
+                            <Download className="h-4 w-4" />
+                          </Button>
                         </TableCell>
                       </TableRow>
                     ))}
