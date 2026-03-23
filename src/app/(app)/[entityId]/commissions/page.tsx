@@ -1105,8 +1105,8 @@ export default function CommissionsPage() {
                               onCheckedChange={(checked) => {
                                 const isPaid = checked as boolean;
                                 if (isPaid) {
-                                  // Default paid amount to commission earned
-                                  handleMarkPaid(result.id, true, Number(result.commission_earned));
+                                  // Default paid amount to commission earned, rounded to cents
+                                  handleMarkPaid(result.id, true, Math.round(Number(result.commission_earned) * 100) / 100);
                                 } else {
                                   handleMarkPaid(result.id, false);
                                 }
@@ -1137,7 +1137,8 @@ export default function CommissionsPage() {
                               onBlur={(e) => {
                                 const val = parseFloat(e.target.value);
                                 if (!isNaN(val)) {
-                                  handleUpdatePaidAmount(result.id, val);
+                                  const rounded = Math.round(val * 100) / 100;
+                                  handleUpdatePaidAmount(result.id, rounded);
                                 }
                               }}
                               onKeyDown={(e) => {
