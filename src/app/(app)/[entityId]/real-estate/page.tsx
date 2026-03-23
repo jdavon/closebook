@@ -36,18 +36,20 @@ import {
   Building,
   Search,
   Upload,
+  Download,
   AlertTriangle,
   Calendar,
   Check,
 } from "lucide-react";
+import * as XLSX from "xlsx";
 import { formatCurrency, formatPercentage, getCurrentPeriod } from "@/lib/utils/dates";
 import { cn } from "@/lib/utils";
 import {
   calculateLeaseLiability,
   calculateROUAsset,
 } from "@/lib/utils/lease-calculations";
-import { getCurrentRent } from "@/lib/utils/lease-payments";
-import type { EscalationRule } from "@/lib/utils/lease-payments";
+import { getCurrentRent, generateLeasePaymentSchedule } from "@/lib/utils/lease-payments";
+import type { EscalationRule, LeaseForPayments } from "@/lib/utils/lease-payments";
 import type { LeaseStatus, LeaseType, CriticalDateType, SubleaseStatus, SplitType } from "@/lib/types/database";
 import {
   Tooltip,
@@ -72,8 +74,13 @@ interface LeaseListItem {
   cam_monthly: number;
   insurance_monthly: number;
   property_tax_annual: number;
+  property_tax_frequency: string;
   utilities_monthly: number;
   other_monthly_costs: number;
+  rent_commencement_date: string | null;
+  rent_abatement_months: number;
+  rent_abatement_amount: number;
+  security_deposit: number;
   discount_rate: number;
   initial_direct_costs: number;
   lease_incentives_received: number;
@@ -81,6 +88,7 @@ interface LeaseListItem {
   properties: {
     property_name: string;
     rentable_square_footage: number | null;
+    lot_square_footage: number | null;
   } | null;
 }
 
@@ -563,11 +571,12 @@ export default function RealEstatePage() {
       .from("leases")
       .select(
         `id, lease_name, nickname, status, lease_type, lessor_name,
-        commencement_date, expiration_date, lease_term_months,
+        commencement_date, rent_commencement_date, expiration_date, lease_term_months,
         base_rent_monthly, cam_monthly, insurance_monthly,
-        property_tax_annual, utilities_monthly, other_monthly_costs,
+        property_tax_annual, property_tax_frequency, utilities_monthly, other_monthly_costs,
+        rent_abatement_months, rent_abatement_amount, security_deposit,
         discount_rate, initial_direct_costs, lease_incentives_received, prepaid_rent,
-        properties(property_name, rentable_square_footage)`
+        properties(property_name, rentable_square_footage, lot_square_footage)`
       )
       .eq("entity_id", entityId)
       .order("lease_name");
@@ -999,6 +1008,146 @@ export default function RealEstatePage() {
     return { totalLiability, totalROU, leasesWithRate };
   }, [activeLeases]);
 
+  function handleExportExcel() {
+    const wb = XLSX.utils.book_new();
+
+    // --- Sheet 1: Lease Summary ---
+    const summaryHeaders = [
+      "Lease Name", "Nickname", "Status", "Type", "Lessor", "Property",
+      "Commencement", "Expiration", "Term (mo)",
+      "Rentable SF", "Lot SF", "Total SF",
+      "Base Rent (mo)", "CAM (mo)", "Insurance (mo)", "Prop Tax (mo)",
+      "Utilities (mo)", "Other (mo)", "Total Monthly", "Total Annual",
+      "Rent/SF (annual)", "Security Deposit", "Discount Rate",
+    ];
+    const summaryRows: (string | number | null)[][] = [summaryHeaders];
+    for (const l of filteredLeases) {
+      const rentableSF = l.properties?.rentable_square_footage ?? 0;
+      const lotSF = l.properties?.lot_square_footage ?? 0;
+      const totalSF = rentableSF + lotSF;
+      const monthly = totalMonthlyCost(l, leaseCurrentRent(l));
+      const annual = monthly * 12;
+      summaryRows.push([
+        l.lease_name,
+        l.nickname ?? "",
+        STATUS_LABELS[l.status] ?? l.status,
+        TYPE_LABELS[l.lease_type] ?? l.lease_type,
+        l.lessor_name ?? "",
+        l.properties?.property_name ?? "",
+        l.commencement_date,
+        l.expiration_date,
+        l.lease_term_months,
+        rentableSF || null,
+        lotSF || null,
+        totalSF || null,
+        leaseCurrentRent(l),
+        l.cam_monthly,
+        l.insurance_monthly,
+        l.property_tax_annual / 12,
+        l.utilities_monthly,
+        l.other_monthly_costs,
+        Math.round(monthly * 100) / 100,
+        Math.round(annual * 100) / 100,
+        totalSF > 0 ? Math.round((annual / totalSF) * 100) / 100 : null,
+        l.security_deposit,
+        l.discount_rate,
+      ]);
+    }
+    const summarySheet = XLSX.utils.aoa_to_sheet(summaryRows);
+    summarySheet["!cols"] = summaryHeaders.map((h) => ({
+      wch: Math.max(h.length + 2, 14),
+    }));
+    // Number format for currency columns (index 12–21)
+    for (let r = 1; r < summaryRows.length; r++) {
+      for (let c = 12; c <= 21; c++) {
+        const cell = summarySheet[XLSX.utils.encode_cell({ r, c })];
+        if (cell && typeof cell.v === "number") cell.z = "#,##0.00";
+      }
+    }
+    XLSX.utils.book_append_sheet(wb, summarySheet, "Lease Summary");
+
+    // --- Sheet 2: Payment Schedule ---
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    const currentMonth = now.getMonth() + 1;
+    const MONTH_NAMES = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+    const schedHeaders = [
+      "Lease Name", "Year", "Month", "Base Rent", "CAM",
+      "Insurance", "Property Tax", "Utilities", "Other", "Total",
+    ];
+    const schedRows: (string | number | null)[][] = [schedHeaders];
+
+    for (const l of filteredLeases) {
+      if (l.status === "expired" || l.status === "terminated") continue;
+      const leaseForPmt: LeaseForPayments = {
+        commencement_date: l.commencement_date,
+        rent_commencement_date: l.rent_commencement_date,
+        expiration_date: l.expiration_date,
+        base_rent_monthly: l.base_rent_monthly,
+        cam_monthly: l.cam_monthly,
+        insurance_monthly: l.insurance_monthly,
+        property_tax_annual: l.property_tax_annual,
+        property_tax_frequency: (l.property_tax_frequency ?? "monthly") as LeaseForPayments["property_tax_frequency"],
+        utilities_monthly: l.utilities_monthly,
+        other_monthly_costs: l.other_monthly_costs,
+        rent_abatement_months: l.rent_abatement_months ?? 0,
+        rent_abatement_amount: l.rent_abatement_amount ?? 0,
+      };
+      const entries = generateLeasePaymentSchedule(leaseForPmt, escalationsByLease[l.id] ?? []);
+
+      // Group by period
+      const byPeriod = new Map<string, Record<string, number>>();
+      for (const e of entries) {
+        if (e.period_year < currentYear || (e.period_year === currentYear && e.period_month < currentMonth)) continue;
+        const key = `${e.period_year}-${e.period_month}`;
+        if (!byPeriod.has(key)) byPeriod.set(key, { year: e.period_year, month: e.period_month, base_rent: 0, cam: 0, insurance: 0, property_tax: 0, utilities: 0, other: 0 });
+        const row = byPeriod.get(key)!;
+        row[e.payment_type] = (row[e.payment_type] ?? 0) + e.scheduled_amount;
+      }
+
+      for (const row of byPeriod.values()) {
+        const total = row.base_rent + row.cam + row.insurance + row.property_tax + row.utilities + row.other;
+        schedRows.push([
+          l.nickname || l.lease_name,
+          row.year,
+          MONTH_NAMES[row.month],
+          Math.round(row.base_rent * 100) / 100,
+          Math.round(row.cam * 100) / 100,
+          Math.round(row.insurance * 100) / 100,
+          Math.round(row.property_tax * 100) / 100,
+          Math.round(row.utilities * 100) / 100,
+          Math.round(row.other * 100) / 100,
+          Math.round(total * 100) / 100,
+        ]);
+      }
+    }
+
+    const schedSheet = XLSX.utils.aoa_to_sheet(schedRows);
+    schedSheet["!cols"] = schedHeaders.map((h) => ({
+      wch: Math.max(h.length + 2, 14),
+    }));
+    for (let r = 1; r < schedRows.length; r++) {
+      for (let c = 3; c <= 9; c++) {
+        const cell = schedSheet[XLSX.utils.encode_cell({ r, c })];
+        if (cell && typeof cell.v === "number") cell.z = "#,##0.00";
+      }
+    }
+    XLSX.utils.book_append_sheet(wb, schedSheet, "Payment Schedule");
+
+    // Download
+    const buf = XLSX.write(wb, { type: "array", bookType: "xlsx" });
+    const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `Real_Estate_Leases_${currentYear}-${String(currentMonth).padStart(2, "0")}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
   // Lease expiration timeline (sorted by expiration date)
   const expirationTimeline = [...activeLeases].sort(
     (a, b) =>
@@ -1018,6 +1167,10 @@ export default function RealEstatePage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={handleExportExcel} disabled={filteredLeases.length === 0}>
+            <Download className="mr-2 h-4 w-4" />
+            Export Excel
+          </Button>
           <Link href={`/${entityId}/real-estate/from-pdf`}>
             <Button variant="outline">
               <Upload className="mr-2 h-4 w-4" />
