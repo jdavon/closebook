@@ -141,11 +141,6 @@ export function AppSidebar({ user, entityId: entityIdProp, entities = [] }: AppS
           url: `${entityPrefix}/revenue-projection`,
           icon: TrendingUp,
         },
-        {
-          title: "Insurance",
-          url: `${entityPrefix}/insurance`,
-          icon: Shield,
-        },
       ]
     : [];
 
