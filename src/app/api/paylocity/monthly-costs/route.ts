@@ -28,27 +28,33 @@ export async function GET(request: NextRequest) {
   try {
     const supabase = getSupabase();
 
-    // Fetch monthly costs and allocations in parallel
-    // Use .range() to avoid the default 1000-row Supabase limit
-    const [costsResult, allocResult] = await Promise.all([
-      supabase
-        .from("employee_monthly_costs")
-        .select("*")
-        .eq("year", year)
-        .order("month", { ascending: true })
-        .range(0, 4999),
-      supabase
-        .from("employee_allocations")
-        .select("*")
-        .range(0, 4999),
-    ]);
+    // Paginate to avoid the Supabase 1000-row hard cap
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    async function fetchAll(table: string, filters: Record<string, string> = {}): Promise<any[]> {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const all: any[] = [];
+      const pageSize = 1000;
+      let from = 0;
 
-    if (costsResult.error) {
-      return NextResponse.json({ error: costsResult.error.message }, { status: 500 });
+      while (true) {
+        let q = supabase.from(table).select("*").range(from, from + pageSize - 1);
+        for (const [key, val] of Object.entries(filters)) {
+          q = q.eq(key, val);
+        }
+        const { data, error } = await q;
+        if (error) throw new Error(`Query ${table} failed: ${error.message}`);
+        all.push(...(data ?? []));
+        if (!data || data.length < pageSize) break;
+        from += pageSize;
+      }
+
+      return all;
     }
 
-    const costs = costsResult.data ?? [];
-    const allocations = allocResult.data ?? [];
+    const [costs, allocations] = await Promise.all([
+      fetchAll("employee_monthly_costs", { year: String(year) }),
+      fetchAll("employee_allocations"),
+    ]);
 
     // Build allocation lookup
     const allocMap: Record<string, typeof allocations[0]> = {};
