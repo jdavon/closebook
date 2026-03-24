@@ -49,6 +49,7 @@ import {
 
 interface MappedEmployee {
   id: string;
+  companyId: string;
   displayName: string;
   jobTitle: string;
   payType: string;
@@ -56,6 +57,15 @@ interface MappedEmployee {
   baseRate: number;
   department: string;
   operatingEntityId: string;
+}
+
+interface AllocationOverride {
+  employee_id: string;
+  paylocity_company_id: string;
+  department: string | null;
+  class: string | null;
+  allocated_entity_id: string | null;
+  allocated_entity_name: string | null;
 }
 
 interface PayrollSummaryMonth {
@@ -101,6 +111,7 @@ export default function EmployeeDetailsPage() {
   const entityId = params.entityId as string;
 
   const [employees, setEmployees] = useState<MappedEmployee[]>([]);
+  const [allocations, setAllocations] = useState<AllocationOverride[]>([]);
   const [payrollHistory, setPayrollHistory] = useState<PayrollSummaryMonth[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -111,14 +122,20 @@ export default function EmployeeDetailsPage() {
   useEffect(() => {
     async function load() {
       try {
-        const [empRes, payRes] = await Promise.all([
+        const [empRes, allocRes, payRes] = await Promise.all([
           fetch("/api/paylocity/employees"),
+          fetch("/api/paylocity/allocations"),
           fetch(`/api/paylocity/payroll-summary?year=${selectedYear}`),
         ]);
 
         if (empRes.ok) {
           const empData = await empRes.json();
           setEmployees(empData.employees ?? []);
+        }
+
+        if (allocRes.ok) {
+          const allocData = await allocRes.json();
+          setAllocations(allocData.allocations ?? []);
         }
 
         if (payRes.ok) {
@@ -137,10 +154,30 @@ export default function EmployeeDetailsPage() {
     load();
   }, [selectedYear]);
 
-  // Filter to entity
+  // Build allocation lookup and apply overrides
+  const allocationMap = useMemo(() => {
+    const map: Record<string, AllocationOverride> = {};
+    for (const a of allocations) {
+      map[`${a.employee_id}:${a.paylocity_company_id}`] = a;
+    }
+    return map;
+  }, [allocations]);
+
+  // Filter to entity using effective (overridden) entity
   const entityEmployees = useMemo(
-    () => employees.filter((e) => e.operatingEntityId === entityId),
-    [employees, entityId]
+    () => employees.filter((e) => {
+      const override = allocationMap[`${e.id}:${e.companyId}`];
+      const effectiveEntityId = override?.allocated_entity_id || e.operatingEntityId;
+      return effectiveEntityId === entityId;
+    }).map((e) => {
+      const override = allocationMap[`${e.id}:${e.companyId}`];
+      if (!override) return e;
+      return {
+        ...e,
+        department: override.department || e.department,
+      };
+    }),
+    [employees, entityId, allocationMap]
   );
 
   // Department breakdown
