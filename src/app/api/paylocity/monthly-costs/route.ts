@@ -157,6 +157,11 @@ export async function POST(request: NextRequest) {
     }[] = [];
 
     let totalEmployees = 0;
+    let totalSummaries = 0;
+    let totalDetails = 0;
+    let summaryErrors = 0;
+    let detailErrors = 0;
+    const sampleErrors: string[] = [];
 
     for (const client of clients) {
       const companyId = client.companyId;
@@ -192,15 +197,23 @@ export async function POST(request: NextRequest) {
             let summaries: Awaited<ReturnType<typeof client.getPayStatementSummary>> = [];
             try {
               summaries = await client.getPayStatementSummary(emp.id, year);
-            } catch {
-              // Silent fail — full accrual
+              totalSummaries += summaries.length;
+            } catch (err) {
+              summaryErrors++;
+              if (sampleErrors.length < 3) {
+                sampleErrors.push(`Summary ${emp.id}: ${err instanceof Error ? err.message : String(err)}`);
+              }
             }
 
             let details: Awaited<ReturnType<typeof client.getPayStatementDetails>> = [];
             try {
               details = await client.getPayStatementDetails(emp.id, year);
-            } catch {
-              // Silent fail
+              totalDetails += details.length;
+            } catch (err) {
+              detailErrors++;
+              if (sampleErrors.length < 5) {
+                sampleErrors.push(`Detail ${emp.id}: ${err instanceof Error ? err.message : String(err)}`);
+              }
             }
 
             // ── Pro-rate each pay period across months ──
@@ -399,6 +412,13 @@ export async function POST(request: NextRequest) {
       employeesProcessed: totalEmployees,
       rowsUpserted: upsertedCount,
       syncedAt,
+      debug: {
+        totalSummaries,
+        totalDetails,
+        summaryErrors,
+        detailErrors,
+        sampleErrors,
+      },
     });
   } catch (err) {
     return NextResponse.json(
