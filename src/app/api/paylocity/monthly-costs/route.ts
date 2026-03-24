@@ -288,13 +288,25 @@ export async function POST(request: NextRequest) {
 
             // ── Build monthly rows: actual pro-rated data + accrual for gaps ──
 
-            // Average monthly benefit from actual data for accrual fill
+            // Skip employees with zero actual paycheck data for the entire year
+            const hasAnyActual = Object.values(buckets).some((b) => b.checks > 0);
+            if (!hasAnyActual) return;
+
+            // Average monthly benefit from actual data for current-month accrual
             const totalActualBenefits = Object.values(buckets).reduce((s, b) => s + b.actualBenefits, 0);
             const monthsWithActual = Object.values(buckets).filter((b) => b.checks > 0).length;
             const avgMonthlyBenefit = monthsWithActual > 0 ? totalActualBenefits / monthsWithActual : 0;
 
+            // Only accrue gaps for the current month (not past months)
+            const isCurrentYearMonth = (m: number) =>
+              year === currentYear && m === currentMonth;
+
             for (let m = 1; m <= lastMonth; m++) {
               const b = buckets[m];
+
+              // Skip months with no actual data (unless it's the current month)
+              if (b.checks === 0 && !isCurrentYearMonth(m)) continue;
+
               const daysInCalendarMonth = new Date(year, m, 0).getDate();
               const daysCovered = Math.min(b.daysCovered, daysInCalendarMonth);
               const daysUncovered = daysInCalendarMonth - daysCovered;
@@ -307,12 +319,11 @@ export async function POST(request: NextRequest) {
               let benefits = b.actualBenefits;
               let isAccrual = false;
 
-              // If the month isn't fully covered by pay periods, accrue the gap
-              if (daysUncovered > 0 && annualComp > 0) {
+              // Only accrue the gap for the CURRENT month — past months are finalized
+              if (isCurrentYearMonth(m) && daysUncovered > 0 && annualComp > 0) {
                 const accrualGross = dailyRate * daysUncovered;
                 grossPay += accrualGross;
-                isAccrual = daysCovered === 0; // fully accrued if no actual data at all
-                // Estimate benefits for uncovered days
+                isAccrual = daysCovered === 0;
                 if (avgMonthlyBenefit > 0) {
                   benefits += avgMonthlyBenefit * (daysUncovered / daysInCalendarMonth);
                 }
@@ -349,6 +360,13 @@ export async function POST(request: NextRequest) {
         );
       }
     }
+
+    // Clear old data for this year before upserting fresh results.
+    // This removes stale accrual rows and employees with no data.
+    await supabase
+      .from("employee_monthly_costs")
+      .delete()
+      .eq("year", year);
 
     // Upsert in batches of 500
     const upsertBatchSize = 500;
