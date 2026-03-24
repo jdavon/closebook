@@ -110,9 +110,11 @@ export async function GET(request: NextRequest) {
 /**
  * POST /api/paylocity/monthly-costs?year=2026
  *
- * Syncs pay statement data from Paylocity into Supabase.
- * For months with actual paychecks, stores actual amounts.
- * For the current month forward (if no paycheck data), stores accrued estimates.
+ * Syncs pay statement data from Paylocity into Supabase using accrual
+ * accounting. Pay periods that span month boundaries are pro-rated by
+ * calendar days. Months (or partial months) not covered by any pay
+ * period are filled with accrual estimates based on the employee's
+ * annual comp rate.
  */
 export async function POST(request: NextRequest) {
   const year = Number(request.nextUrl.searchParams.get("year")) || new Date().getFullYear();
@@ -124,6 +126,9 @@ export async function POST(request: NextRequest) {
     const currentMonth = now.getMonth() + 1;
     const currentYear = now.getFullYear();
     const syncedAt = now.toISOString();
+
+    // Determine which months to generate (through current month for current year, all 12 for past years)
+    const lastMonth = year < currentYear ? 12 : year === currentYear ? currentMonth : 0;
 
     const upsertRows: {
       employee_id: string;
@@ -153,7 +158,6 @@ export async function POST(request: NextRequest) {
     for (const client of clients) {
       const companyId = client.companyId;
 
-      // Fetch active employees
       const rawEmployees = await client.getEmployees({
         activeOnly: true,
         include: ["info", "position", "payrate", "status"],
@@ -161,7 +165,6 @@ export async function POST(request: NextRequest) {
 
       totalEmployees += rawEmployees.length;
 
-      // Process employees in batches
       const batchSize = 5;
 
       for (let i = 0; i < rawEmployees.length; i += batchSize) {
@@ -179,15 +182,17 @@ export async function POST(request: NextRequest) {
             const jobTitle = emp.info?.jobTitle ?? "";
             const payType = emp.currentPayRate?.payType ?? "Unknown";
 
-            // Fetch pay statement summaries for the year
+            // Daily rate for accrual estimates (calendar days)
+            const dailyRate = annualComp / 365;
+
+            // Fetch pay statements
             let summaries: Awaited<ReturnType<typeof client.getPayStatementSummary>> = [];
             try {
               summaries = await client.getPayStatementSummary(emp.id, year);
             } catch {
-              // Silent fail — we'll use accruals
+              // Silent fail — full accrual
             }
 
-            // Fetch pay statement details for benefit costs
             let details: Awaited<ReturnType<typeof client.getPayStatementDetails>> = [];
             try {
               details = await client.getPayStatementDetails(emp.id, year);
@@ -195,76 +200,127 @@ export async function POST(request: NextRequest) {
               // Silent fail
             }
 
-            // Build checkDate → pay period month lookup from summaries.
-            // Use endDate (pay period end) to determine the month the cost
-            // belongs to, NOT checkDate (when the check was issued). A check
-            // dated Jan 5 may cover a Dec 16-31 pay period.
-            const checkDateToMonth: Record<string, number> = {};
-            for (const ps of summaries) {
-              const periodMonth = ps.endDate
-                ? parseInt(ps.endDate.split("-")[1], 10)
-                : parseInt(ps.checkDate.split("-")[1], 10);
-              checkDateToMonth[ps.checkDate] = periodMonth;
+            // ── Pro-rate each pay period across months ──
+            //
+            // For each pay statement, split gross pay, hours, and benefits
+            // proportionally by how many calendar days of the pay period
+            // fall in each month within the target year.
+
+            interface MonthBucket {
+              actualGross: number;
+              actualHours: number;
+              actualRegHours: number;
+              actualOtHours: number;
+              actualBenefits: number;
+              checks: number;
+              daysCovered: number; // calendar days covered by actual pay periods
             }
 
-            // Extract benefit costs per month from details
-            const benefitsByMonth: Record<number, number> = {};
+            const buckets: Record<number, MonthBucket> = {};
+            for (let m = 1; m <= 12; m++) {
+              buckets[m] = {
+                actualGross: 0, actualHours: 0, actualRegHours: 0,
+                actualOtHours: 0, actualBenefits: 0, checks: 0, daysCovered: 0,
+              };
+            }
+
+            // Build benefit amounts per checkDate for pro-rating
+            const benefitsByCheck: Record<string, number> = {};
             for (const d of details) {
               const detTypeLower = (d.detType ?? "").toLowerCase();
               if (detTypeLower === "memo" || detTypeLower === "memoermatch") {
                 const amount = d.amount ?? 0;
                 if (amount > 0 && d.checkDate) {
-                  const m = checkDateToMonth[d.checkDate]
-                    ?? parseInt(d.checkDate.split("-")[1], 10);
-                  benefitsByMonth[m] = (benefitsByMonth[m] ?? 0) + amount;
+                  benefitsByCheck[d.checkDate] = (benefitsByCheck[d.checkDate] ?? 0) + amount;
                 }
               }
             }
 
-            // Group pay summaries by pay period month (not check date)
-            const byMonth: Record<
-              number,
-              { gross: number; hours: number; regHours: number; otHours: number; checks: number }
-            > = {};
-
             for (const ps of summaries) {
-              const m = checkDateToMonth[ps.checkDate]
-                ?? parseInt(ps.checkDate.split("-")[1], 10);
-              if (!byMonth[m]) {
-                byMonth[m] = { gross: 0, hours: 0, regHours: 0, otHours: 0, checks: 0 };
+              const begin = parseDate(ps.beginDate || ps.checkDate);
+              const end = parseDate(ps.endDate || ps.checkDate);
+              const totalDays = daysBetween(begin, end);
+              if (totalDays <= 0) continue;
+
+              const checkBenefits = benefitsByCheck[ps.checkDate] ?? 0;
+
+              // Walk each month the pay period touches
+              const startMonth = begin.getMonth() + 1;
+              const startYear = begin.getFullYear();
+              const endMonth = end.getMonth() + 1;
+              const endYear = end.getFullYear();
+
+              // Iterate from the begin date's month to the end date's month
+              let cursor = new Date(begin);
+              while (cursor <= end) {
+                const curMonth = cursor.getMonth() + 1;
+                const curYear = cursor.getFullYear();
+
+                // Only count days that fall within the target year
+                if (curYear === year) {
+                  // First day of this month portion
+                  const monthStart = (curYear === startYear && curMonth === startMonth)
+                    ? begin
+                    : new Date(curYear, curMonth - 1, 1);
+                  // Last day of this month portion
+                  const monthEnd = (curYear === endYear && curMonth === endMonth)
+                    ? end
+                    : new Date(curYear, curMonth, 0); // last day of month
+
+                  const daysInMonth = daysBetween(monthStart, monthEnd);
+                  const fraction = daysInMonth / totalDays;
+
+                  if (curMonth >= 1 && curMonth <= 12 && daysInMonth > 0) {
+                    buckets[curMonth].actualGross += (ps.grossPay || 0) * fraction;
+                    buckets[curMonth].actualHours += (ps.hours || 0) * fraction;
+                    buckets[curMonth].actualRegHours += (ps.regularHours || 0) * fraction;
+                    buckets[curMonth].actualOtHours += (ps.overtimeHours || 0) * fraction;
+                    buckets[curMonth].actualBenefits += checkBenefits * fraction;
+                    buckets[curMonth].daysCovered += daysInMonth;
+                    buckets[curMonth].checks++;
+                  }
+                }
+
+                // Advance to the first day of the next month
+                cursor = new Date(curYear, curMonth, 1);
               }
-              byMonth[m].gross += ps.grossPay || 0;
-              byMonth[m].hours += ps.hours || 0;
-              byMonth[m].regHours += ps.regularHours || 0;
-              byMonth[m].otHours += ps.overtimeHours || 0;
-              byMonth[m].checks++;
             }
 
-            // Annual benefit estimate for accrual months
-            const ytdBenefits = Object.values(benefitsByMonth).reduce((s, v) => s + v, 0);
-            const monthsWithBenefitData = Object.keys(benefitsByMonth).length;
-            const monthlyBenefitEstimate =
-              monthsWithBenefitData > 0 ? ytdBenefits / monthsWithBenefitData : 0;
+            // ── Build monthly rows: actual pro-rated data + accrual for gaps ──
 
-            // Determine how far to generate rows
-            // For the requested year: generate through current month (if current year) or all 12
-            const lastMonth = year < currentYear ? 12 : year === currentYear ? currentMonth : 0;
+            // Average monthly benefit from actual data for accrual fill
+            const totalActualBenefits = Object.values(buckets).reduce((s, b) => s + b.actualBenefits, 0);
+            const monthsWithActual = Object.values(buckets).filter((b) => b.checks > 0).length;
+            const avgMonthlyBenefit = monthsWithActual > 0 ? totalActualBenefits / monthsWithActual : 0;
 
             for (let m = 1; m <= lastMonth; m++) {
-              const actual = byMonth[m];
-              const hasActual = actual && actual.checks > 0;
+              const b = buckets[m];
+              const daysInCalendarMonth = new Date(year, m, 0).getDate();
+              const daysCovered = Math.min(b.daysCovered, daysInCalendarMonth);
+              const daysUncovered = daysInCalendarMonth - daysCovered;
 
-              const grossPay = hasActual
-                ? round(actual.gross)
-                : round(annualComp / 12); // accrual
+              // Actual portion (from pro-rated pay periods)
+              let grossPay = b.actualGross;
+              let hours = b.actualHours;
+              let regHours = b.actualRegHours;
+              let otHours = b.actualOtHours;
+              let benefits = b.actualBenefits;
+              let isAccrual = false;
 
-              const erTaxes = round(
-                estimateAnnualERTaxes(grossPay * 12).total / 12
-              );
+              // If the month isn't fully covered by pay periods, accrue the gap
+              if (daysUncovered > 0 && annualComp > 0) {
+                const accrualGross = dailyRate * daysUncovered;
+                grossPay += accrualGross;
+                isAccrual = daysCovered === 0; // fully accrued if no actual data at all
+                // Estimate benefits for uncovered days
+                if (avgMonthlyBenefit > 0) {
+                  benefits += avgMonthlyBenefit * (daysUncovered / daysInCalendarMonth);
+                }
+              }
 
-              const erBenefits = hasActual
-                ? round(benefitsByMonth[m] ?? monthlyBenefitEstimate)
-                : round(monthlyBenefitEstimate);
+              grossPay = round(grossPay);
+              benefits = round(benefits);
+              const erTaxes = round(estimateAnnualERTaxes(grossPay * 12).total / 12);
 
               upsertRows.push({
                 employee_id: emp.id,
@@ -278,13 +334,13 @@ export async function POST(request: NextRequest) {
                 month: m,
                 gross_pay: grossPay,
                 er_taxes: erTaxes,
-                er_benefits: erBenefits,
-                total_cost: round(grossPay + erTaxes + erBenefits),
-                hours_worked: hasActual ? round(actual.hours) : 0,
-                regular_hours: hasActual ? round(actual.regHours) : 0,
-                overtime_hours: hasActual ? round(actual.otHours) : 0,
-                check_count: hasActual ? actual.checks : 0,
-                is_accrual: !hasActual,
+                er_benefits: benefits,
+                total_cost: round(grossPay + erTaxes + benefits),
+                hours_worked: round(hours),
+                regular_hours: round(regHours),
+                overtime_hours: round(otHours),
+                check_count: b.checks,
+                is_accrual: isAccrual,
                 synced_at: syncedAt,
                 updated_at: syncedAt,
               });
@@ -332,4 +388,16 @@ export async function POST(request: NextRequest) {
 
 function round(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+/** Parse "YYYY-MM-DD" to a Date at midnight local time */
+function parseDate(dateStr: string): Date {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  return new Date(y, m - 1, d);
+}
+
+/** Count calendar days between two dates, inclusive of both endpoints */
+function daysBetween(start: Date, end: Date): number {
+  if (end < start) return 0;
+  return Math.round((end.getTime() - start.getTime()) / 86400000) + 1;
 }
