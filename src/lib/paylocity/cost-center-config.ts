@@ -87,27 +87,27 @@ export const COMPANY_COST_CENTER_MAPS: Record<string, Record<string, CostCenterE
       operatingEntityName: "Silverco Enterprises",
     },
 
-    // Avon Rental Holdings
+    // Silverco operational departments
     "02": {
       code: "02",
       department: "Avon Lot Ops",
-      operatingEntityId: ENTITY_IDS.ARH,
-      operatingEntityCode: "ARH",
-      operatingEntityName: "Avon Rental Holdings",
+      operatingEntityId: ENTITY_IDS.SILVERCO,
+      operatingEntityCode: "AVON",
+      operatingEntityName: "Silverco Enterprises",
     },
     "03": {
       code: "03",
       department: "Fleet",
-      operatingEntityId: ENTITY_IDS.ARH,
-      operatingEntityCode: "ARH",
-      operatingEntityName: "Avon Rental Holdings",
+      operatingEntityId: ENTITY_IDS.SILVERCO,
+      operatingEntityCode: "AVON",
+      operatingEntityName: "Silverco Enterprises",
     },
     "04": {
       code: "04",
       department: "Sales",
-      operatingEntityId: ENTITY_IDS.ARH,
-      operatingEntityCode: "ARH",
-      operatingEntityName: "Avon Rental Holdings",
+      operatingEntityId: ENTITY_IDS.SILVERCO,
+      operatingEntityCode: "AVON",
+      operatingEntityName: "Silverco Enterprises",
     },
     "06": {
       code: "06",

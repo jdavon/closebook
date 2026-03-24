@@ -53,6 +53,7 @@ import {
 
 interface MappedEmployee {
   id: string;
+  companyId: string;
   displayName: string;
   firstName: string;
   lastName: string;
@@ -71,6 +72,24 @@ interface MappedEmployee {
   erBenefits: number;
   erBenefitBreakdown: Record<string, number>;
 }
+
+interface AllocationOverride {
+  employee_id: string;
+  paylocity_company_id: string;
+  department: string | null;
+  class: string | null;
+  allocated_entity_id: string | null;
+  allocated_entity_name: string | null;
+}
+
+/** Entity code lookup for allocation overrides */
+const ENTITY_ID_TO_CODE: Record<string, string> = {
+  "b664a9c1-3817-4df4-9261-f51b3403a5de": "AVON",
+  "b56dec66-edea-4d8d-8cb4-4043af3e41de": "ARH",
+  "2fdafa28-8ba2-4caa-aa9f-5d8f39f57081": "VS",
+  "7529580d-3b44-4a9b-91f4-bc2db25f5211": "HDR",
+  "f641caa2-c87e-4a71-a98b-d51cc559f3ff": "HSS",
+};
 
 // --- Constants ---
 
@@ -105,6 +124,7 @@ function formatCompact(value: number): string {
 
 export default function OrgPayrollPage() {
   const [employees, setEmployees] = useState<MappedEmployee[]>([]);
+  const [allocations, setAllocations] = useState<AllocationOverride[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -116,10 +136,18 @@ export default function OrgPayrollPage() {
   useEffect(() => {
     async function load() {
       try {
-        const res = await fetch("/api/paylocity/employees");
-        if (!res.ok) throw new Error(`Failed to fetch: ${res.status}`);
-        const data = await res.json();
-        setEmployees(data.employees ?? []);
+        const [empRes, allocRes] = await Promise.all([
+          fetch("/api/paylocity/employees"),
+          fetch("/api/paylocity/allocations"),
+        ]);
+        if (!empRes.ok) throw new Error(`Failed to fetch: ${empRes.status}`);
+        const empData = await empRes.json();
+        setEmployees(empData.employees ?? []);
+
+        if (allocRes.ok) {
+          const allocData = await allocRes.json();
+          setAllocations(allocData.allocations ?? []);
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to load employee data");
       } finally {
@@ -128,6 +156,36 @@ export default function OrgPayrollPage() {
     }
     load();
   }, []);
+
+  // --- Allocation Overrides ---
+
+  const allocationMap = useMemo(() => {
+    const map: Record<string, AllocationOverride> = {};
+    for (const a of allocations) {
+      map[`${a.employee_id}:${a.paylocity_company_id}`] = a;
+    }
+    return map;
+  }, [allocations]);
+
+  /** Apply allocation overrides to get effective entity/department per employee */
+  const effectiveEmployees = useMemo(() => {
+    return employees.map((emp) => {
+      const override = allocationMap[`${emp.id}:${emp.companyId}`];
+      if (!override) return emp;
+
+      const entityId = override.allocated_entity_id || emp.operatingEntityId;
+      const entityName = override.allocated_entity_name || emp.operatingEntityName;
+      const entityCode = ENTITY_ID_TO_CODE[entityId] || emp.operatingEntityCode;
+
+      return {
+        ...emp,
+        department: override.department || emp.department,
+        operatingEntityId: entityId,
+        operatingEntityCode: entityCode,
+        operatingEntityName: entityName,
+      };
+    });
+  }, [employees, allocationMap]);
 
   // --- Computed Data ---
 
@@ -145,7 +203,7 @@ export default function OrgPayrollPage() {
       }
     > = {};
 
-    for (const emp of employees) {
+    for (const emp of effectiveEmployees) {
       const key = emp.operatingEntityCode;
       if (!map[key]) {
         map[key] = {
@@ -170,29 +228,29 @@ export default function OrgPayrollPage() {
     }
 
     return Object.values(map).sort((a, b) => b.totalComp - a.totalComp);
-  }, [employees]);
+  }, [effectiveEmployees]);
 
-  const totalHeadcount = employees.length;
-  const totalAnnualComp = employees.reduce((s, e) => s + e.annualComp, 0);
+  const totalHeadcount = effectiveEmployees.length;
+  const totalAnnualComp = effectiveEmployees.reduce((s, e) => s + e.annualComp, 0);
   const totalMonthlyComp = totalAnnualComp / 12;
   const avgComp = totalHeadcount > 0 ? totalAnnualComp / totalHeadcount : 0;
-  const totalAnnualBenefits = employees.reduce((s, e) => s + (e.erBenefits ?? 0), 0);
+  const totalAnnualBenefits = effectiveEmployees.reduce((s, e) => s + (e.erBenefits ?? 0), 0);
 
   // Filter options
   const uniqueEntities = useMemo(
-    () => [...new Set(employees.map((e) => e.operatingEntityCode))].sort(),
-    [employees]
+    () => [...new Set(effectiveEmployees.map((e) => e.operatingEntityCode))].sort(),
+    [effectiveEmployees]
   );
   const uniqueDepts = useMemo(() => {
-    const depts = employees
+    const depts = effectiveEmployees
       .filter((e) => entityFilter === "all" || e.operatingEntityCode === entityFilter)
       .map((e) => e.department);
     return [...new Set(depts)].sort();
-  }, [employees, entityFilter]);
+  }, [effectiveEmployees, entityFilter]);
 
   // Filtered employees
   const filteredEmployees = useMemo(() => {
-    return employees.filter((emp) => {
+    return effectiveEmployees.filter((emp) => {
       if (entityFilter !== "all" && emp.operatingEntityCode !== entityFilter) return false;
       if (deptFilter !== "all" && emp.department !== deptFilter) return false;
       if (search) {
@@ -205,7 +263,7 @@ export default function OrgPayrollPage() {
       }
       return true;
     });
-  }, [employees, entityFilter, deptFilter, search]);
+  }, [effectiveEmployees, entityFilter, deptFilter, search]);
 
   // Chart data
   const barChartData = useMemo(() => {
