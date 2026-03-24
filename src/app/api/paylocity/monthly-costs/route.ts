@@ -295,19 +295,20 @@ export async function POST(request: NextRequest) {
                 const hrs = d.hours ?? 0;
                 const amt = d.amount ?? 0;
 
-                // Earnings
-                if (detTypeLower === "earning" || detTypeLower === "reg" || detTypeLower === "standard") {
-                  switch (code) {
-                    case "REG":
-                      regHrs += hrs; regDollars += amt; break;
-                    case "OT":
-                      otHrs += hrs; otDollars += amt; break;
-                    case "DT":
-                      dtHrs += hrs; dtDollars += amt; break;
-                    case "MEAL":
-                      mealDollars += amt; break;
-                    default:
-                      otherDollars += amt; break;
+                // Earnings — detType varies: Reg, OT, Standard, DT, Earning
+                const isEarning = ["earning", "reg", "standard", "ot", "dt"].includes(detTypeLower);
+                if (isEarning) {
+                  // Classify by detCode first, then fall back to detType
+                  if (code === "REG") {
+                    regHrs += hrs; regDollars += amt;
+                  } else if (code === "OT" || code === "FQOT" || detTypeLower === "ot") {
+                    otHrs += hrs; otDollars += amt;
+                  } else if (code === "DT" || detTypeLower === "dt") {
+                    dtHrs += hrs; dtDollars += amt;
+                  } else if (code === "MEAL") {
+                    mealDollars += amt;
+                  } else {
+                    otherDollars += amt;
                   }
                 }
 
