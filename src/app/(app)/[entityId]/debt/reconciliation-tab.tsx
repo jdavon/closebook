@@ -286,10 +286,27 @@ export function DebtReconciliationTab({ entityId }: DebtReconciliationTabProps) 
       const txnsByInstrMonth: Record<string, Record<string, MonthActuals>> = {};
       const advancesByInstrMonth: Record<string, Record<string, number>> = {};
 
+      // Day-level balance changes for day-weighted interest calc
+      interface DayChange { day: number; amount: number; }
+      const dayChangesByInstrMonth: Record<string, Record<string, DayChange[]>> = {};
+
       for (const txn of (allTxnData ?? []) as { debt_instrument_id: string; transaction_type: string; amount: number; to_principal: number; to_interest: number; effective_date: string }[]) {
         const d = new Date(txn.effective_date);
         const mKey = `${d.getFullYear()}-${d.getMonth() + 1}`;
         const iid = txn.debt_instrument_id;
+
+        // Track day-level balance changes for day-weighted interest
+        let delta = 0;
+        if (txn.transaction_type === "advance") {
+          delta = Math.abs(txn.amount);
+        } else if (principalTxnTypes.includes(txn.transaction_type)) {
+          delta = -Math.abs(txn.to_principal ?? txn.amount);
+        }
+        if (delta !== 0) {
+          if (!dayChangesByInstrMonth[iid]) dayChangesByInstrMonth[iid] = {};
+          if (!dayChangesByInstrMonth[iid][mKey]) dayChangesByInstrMonth[iid][mKey] = [];
+          dayChangesByInstrMonth[iid][mKey].push({ day: d.getDate(), amount: delta });
+        }
 
         if (txn.transaction_type === "advance") {
           if (!advancesByInstrMonth[iid]) advancesByInstrMonth[iid] = {};
@@ -376,11 +393,35 @@ export function DebtReconciliationTab({ entityId }: DebtReconciliationTabProps) 
           const totalDays = new Date(cy, cm, 0).getDate();
           const accrualDays = isFirst ? totalDays - startDay + 1 : totalDays;
           const factor = isFirst ? fullFactor * (accrualDays / totalDays) : fullFactor;
-          const monthInterest = round2(balance * rate * factor);
 
           const isPast = cy < nowY || (cy === nowY && cm < nowM);
           const mKey = `${cy}-${cm}`;
           const advance = advancesByInstrMonth[instr.id]?.[mKey] ?? 0;
+
+          // Day-weighted average balance for mid-month transactions
+          const dayChanges = dayChangesByInstrMonth[instr.id]?.[mKey] ?? [];
+          let monthInterest: number;
+
+          if (dayChanges.length > 0 || (isFirst && startDay > 1)) {
+            const sorted = [...dayChanges].sort((a, b) => a.day - b.day);
+            let runBal = balance;
+            let weightedSum = 0;
+            let prevDay = startDay;
+
+            for (const dc of sorted) {
+              if (dc.day < startDay) continue;
+              const daysAtBal = Math.max(0, dc.day - prevDay);
+              weightedSum += runBal * daysAtBal;
+              runBal = Math.max(0, runBal + dc.amount);
+              prevDay = dc.day;
+            }
+            weightedSum += runBal * (totalDays - prevDay + 1);
+
+            const avgBal = accrualDays > 0 ? weightedSum / accrualDays : 0;
+            monthInterest = round2(avgBal * rate * factor);
+          } else {
+            monthInterest = round2(balance * rate * factor);
+          }
 
           let toInterest = 0;
           let toPrincipal = 0;

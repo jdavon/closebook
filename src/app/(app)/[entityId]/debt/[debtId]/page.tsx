@@ -878,6 +878,26 @@ export default function DebtDetailPage() {
     // Advances (draws) per month
     const monthlyAdvances: Record<string, number> = {};
 
+    // Day-level balance changes for day-weighted interest calculation
+    interface DayChange { day: number; amount: number; }
+    const amortDayChanges: Record<string, DayChange[]> = {};
+    for (const txn of sortedTxns) {
+      const d = new Date(txn.effective_date);
+      const key = `${d.getFullYear()}-${d.getMonth() + 1}`;
+      let delta = 0;
+      if (txn.transaction_type === "advance") {
+        delta = Math.abs(txn.amount);
+      } else if (txn.transaction_type === "principal_payment" || txn.transaction_type === "vehicle_payoff") {
+        delta = -Math.abs(txn.to_principal ?? txn.amount);
+      } else if (txn.transaction_type === "payoff") {
+        delta = -Math.abs(txn.amount);
+      }
+      if (delta !== 0) {
+        if (!amortDayChanges[key]) amortDayChanges[key] = [];
+        amortDayChanges[key].push({ day: d.getDate(), amount: delta });
+      }
+    }
+
     const principalTypes = ["principal_payment", "vehicle_payoff", "payoff"];
     const interestTypes = ["interest_payment"];
 
@@ -945,12 +965,37 @@ export default function DebtDetailPage() {
       const totalDays = new Date(cy, cm, 0).getDate();
       const accrualDays = totalDays - startDay + 1;
       const factor = isFirstPeriod ? fullFactor * (accrualDays / totalDays) : fullFactor;
-      const monthInterest = Math.round(balance * rate * factor * 100) / 100;
 
       const isPast = cy < nowY || (cy === nowY && cm < nowM);
       const isCurrent = cy === nowY && cm === nowM;
       const key = `${cy}-${cm}`;
       const advance = monthlyAdvances[key] ?? 0;
+
+      // Use day-weighted average balance when mid-month transactions exist
+      // (matches the Interest Roll Forward methodology)
+      const dayChanges = amortDayChanges[key] ?? [];
+      let monthInterest: number;
+
+      if (dayChanges.length > 0 || (isFirstPeriod && startDay > 1)) {
+        const sorted = [...dayChanges].sort((a, b) => a.day - b.day);
+        let runBal = balance;
+        let weightedSum = 0;
+        let prevDay = startDay;
+
+        for (const dc of sorted) {
+          if (dc.day < startDay) continue;
+          const daysAtBal = Math.max(0, dc.day - prevDay);
+          weightedSum += runBal * daysAtBal;
+          runBal = Math.max(0, runBal + dc.amount);
+          prevDay = dc.day;
+        }
+        weightedSum += runBal * (totalDays - prevDay + 1);
+
+        const avgBalance = accrualDays > 0 ? weightedSum / accrualDays : 0;
+        monthInterest = Math.round(avgBalance * rate * factor * 100) / 100;
+      } else {
+        monthInterest = Math.round(balance * rate * factor * 100) / 100;
+      }
 
       let payment = 0;
       let toInterest = 0;
