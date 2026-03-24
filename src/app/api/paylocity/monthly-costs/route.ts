@@ -166,8 +166,11 @@ export async function POST(request: NextRequest) {
     for (const client of clients) {
       const companyId = client.companyId;
 
+      // Fetch ALL employees (including terminated) so anyone who was paid
+      // during the year shows up. The hasAnyActual check filters out
+      // employees with zero pay statements.
       const rawEmployees = await client.getEmployees({
-        activeOnly: true,
+        activeOnly: false,
         include: ["info", "position", "payrate", "status"],
       });
 
