@@ -34,6 +34,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 import {
   ArrowLeft,
   Search,
@@ -126,7 +128,8 @@ function timeAgo(dateStr: string): string {
 
 function getCellAmount(
   row: MonthlyCostRow | null,
-  costView: "total" | "wages" | "taxes" | "benefits"
+  costView: "total" | "wages" | "taxes" | "benefits",
+  includeErCosts: boolean
 ): number {
   if (!row) return 0;
   switch (costView) {
@@ -134,7 +137,10 @@ function getCellAmount(
     case "taxes": return row.er_taxes;
     case "benefits": return row.er_benefits;
     case "total":
-    default: return row.total_cost;
+    default:
+      return includeErCosts
+        ? row.total_cost
+        : row.gross_pay;
   }
 }
 
@@ -154,6 +160,7 @@ export default function MonthlyEmployeeCostPage() {
   const [search, setSearch] = useState("");
   const [deptFilter, setDeptFilter] = useState<string>("all");
   const [costView, setCostView] = useState<"total" | "wages" | "taxes" | "benefits">("total");
+  const [includeErCosts, setIncludeErCosts] = useState(true);
 
   const currentEntity = OPERATING_ENTITIES.find((e) => e.id === entityId);
   const years = Array.from({ length: 3 }, (_, i) => currentYear - 2 + i);
@@ -255,9 +262,9 @@ export default function MonthlyEmployeeCostPage() {
   // Monthly column totals
   const monthlyTotals = useMemo(() => {
     return MONTHS.map((_, mi) =>
-      filtered.reduce((sum, emp) => sum + getCellAmount(emp.months[mi], costView), 0)
+      filtered.reduce((sum, emp) => sum + getCellAmount(emp.months[mi], costView, includeErCosts), 0)
     );
-  }, [filtered, costView]);
+  }, [filtered, costView, includeErCosts]);
 
   const grandTotal = monthlyTotals.reduce((s, v) => s + v, 0);
   const avgMonthly = monthlyTotals.filter((v) => v > 0).length > 0
@@ -388,7 +395,9 @@ export default function MonthlyEmployeeCostPage() {
                 <CardContent>
                   <div className="text-2xl font-bold">{formatCompact(avgMonthly)}</div>
                   <p className="text-xs text-muted-foreground">
-                    {costView === "total" ? "Wages + ER taxes + benefits" : costView}
+                    {costView === "total"
+                      ? includeErCosts ? "Wages + ER taxes + benefits" : "Wages only (ER costs excluded)"
+                      : costView}
                   </p>
                 </CardContent>
               </Card>
@@ -455,6 +464,18 @@ export default function MonthlyEmployeeCostPage() {
                       <SelectItem value="benefits">ER Benefits Only</SelectItem>
                     </SelectContent>
                   </Select>
+                  {costView === "total" && (
+                    <div className="flex items-center gap-2">
+                      <Switch
+                        id="include-er"
+                        checked={includeErCosts}
+                        onCheckedChange={setIncludeErCosts}
+                      />
+                      <Label htmlFor="include-er" className="text-sm text-muted-foreground cursor-pointer whitespace-nowrap">
+                        Incl. ER taxes &amp; benefits
+                      </Label>
+                    </div>
+                  )}
                   <span className="text-sm text-muted-foreground">
                     {filtered.length} employee{filtered.length !== 1 ? "s" : ""}
                   </span>
@@ -483,7 +504,7 @@ export default function MonthlyEmployeeCostPage() {
                     <TableBody>
                       {filtered.map((emp) => {
                         const ytd = emp.months.reduce(
-                          (sum, m) => sum + getCellAmount(m, costView),
+                          (sum, m) => sum + getCellAmount(m, costView, includeErCosts),
                           0
                         );
 
@@ -504,7 +525,7 @@ export default function MonthlyEmployeeCostPage() {
                               </Badge>
                             </TableCell>
                             {emp.months.map((m, mi) => {
-                              const amount = getCellAmount(m, costView);
+                              const amount = getCellAmount(m, costView, includeErCosts);
                               const isAccrual = m?.is_accrual ?? false;
 
                               if (!m) {
