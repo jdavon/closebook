@@ -26,6 +26,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Button } from "@/components/ui/button";
 import {
   Users,
   DollarSign,
@@ -33,6 +34,7 @@ import {
   Search,
   TrendingUp,
   Loader2,
+  Calendar,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -312,11 +314,19 @@ export default function OrgPayrollPage() {
   return (
     <div className="space-y-6 p-6">
       {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">Payroll Overview</h1>
-        <p className="text-muted-foreground">
-          Organization-wide headcount, compensation, and cost allocation across all entities.
-        </p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">Payroll Overview</h1>
+          <p className="text-muted-foreground">
+            Organization-wide headcount, compensation, and cost allocation across all entities.
+          </p>
+        </div>
+        <Link href="/payroll/monthly">
+          <Button variant="outline" size="sm">
+            <Calendar className="mr-2 h-4 w-4" />
+            Monthly Cost
+          </Button>
+        </Link>
       </div>
 
       {/* KPI Cards */}
