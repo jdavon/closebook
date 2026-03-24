@@ -20,6 +20,22 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { toast } from "sonner";
@@ -30,9 +46,15 @@ import {
   XCircle,
   AlertTriangle,
   Minus,
+  Calendar,
 } from "lucide-react";
 import { getPeriodLabel } from "@/lib/utils/dates";
 import type { CloseStatus, GateCheckStatus } from "@/lib/types/database";
+
+const MONTH_NAMES = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
 
 interface ClosePeriod {
   id: string;
@@ -111,6 +133,29 @@ export default function ClosePeriodsPage() {
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
 
+  // Year filter
+  const currentYear = new Date().getFullYear();
+  const [selectedYear, setSelectedYear] = useState<string>(String(currentYear));
+  const years = [...new Set(periods.map((p) => p.period_year))].sort((a, b) => b - a);
+  // Ensure current year and previous year are always in the list
+  if (!years.includes(currentYear)) years.unshift(currentYear);
+  if (!years.includes(currentYear - 1)) years.push(currentYear - 1);
+  years.sort((a, b) => b - a);
+
+  // New period dialog
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [newMonth, setNewMonth] = useState(String(new Date().getMonth() + 1));
+  const [newYear, setNewYear] = useState(String(currentYear));
+
+  // Which months already have periods
+  const existingPeriodKeys = new Set(
+    periods.map((p) => `${p.period_year}-${p.period_month}`)
+  );
+
+  const filteredPeriods = selectedYear === "all"
+    ? periods
+    : periods.filter((p) => p.period_year === Number(selectedYear));
+
   const loadPeriods = useCallback(async () => {
     const { data } = await supabase
       .from("close_periods")
@@ -175,23 +220,16 @@ export default function ClosePeriodsPage() {
     loadPeriods();
   }, [loadPeriods]);
 
-  async function handleInitializePeriod() {
-    setCreating(true);
+  async function handleCreatePeriod() {
+    const year = Number(newYear);
+    const month = Number(newMonth);
 
-    // Determine the next period to create
-    const now = new Date();
-    let year = now.getFullYear();
-    let month = now.getMonth() + 1;
-
-    if (periods.length > 0) {
-      const latest = periods[0];
-      month = latest.period_month + 1;
-      year = latest.period_year;
-      if (month > 12) {
-        month = 1;
-        year++;
-      }
+    if (existingPeriodKeys.has(`${year}-${month}`)) {
+      toast.error(`${MONTH_NAMES[month - 1]} ${year} already exists`);
+      return;
     }
+
+    setCreating(true);
 
     try {
       const res = await fetch("/api/close/initialize", {
@@ -215,6 +253,7 @@ export default function ClosePeriodsPage() {
       toast.success(
         `Close period initialized: ${getPeriodLabel(year, month)} (${data.taskCount} tasks)`
       );
+      setDialogOpen(false);
       setCreating(false);
       router.push(`/${entityId}/close/${data.period.id}`);
     } catch {
@@ -222,6 +261,16 @@ export default function ClosePeriodsPage() {
       setCreating(false);
     }
   }
+
+  // Quick summary stats for the selected year
+  const yearPeriods = periods.filter((p) => p.period_year === Number(selectedYear));
+  const closedCount = yearPeriods.filter((p) =>
+    ["closed", "locked", "soft_closed"].includes(p.status)
+  ).length;
+  const openCount = yearPeriods.filter((p) =>
+    ["open", "in_progress", "review"].includes(p.status)
+  ).length;
+  const uninitializedCount = 12 - yearPeriods.length;
 
   return (
     <div className="space-y-6">
@@ -234,28 +283,196 @@ export default function ClosePeriodsPage() {
             Manage month-end close periods and tasks
           </p>
         </div>
-        <Button onClick={handleInitializePeriod} disabled={creating}>
-          <Plus className="mr-2 h-4 w-4" />
-          {creating ? "Creating..." : "Initialize Period"}
-        </Button>
+        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+          <DialogTrigger asChild>
+            <Button>
+              <Plus className="mr-2 h-4 w-4" />
+              Initialize Period
+            </Button>
+          </DialogTrigger>
+          <DialogContent className="sm:max-w-[400px]">
+            <DialogHeader>
+              <DialogTitle>Initialize Close Period</DialogTitle>
+              <DialogDescription>
+                Select the month and year to create a new close period with auto-generated tasks.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="flex gap-3 py-4">
+              <Select value={newMonth} onValueChange={setNewMonth}>
+                <SelectTrigger className="flex-1">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {MONTH_NAMES.map((name, i) => {
+                    const exists = existingPeriodKeys.has(`${newYear}-${i + 1}`);
+                    return (
+                      <SelectItem
+                        key={i}
+                        value={String(i + 1)}
+                        disabled={exists}
+                      >
+                        {name} {exists ? "(exists)" : ""}
+                      </SelectItem>
+                    );
+                  })}
+                </SelectContent>
+              </Select>
+              <Select value={newYear} onValueChange={setNewYear}>
+                <SelectTrigger className="w-[100px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {[currentYear - 1, currentYear, currentYear + 1].map((y) => (
+                    <SelectItem key={y} value={String(y)}>{y}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <DialogFooter>
+              <Button
+                onClick={handleCreatePeriod}
+                disabled={creating || existingPeriodKeys.has(`${newYear}-${newMonth}`)}
+              >
+                {creating ? "Creating..." : "Initialize"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
 
+      {/* Year summary */}
+      {!loading && selectedYear !== "all" && (
+        <div className="grid gap-4 md:grid-cols-4">
+          <Card>
+            <CardContent className="pt-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-muted-foreground">Closed</p>
+                  <p className="text-2xl font-bold">{closedCount}</p>
+                </div>
+                <CheckCircle2 className="h-5 w-5 text-green-500" />
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="pt-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-muted-foreground">In Progress</p>
+                  <p className="text-2xl font-bold">{openCount}</p>
+                </div>
+                <AlertTriangle className="h-5 w-5 text-yellow-500" />
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="pt-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-muted-foreground">Not Initialized</p>
+                  <p className="text-2xl font-bold">{uninitializedCount}</p>
+                </div>
+                <Minus className="h-5 w-5 text-muted-foreground" />
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="pt-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-muted-foreground">Year</p>
+                  <p className="text-2xl font-bold">{selectedYear}</p>
+                </div>
+                <Calendar className="h-5 w-5 text-muted-foreground" />
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* Year filter + period grid */}
       <Card>
         <CardHeader>
-          <CardTitle>Close Periods</CardTitle>
-          <CardDescription>
-            {periods.length} period{periods.length !== 1 ? "s" : ""}
-          </CardDescription>
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle>Close Periods</CardTitle>
+              <CardDescription>
+                {filteredPeriods.length} period{filteredPeriods.length !== 1 ? "s" : ""}
+                {selectedYear !== "all" ? ` in ${selectedYear}` : ""}
+              </CardDescription>
+            </div>
+            <Select value={selectedYear} onValueChange={setSelectedYear}>
+              <SelectTrigger className="w-[120px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Years</SelectItem>
+                {years.map((y) => (
+                  <SelectItem key={y} value={String(y)}>{y}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
         </CardHeader>
         <CardContent>
           {loading ? (
             <p className="text-sm text-muted-foreground">Loading...</p>
-          ) : periods.length === 0 ? (
+          ) : selectedYear !== "all" ? (
+            /* Calendar grid view for a specific year */
+            <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
+              {MONTH_NAMES.map((name, i) => {
+                const month = i + 1;
+                const period = yearPeriods.find((p) => p.period_month === month);
+
+                if (!period) {
+                  return (
+                    <button
+                      key={month}
+                      onClick={() => {
+                        setNewMonth(String(month));
+                        setNewYear(selectedYear);
+                        setDialogOpen(true);
+                      }}
+                      className="rounded-lg border border-dashed p-4 text-center hover:border-primary/50 hover:bg-muted/30 transition-colors cursor-pointer"
+                    >
+                      <p className="text-sm font-medium text-muted-foreground">{name}</p>
+                      <p className="text-xs text-muted-foreground mt-1">Not initialized</p>
+                    </button>
+                  );
+                }
+
+                const counts = taskCounts[period.id];
+                const pct = counts && counts.total > 0
+                  ? Math.round((counts.completed / counts.total) * 100)
+                  : 0;
+
+                return (
+                  <Link key={month} href={`/${entityId}/close/${period.id}`}>
+                    <div className="rounded-lg border p-4 text-center hover:border-primary/50 transition-colors cursor-pointer">
+                      <p className="text-sm font-medium">{name}</p>
+                      <div className="mt-2">
+                        <StatusBadge status={period.status} />
+                      </div>
+                      {counts && (
+                        <div className="mt-2 space-y-1">
+                          <Progress value={pct} className="h-1.5" />
+                          <p className="text-xs text-muted-foreground">
+                            {counts.completed}/{counts.total} ({pct}%)
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  </Link>
+                );
+              })}
+            </div>
+          ) : filteredPeriods.length === 0 ? (
             <p className="text-sm text-muted-foreground">
               No close periods yet. Click &quot;Initialize Period&quot; to create
               your first one.
             </p>
           ) : (
+            /* Table view for all years */
             <Table>
               <TableHeader>
                 <TableRow>
@@ -268,7 +485,7 @@ export default function ClosePeriodsPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {periods.map((period) => {
+                {filteredPeriods.map((period) => {
                   const counts = taskCounts[period.id];
                   const pct =
                     counts && counts.total > 0
