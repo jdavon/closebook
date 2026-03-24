@@ -455,9 +455,11 @@ function round(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
-/** Parse "YYYY-MM-DD" to a Date at midnight local time */
+/** Parse "YYYY-MM-DD" or "YYYY-MM-DDTHH:MM:SS" to a Date at midnight local time */
 function parseDate(dateStr: string): Date {
-  const [y, m, d] = dateStr.split("-").map(Number);
+  // Strip any time portion
+  const datePart = dateStr.includes("T") ? dateStr.split("T")[0] : dateStr;
+  const [y, m, d] = datePart.split("-").map(Number);
   return new Date(y, m - 1, d);
 }
 
