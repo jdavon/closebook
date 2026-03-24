@@ -406,6 +406,28 @@ export async function POST(request: NextRequest) {
       .eq("year", year)
       .lt("synced_at", syncedAt);
 
+    // Grab a sample pay statement for diagnostics
+    let sampleStatement = null;
+    for (const client of clients) {
+      try {
+        const emps = await client.getEmployees({ activeOnly: true, include: ["info"] });
+        if (emps.length > 0) {
+          const stmts = await client.getPayStatementSummary(emps[0].id, year);
+          if (stmts.length > 0) {
+            sampleStatement = {
+              beginDate: stmts[0].beginDate,
+              endDate: stmts[0].endDate,
+              checkDate: stmts[0].checkDate,
+              grossPay: stmts[0].grossPay,
+              beginDateType: typeof stmts[0].beginDate,
+              endDateType: typeof stmts[0].endDate,
+            };
+            break;
+          }
+        }
+      } catch { /* ignore */ }
+    }
+
     return NextResponse.json({
       success: true,
       year,
@@ -418,6 +440,7 @@ export async function POST(request: NextRequest) {
         summaryErrors,
         detailErrors,
         sampleErrors,
+        sampleStatement,
       },
     });
   } catch (err) {
