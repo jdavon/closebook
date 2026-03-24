@@ -195,6 +195,7 @@ export async function POST(request: NextRequest) {
             const costCenterCode = emp.position?.costCenter1 ?? null;
             const jobTitle = emp.info?.jobTitle ?? "";
             const payType = emp.currentPayRate?.payType ?? "Unknown";
+            const isActive = emp.statusType === "A";
 
             // Daily rate for accrual estimates (calendar days)
             const dailyRate = annualComp / 365;
@@ -442,8 +443,8 @@ export async function POST(request: NextRequest) {
               let erTaxes = b.actualErTaxes;
               let isAccrual = false;
 
-              // Only accrue the gap for the CURRENT month — past months are finalized
-              if (isCurrentYearMonth(m) && daysUncovered > 0 && annualComp > 0) {
+              // Only accrue the gap for the CURRENT month, and only for active employees
+              if (isCurrentYearMonth(m) && isActive && daysUncovered > 0 && annualComp > 0) {
                 const accrualGross = dailyRate * daysUncovered;
                 grossPay += accrualGross;
                 isAccrual = daysCovered === 0;
