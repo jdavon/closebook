@@ -8,17 +8,9 @@ import {
   SheetTitle,
   SheetDescription,
 } from "@/components/ui/sheet";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { Loader2, AlertCircle } from "lucide-react";
+import { Loader2, AlertCircle, Calendar, Clock, Banknote } from "lucide-react";
 
 // --- Types ---
 
@@ -98,7 +90,7 @@ function fmt(n: number): string {
 }
 
 function fmtHrs(n: number): string {
-  return n > 0 ? n.toFixed(1) : "---";
+  return n > 0 ? `${n.toFixed(1)}h` : "";
 }
 
 function fmtPct(n: number): string {
@@ -106,8 +98,49 @@ function fmtPct(n: number): string {
 }
 
 function fmtDate(d: string): string {
+  const [, m, day] = d.split("-");
+  return `${m}/${day}`;
+}
+
+function fmtDateFull(d: string): string {
   const [y, m, day] = d.split("-");
   return `${m}/${day}/${y}`;
+}
+
+/** Line item row for consistent formatting */
+function LineItem({
+  label,
+  hours,
+  full,
+  allocated,
+  indent,
+  muted,
+  bold,
+}: {
+  label: string;
+  hours?: string;
+  full?: number;
+  allocated: number;
+  indent?: boolean;
+  muted?: boolean;
+  bold?: boolean;
+}) {
+  return (
+    <div className={`grid grid-cols-[1fr_60px_90px_90px] gap-1 items-center py-1 ${indent ? "pl-4" : ""}`}>
+      <span className={`text-sm ${muted ? "text-muted-foreground" : ""} ${bold ? "font-semibold" : ""}`}>
+        {label}
+      </span>
+      <span className="text-right font-mono text-xs text-muted-foreground">
+        {hours ?? ""}
+      </span>
+      <span className={`text-right font-mono text-sm ${muted ? "text-muted-foreground" : ""}`}>
+        {full !== undefined ? fmt(full) : ""}
+      </span>
+      <span className={`text-right font-mono text-sm ${bold ? "font-semibold" : "font-medium"}`}>
+        {fmt(allocated)}
+      </span>
+    </div>
+  );
 }
 
 // --- Component ---
@@ -147,209 +180,233 @@ export function PaycheckDetailSheet({
       .finally(() => setLoading(false));
   }, [target]);
 
+  const totalCost = data
+    ? data.totalAllocated.grossPay + data.totalAllocated.erTaxes + data.totalAllocated.erBenefits
+    : 0;
+
   return (
     <Sheet open={!!target} onOpenChange={(open) => { if (!open) onClose(); }}>
-      <SheetContent className="sm:max-w-[640px] overflow-y-auto">
-        <SheetHeader>
-          <SheetTitle>
-            {target?.name ?? "Employee"} &mdash; {MONTH_LABELS[target?.month ?? 0]} {target?.year}
-          </SheetTitle>
-          <SheetDescription>
-            Monthly cost breakdown with per-paycheck detail
-          </SheetDescription>
-        </SheetHeader>
+      <SheetContent className="sm:max-w-[600px] overflow-y-auto p-0">
+        {/* Fixed header */}
+        <div className="sticky top-0 z-10 bg-background border-b px-6 pt-6 pb-4">
+          <SheetHeader>
+            <SheetTitle className="text-lg">
+              {target?.name}
+            </SheetTitle>
+            <SheetDescription className="flex items-center gap-3 text-sm">
+              <span>{MONTH_LABELS[target?.month ?? 0]} {target?.year}</span>
+              {data && (
+                <>
+                  <Separator orientation="vertical" className="h-4" />
+                  <span>{data.payType}</span>
+                  <Separator orientation="vertical" className="h-4" />
+                  <span>Annual: {fmt(data.annualComp ?? 0)}</span>
+                </>
+              )}
+            </SheetDescription>
+          </SheetHeader>
+        </div>
 
-        <div className="mt-4 space-y-6">
+        <div className="px-6 pb-6 space-y-5">
           {loading && (
-            <div className="flex items-center justify-center py-12">
+            <div className="flex items-center justify-center py-16">
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
             </div>
           )}
 
           {error && (
-            <div className="flex items-center gap-2 text-destructive text-sm">
-              <AlertCircle className="h-4 w-4" />
+            <div className="flex items-center gap-2 text-destructive text-sm pt-4">
+              <AlertCircle className="h-4 w-4 shrink-0" />
               {error}
             </div>
           )}
 
           {data && !loading && (
             <>
-              {/* Summary */}
-              <div className="grid grid-cols-2 gap-3 text-sm">
-                <div>
-                  <span className="text-muted-foreground">Pay Type</span>
-                  <p className="font-medium">{data.payType}</p>
+              {/* Month Summary Card */}
+              <div className="rounded-lg bg-muted/40 p-4 mt-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                    Month Summary
+                  </h3>
+                  <span className="text-lg font-bold font-mono">{fmt(totalCost)}</span>
                 </div>
-                <div>
-                  <span className="text-muted-foreground">Annual Comp</span>
-                  <p className="font-medium">{fmt(data.annualComp ?? 0)}</p>
-                </div>
-              </div>
 
-              {/* Totals bar */}
-              <div className="rounded-lg border p-4">
-                <h3 className="text-sm font-semibold mb-3">Month Total (Allocated)</h3>
-                <div className="grid grid-cols-2 gap-y-2 gap-x-6 text-sm">
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Regular Time</span>
+                <div className="space-y-1.5">
+                  {/* Earnings */}
+                  <div className="flex justify-between text-sm">
+                    <span>Regular Time</span>
                     <span className="font-mono">{fmt(data.totalAllocated.regularDollars)}</span>
                   </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Overtime</span>
-                    <span className="font-mono">{fmt(data.totalAllocated.overtimeDollars)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Double Time</span>
-                    <span className="font-mono">{fmt(data.totalAllocated.doubletimeDollars)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Meal Premiums</span>
-                    <span className="font-mono">{fmt(data.totalAllocated.mealDollars)}</span>
-                  </div>
+                  {data.totalAllocated.overtimeDollars > 0 && (
+                    <div className="flex justify-between text-sm">
+                      <span>Overtime (1.5x)</span>
+                      <span className="font-mono">{fmt(data.totalAllocated.overtimeDollars)}</span>
+                    </div>
+                  )}
+                  {data.totalAllocated.doubletimeDollars > 0 && (
+                    <div className="flex justify-between text-sm">
+                      <span>Double Time (2x)</span>
+                      <span className="font-mono">{fmt(data.totalAllocated.doubletimeDollars)}</span>
+                    </div>
+                  )}
+                  {data.totalAllocated.mealDollars > 0 && (
+                    <div className="flex justify-between text-sm">
+                      <span>Meal Premiums</span>
+                      <span className="font-mono">{fmt(data.totalAllocated.mealDollars)}</span>
+                    </div>
+                  )}
                   {data.totalAllocated.otherEarningsDollars > 0 && (
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Other Earnings</span>
+                    <div className="flex justify-between text-sm">
+                      <span>Other Earnings</span>
                       <span className="font-mono">{fmt(data.totalAllocated.otherEarningsDollars)}</span>
                     </div>
                   )}
-                  <div className="flex justify-between col-span-2 pt-1 border-t">
-                    <span className="font-medium">Gross Pay</span>
-                    <span className="font-mono font-medium">{fmt(data.totalAllocated.grossPay)}</span>
+
+                  <Separator className="my-1.5" />
+
+                  <div className="flex justify-between text-sm font-medium">
+                    <span>Gross Pay</span>
+                    <span className="font-mono">{fmt(data.totalAllocated.grossPay)}</span>
                   </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">ER Taxes (est.)</span>
+
+                  <div className="flex justify-between text-sm text-muted-foreground">
+                    <span>Employer Taxes (est.)</span>
                     <span className="font-mono">{fmt(data.totalAllocated.erTaxes)}</span>
                   </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">ER Benefits</span>
+                  <div className="flex justify-between text-sm text-muted-foreground">
+                    <span>Employer Benefits</span>
                     <span className="font-mono">{fmt(data.totalAllocated.erBenefits)}</span>
                   </div>
-                  <div className="flex justify-between col-span-2 pt-1 border-t">
-                    <span className="font-semibold">Total Employer Cost</span>
-                    <span className="font-mono font-bold">
-                      {fmt(
-                        data.totalAllocated.grossPay +
-                        data.totalAllocated.erTaxes +
-                        data.totalAllocated.erBenefits
-                      )}
-                    </span>
+
+                  <Separator className="my-1.5" />
+
+                  <div className="flex justify-between text-sm font-bold">
+                    <span>Total Employer Cost</span>
+                    <span className="font-mono">{fmt(totalCost)}</span>
                   </div>
                 </div>
               </div>
 
-              {/* Per-paycheck breakdown */}
+              {/* Paychecks */}
               <div>
-                <h3 className="text-sm font-semibold mb-3">
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3 flex items-center gap-2">
+                  <Banknote className="h-3.5 w-3.5" />
                   Paychecks ({data.paychecks.length})
                 </h3>
 
                 {data.paychecks.length === 0 && (
-                  <p className="text-sm text-muted-foreground">
-                    No paychecks with pay periods overlapping this month.
+                  <p className="text-sm text-muted-foreground py-4 text-center">
+                    No paychecks overlap this month.
                   </p>
                 )}
 
-                <div className="space-y-4">
+                <div className="space-y-3">
                   {data.paychecks.map((pc, idx) => (
-                    <div key={idx} className="rounded-lg border">
-                      {/* Paycheck header */}
-                      <div className="flex items-center justify-between px-4 py-2 bg-muted/50 rounded-t-lg">
-                        <div className="text-sm">
-                          <span className="font-medium">Check: {fmtDate(pc.checkDate)}</span>
-                          <span className="text-muted-foreground ml-2">
-                            Period: {fmtDate(pc.beginDate)} &ndash; {fmtDate(pc.endDate)}
+                    <div key={idx} className="rounded-lg border overflow-hidden">
+                      {/* Header */}
+                      <div className="px-4 py-2.5 bg-muted/50 flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-3 text-sm">
+                          <div className="flex items-center gap-1.5">
+                            <Calendar className="h-3.5 w-3.5 text-muted-foreground" />
+                            <span className="font-medium">{fmtDateFull(pc.checkDate)}</span>
+                          </div>
+                          <span className="text-muted-foreground">
+                            {fmtDate(pc.beginDate)} &ndash; {fmtDate(pc.endDate)}
                           </span>
                         </div>
-                        <Badge variant="outline" className="text-xs">
-                          {pc.daysInMonth}/{pc.payPeriodDays} days = {fmtPct(pc.proRataFraction)}
+                        <Badge variant="secondary" className="text-xs shrink-0">
+                          {pc.daysInMonth}/{pc.payPeriodDays}d &middot; {fmtPct(pc.proRataFraction)}
                         </Badge>
                       </div>
 
-                      {/* Paycheck detail table */}
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead className="text-xs">Category</TableHead>
-                            <TableHead className="text-xs text-right">Hours</TableHead>
-                            <TableHead className="text-xs text-right">Full Amount</TableHead>
-                            <TableHead className="text-xs text-right">Allocated</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          <TableRow>
-                            <TableCell className="text-sm">Regular Time</TableCell>
-                            <TableCell className="text-right font-mono text-sm">{fmtHrs(pc.full.regularHours)}</TableCell>
-                            <TableCell className="text-right font-mono text-sm">{fmt(pc.full.regularDollars)}</TableCell>
-                            <TableCell className="text-right font-mono text-sm font-medium">{fmt(pc.allocated.regularDollars)}</TableCell>
-                          </TableRow>
-                          {(pc.full.overtimeHours > 0 || pc.full.overtimeDollars > 0) && (
-                            <TableRow>
-                              <TableCell className="text-sm">Overtime (1.5x)</TableCell>
-                              <TableCell className="text-right font-mono text-sm">{fmtHrs(pc.full.overtimeHours)}</TableCell>
-                              <TableCell className="text-right font-mono text-sm">{fmt(pc.full.overtimeDollars)}</TableCell>
-                              <TableCell className="text-right font-mono text-sm font-medium">{fmt(pc.allocated.overtimeDollars)}</TableCell>
-                            </TableRow>
-                          )}
-                          {(pc.full.doubletimeHours > 0 || pc.full.doubletimeDollars > 0) && (
-                            <TableRow>
-                              <TableCell className="text-sm">Double Time (2x)</TableCell>
-                              <TableCell className="text-right font-mono text-sm">{fmtHrs(pc.full.doubletimeHours)}</TableCell>
-                              <TableCell className="text-right font-mono text-sm">{fmt(pc.full.doubletimeDollars)}</TableCell>
-                              <TableCell className="text-right font-mono text-sm font-medium">{fmt(pc.allocated.doubletimeDollars)}</TableCell>
-                            </TableRow>
-                          )}
-                          {pc.full.mealDollars > 0 && (
-                            <TableRow>
-                              <TableCell className="text-sm">Meal Premiums</TableCell>
-                              <TableCell className="text-right font-mono text-sm">---</TableCell>
-                              <TableCell className="text-right font-mono text-sm">{fmt(pc.full.mealDollars)}</TableCell>
-                              <TableCell className="text-right font-mono text-sm font-medium">{fmt(pc.allocated.mealDollars)}</TableCell>
-                            </TableRow>
-                          )}
-                          {pc.full.otherEarningsDollars > 0 && (
-                            <TableRow>
-                              <TableCell className="text-sm">Other Earnings</TableCell>
-                              <TableCell className="text-right font-mono text-sm">---</TableCell>
-                              <TableCell className="text-right font-mono text-sm">{fmt(pc.full.otherEarningsDollars)}</TableCell>
-                              <TableCell className="text-right font-mono text-sm font-medium">{fmt(pc.allocated.otherEarningsDollars)}</TableCell>
-                            </TableRow>
-                          )}
-                          {/* Gross subtotal */}
-                          <TableRow className="border-t">
-                            <TableCell className="text-sm font-medium">Gross Pay</TableCell>
-                            <TableCell className="text-right font-mono text-sm">{fmtHrs(pc.full.hours ?? 0)}</TableCell>
-                            <TableCell className="text-right font-mono text-sm">{fmt(pc.full.grossPay)}</TableCell>
-                            <TableCell className="text-right font-mono text-sm font-semibold">{fmt(pc.allocated.grossPay)}</TableCell>
-                          </TableRow>
-                          {/* ER costs */}
-                          <TableRow>
-                            <TableCell className="text-sm text-muted-foreground">ER Taxes (est.)</TableCell>
-                            <TableCell />
-                            <TableCell className="text-right font-mono text-sm text-muted-foreground">{fmt(pc.full.erTaxes)}</TableCell>
-                            <TableCell className="text-right font-mono text-sm">{fmt(pc.allocated.erTaxes)}</TableCell>
-                          </TableRow>
-                          <TableRow>
-                            <TableCell className="text-sm text-muted-foreground">ER Benefits</TableCell>
-                            <TableCell />
-                            <TableCell className="text-right font-mono text-sm text-muted-foreground">{fmt(pc.full.erBenefits)}</TableCell>
-                            <TableCell className="text-right font-mono text-sm">{fmt(pc.allocated.erBenefits)}</TableCell>
-                          </TableRow>
-                          {/* Benefit breakdown */}
-                          {Object.entries(pc.allocated.erBenefitDetail ?? {}).map(([code, amount]) => (
-                            <TableRow key={code}>
-                              <TableCell className="text-xs text-muted-foreground pl-8">
-                                {BENEFIT_LABELS[code] ?? code}
-                              </TableCell>
-                              <TableCell />
-                              <TableCell />
-                              <TableCell className="text-right font-mono text-xs text-muted-foreground">
-                                {fmt(amount)}
-                              </TableCell>
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
+                      {/* Column headers */}
+                      <div className="grid grid-cols-[1fr_60px_90px_90px] gap-1 px-4 py-1.5 border-b bg-muted/20 text-xs text-muted-foreground font-medium">
+                        <span>Category</span>
+                        <span className="text-right">Hours</span>
+                        <span className="text-right">Full</span>
+                        <span className="text-right">Allocated</span>
+                      </div>
+
+                      {/* Rows */}
+                      <div className="px-4 divide-y divide-border/50">
+                        <LineItem
+                          label="Regular Time"
+                          hours={fmtHrs(pc.full.regularHours)}
+                          full={pc.full.regularDollars}
+                          allocated={pc.allocated.regularDollars}
+                        />
+                        {(pc.full.overtimeHours > 0 || pc.full.overtimeDollars > 0) && (
+                          <LineItem
+                            label="Overtime (1.5x)"
+                            hours={fmtHrs(pc.full.overtimeHours)}
+                            full={pc.full.overtimeDollars}
+                            allocated={pc.allocated.overtimeDollars}
+                          />
+                        )}
+                        {(pc.full.doubletimeHours > 0 || pc.full.doubletimeDollars > 0) && (
+                          <LineItem
+                            label="Double Time (2x)"
+                            hours={fmtHrs(pc.full.doubletimeHours)}
+                            full={pc.full.doubletimeDollars}
+                            allocated={pc.allocated.doubletimeDollars}
+                          />
+                        )}
+                        {pc.full.mealDollars > 0 && (
+                          <LineItem
+                            label="Meal Premiums"
+                            full={pc.full.mealDollars}
+                            allocated={pc.allocated.mealDollars}
+                          />
+                        )}
+                        {pc.full.otherEarningsDollars > 0 && (
+                          <LineItem
+                            label="Other Earnings"
+                            full={pc.full.otherEarningsDollars}
+                            allocated={pc.allocated.otherEarningsDollars}
+                          />
+                        )}
+
+                        {/* Gross subtotal */}
+                        <LineItem
+                          label="Gross Pay"
+                          hours={fmtHrs(pc.full.hours ?? 0)}
+                          full={pc.full.grossPay}
+                          allocated={pc.allocated.grossPay}
+                          bold
+                        />
+
+                        {/* ER costs */}
+                        <LineItem
+                          label="Employer Taxes (est.)"
+                          full={pc.full.erTaxes}
+                          allocated={pc.allocated.erTaxes}
+                          muted
+                        />
+                        <LineItem
+                          label="Employer Benefits"
+                          full={pc.full.erBenefits}
+                          allocated={pc.allocated.erBenefits}
+                          muted
+                        />
+                        {Object.entries(pc.allocated.erBenefitDetail ?? {}).map(([code, amount]) => (
+                          <LineItem
+                            key={code}
+                            label={BENEFIT_LABELS[code] ?? code}
+                            allocated={amount}
+                            indent
+                            muted
+                          />
+                        ))}
+                      </div>
+
+                      {/* Paycheck total */}
+                      <div className="px-4 py-2 bg-muted/30 border-t flex justify-between text-sm font-semibold">
+                        <span>Paycheck Total (Allocated)</span>
+                        <span className="font-mono">
+                          {fmt(pc.allocated.grossPay + pc.allocated.erTaxes + pc.allocated.erBenefits)}
+                        </span>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -357,36 +414,38 @@ export function PaycheckDetailSheet({
 
               {/* Accrual section */}
               {data.accrual && (
-                <>
-                  <Separator />
-                  <div className="rounded-lg border border-dashed p-4">
-                    <h3 className="text-sm font-semibold mb-2 flex items-center gap-2">
-                      Accrual Estimate
-                      <Badge variant="outline" className="text-xs font-normal">
-                        {data.accrual.daysUncovered} days uncovered
+                <div>
+                  <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3 flex items-center gap-2">
+                    <Clock className="h-3.5 w-3.5" />
+                    Accrual Estimate
+                  </h3>
+
+                  <div className="rounded-lg border border-dashed p-4 space-y-3">
+                    <div className="flex items-center gap-2">
+                      <Badge variant="outline" className="text-xs">
+                        {data.accrual.daysUncovered} of {data.accrual.daysInMonth} days uncovered
                       </Badge>
-                    </h3>
-                    <p className="text-xs text-muted-foreground mb-3">
-                      {data.accrual.daysUncovered} of {data.accrual.daysInMonth} days in the month
-                      are not covered by paychecks. Estimated at {fmt(data.accrual.dailyRate)}/day
-                      based on annual comp.
-                    </p>
-                    <div className="grid grid-cols-3 gap-4 text-sm">
-                      <div>
-                        <span className="text-muted-foreground">Gross</span>
-                        <p className="font-mono font-medium">{fmt(data.accrual.estimatedGross)}</p>
+                      <span className="text-xs text-muted-foreground">
+                        @ {fmt(data.accrual.dailyRate)}/day
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-3">
+                      <div className="rounded-md bg-muted/40 p-2.5 text-center">
+                        <p className="text-xs text-muted-foreground mb-0.5">Gross</p>
+                        <p className="font-mono font-semibold text-sm">{fmt(data.accrual.estimatedGross)}</p>
                       </div>
-                      <div>
-                        <span className="text-muted-foreground">ER Taxes</span>
-                        <p className="font-mono font-medium">{fmt(data.accrual.estimatedErTaxes)}</p>
+                      <div className="rounded-md bg-muted/40 p-2.5 text-center">
+                        <p className="text-xs text-muted-foreground mb-0.5">ER Taxes</p>
+                        <p className="font-mono font-semibold text-sm">{fmt(data.accrual.estimatedErTaxes)}</p>
                       </div>
-                      <div>
-                        <span className="text-muted-foreground">ER Benefits</span>
-                        <p className="font-mono font-medium">{fmt(data.accrual.estimatedErBenefits)}</p>
+                      <div className="rounded-md bg-muted/40 p-2.5 text-center">
+                        <p className="text-xs text-muted-foreground mb-0.5">ER Benefits</p>
+                        <p className="font-mono font-semibold text-sm">{fmt(data.accrual.estimatedErBenefits)}</p>
                       </div>
                     </div>
                   </div>
-                </>
+                </div>
               )}
             </>
           )}
