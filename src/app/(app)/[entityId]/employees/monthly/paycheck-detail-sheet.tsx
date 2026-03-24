@@ -271,7 +271,7 @@ export function PaycheckDetailSheet({
                   </div>
 
                   <div className="flex justify-between text-sm text-muted-foreground">
-                    <span>Employer Taxes (est.)</span>
+                    <span>Employer Taxes</span>
                     <span className="font-mono">{fmt(data.totalAllocated.erTaxes)}</span>
                   </div>
                   <div className="flex justify-between text-sm text-muted-foreground">
@@ -378,7 +378,7 @@ export function PaycheckDetailSheet({
 
                         {/* ER costs */}
                         <LineItem
-                          label="Employer Taxes (est.)"
+                          label="Employer Taxes"
                           full={pc.full.erTaxes}
                           allocated={pc.allocated.erTaxes}
                           muted

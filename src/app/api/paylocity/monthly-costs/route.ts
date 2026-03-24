@@ -234,17 +234,22 @@ export async function POST(request: NextRequest) {
               actualRegHours: number;
               actualOtHours: number;
               actualBenefits: number;
+              actualErTaxes: number;
               checks: number;
-              daysCovered: number; // calendar days covered by actual pay periods
+              daysCovered: number;
             }
 
             const buckets: Record<number, MonthBucket> = {};
             for (let m = 1; m <= 12; m++) {
               buckets[m] = {
                 actualGross: 0, actualHours: 0, actualRegHours: 0,
-                actualOtHours: 0, actualBenefits: 0, checks: 0, daysCovered: 0,
+                actualOtHours: 0, actualBenefits: 0, actualErTaxes: 0,
+                checks: 0, daysCovered: 0,
               };
             }
+
+            // Track actual ER taxes per checkDate for pro-rating into months
+            const erTaxesByCheck: Record<string, number> = {};
 
             // ── Group detail lines by checkDate for paycheck-level storage ──
 
@@ -279,30 +284,46 @@ export async function POST(request: NextRequest) {
               let dtHrs = 0, dtDollars = 0;
               let mealDollars = 0;
               let otherDollars = 0;
+              let erTaxesActual = 0;
+
+              // Employer tax codes: -R suffix (SS-R, MED-R) and FUTA, CASUI, CAETT
+              const ER_TAX_CODES = new Set(["SS-R", "MED-R", "FUTA", "CASUI", "CAETT"]);
 
               for (const d of checkDetails) {
                 const detTypeLower = (d.detType ?? "").toLowerCase();
-                if (detTypeLower !== "earning") continue;
                 const code = (d.detCode ?? "").toUpperCase();
                 const hrs = d.hours ?? 0;
                 const amt = d.amount ?? 0;
 
-                switch (code) {
-                  case "REG":
-                    regHrs += hrs; regDollars += amt; break;
-                  case "OT":
-                    otHrs += hrs; otDollars += amt; break;
-                  case "DT":
-                    dtHrs += hrs; dtDollars += amt; break;
-                  case "MEAL":
-                    mealDollars += amt; break;
-                  default:
-                    otherDollars += amt; break;
+                // Earnings
+                if (detTypeLower === "earning" || detTypeLower === "reg" || detTypeLower === "standard") {
+                  switch (code) {
+                    case "REG":
+                      regHrs += hrs; regDollars += amt; break;
+                    case "OT":
+                      otHrs += hrs; otDollars += amt; break;
+                    case "DT":
+                      dtHrs += hrs; dtDollars += amt; break;
+                    case "MEAL":
+                      mealDollars += amt; break;
+                    default:
+                      otherDollars += amt; break;
+                  }
+                }
+
+                // Employer taxes (actual from Paylocity)
+                if ((detTypeLower === "fed" || detTypeLower === "sui") && ER_TAX_CODES.has(code)) {
+                  erTaxesActual += amt;
                 }
               }
 
               const erBenefitsCheck = benefitsByCheck[ps.checkDate] ?? 0;
-              const erTaxesEst = round(estimateAnnualERTaxes((ps.grossPay || 0) * 26).total / 26);
+              const erTaxes = erTaxesActual > 0
+                ? round(erTaxesActual)
+                : round(estimateAnnualERTaxes((ps.grossPay || 0) * 26).total / 26);
+
+              // Store for monthly bucket pro-rating
+              erTaxesByCheck[ps.checkDate] = erTaxes;
 
               paycheckDetailRows.push({
                 employee_id: emp.id,
@@ -324,7 +345,7 @@ export async function POST(request: NextRequest) {
                 doubletime_dollars: round(dtDollars),
                 meal_dollars: round(mealDollars),
                 other_earnings_dollars: round(otherDollars),
-                er_taxes_estimated: erTaxesEst,
+                er_taxes_estimated: erTaxes,
                 er_benefits: round(erBenefitsCheck),
                 er_benefit_detail: benefitDetailByCheck[ck] ?? {},
                 detail_lines: checkDetails.map((d) => ({
@@ -375,6 +396,7 @@ export async function POST(request: NextRequest) {
                     buckets[curMonth].actualRegHours += (ps.regularHours || 0) * fraction;
                     buckets[curMonth].actualOtHours += (ps.overtimeHours || 0) * fraction;
                     buckets[curMonth].actualBenefits += checkBenefits * fraction;
+                    buckets[curMonth].actualErTaxes += (erTaxesByCheck[ps.checkDate] ?? 0) * fraction;
                     buckets[curMonth].daysCovered += daysInMonth;
                     buckets[curMonth].checks++;
                   }
@@ -416,6 +438,7 @@ export async function POST(request: NextRequest) {
               let regHours = b.actualRegHours;
               let otHours = b.actualOtHours;
               let benefits = b.actualBenefits;
+              let erTaxes = b.actualErTaxes;
               let isAccrual = false;
 
               // Only accrue the gap for the CURRENT month — past months are finalized
@@ -423,6 +446,8 @@ export async function POST(request: NextRequest) {
                 const accrualGross = dailyRate * daysUncovered;
                 grossPay += accrualGross;
                 isAccrual = daysCovered === 0;
+                // Estimate ER taxes only on the accrued portion
+                erTaxes += accrualGross * 0.0765; // FICA employer rate
                 if (avgMonthlyBenefit > 0) {
                   benefits += avgMonthlyBenefit * (daysUncovered / daysInCalendarMonth);
                 }
@@ -430,7 +455,7 @@ export async function POST(request: NextRequest) {
 
               grossPay = round(grossPay);
               benefits = round(benefits);
-              const erTaxes = round(estimateAnnualERTaxes(grossPay * 12).total / 12);
+              erTaxes = round(erTaxes);
 
               upsertRows.push({
                 employee_id: emp.id,
