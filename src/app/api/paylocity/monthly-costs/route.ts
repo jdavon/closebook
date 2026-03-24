@@ -29,15 +29,18 @@ export async function GET(request: NextRequest) {
     const supabase = getSupabase();
 
     // Fetch monthly costs and allocations in parallel
+    // Use .range() to avoid the default 1000-row Supabase limit
     const [costsResult, allocResult] = await Promise.all([
       supabase
         .from("employee_monthly_costs")
         .select("*")
         .eq("year", year)
-        .order("month", { ascending: true }),
+        .order("month", { ascending: true })
+        .range(0, 4999),
       supabase
         .from("employee_allocations")
-        .select("*"),
+        .select("*")
+        .range(0, 4999),
     ]);
 
     if (costsResult.error) {
