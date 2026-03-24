@@ -1,4 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
+
+// Allow up to 5 minutes for the sync (fetches pay statements for all employees)
+export const maxDuration = 300;
 import { createClient } from "@supabase/supabase-js";
 import { getAllCompanyClients } from "@/lib/paylocity";
 import {
@@ -361,14 +364,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Clear old data for this year before upserting fresh results.
-    // This removes stale accrual rows and employees with no data.
-    await supabase
-      .from("employee_monthly_costs")
-      .delete()
-      .eq("year", year);
-
-    // Upsert in batches of 500
+    // Upsert fresh data in batches of 500
     const upsertBatchSize = 500;
     let upsertedCount = 0;
 
@@ -388,6 +384,14 @@ export async function POST(request: NextRequest) {
       }
       upsertedCount += batch.length;
     }
+
+    // Clean up stale rows: delete any rows for this year that weren't
+    // touched by this sync (employees with no data, old accrual rows, etc.)
+    await supabase
+      .from("employee_monthly_costs")
+      .delete()
+      .eq("year", year)
+      .lt("synced_at", syncedAt);
 
     return NextResponse.json({
       success: true,
