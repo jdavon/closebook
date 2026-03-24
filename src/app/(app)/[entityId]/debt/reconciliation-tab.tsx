@@ -401,15 +401,17 @@ export function DebtReconciliationTab({ entityId }: DebtReconciliationTabProps) 
           // Day-weighted average balance for mid-month transactions
           const dayChanges = dayChangesByInstrMonth[instr.id]?.[mKey] ?? [];
           let monthInterest: number;
+          // Only use instrument start day for the first period; all others start at day 1
+          const effectiveStartDay = isFirst ? startDay : 1;
 
           if (dayChanges.length > 0 || (isFirst && startDay > 1)) {
             const sorted = [...dayChanges].sort((a, b) => a.day - b.day);
             let runBal = balance;
             let weightedSum = 0;
-            let prevDay = startDay;
+            let prevDay = effectiveStartDay;
 
             for (const dc of sorted) {
-              if (dc.day < startDay) continue;
+              if (dc.day < effectiveStartDay) continue;
               const daysAtBal = Math.max(0, dc.day - prevDay);
               weightedSum += runBal * daysAtBal;
               runBal = Math.max(0, runBal + dc.amount);

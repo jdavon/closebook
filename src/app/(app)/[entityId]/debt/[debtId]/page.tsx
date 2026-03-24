@@ -975,15 +975,17 @@ export default function DebtDetailPage() {
       // (matches the Interest Roll Forward methodology)
       const dayChanges = amortDayChanges[key] ?? [];
       let monthInterest: number;
+      // Only use instrument start day for the first period; all others start at day 1
+      const effectiveStartDay = isFirstPeriod ? startDay : 1;
 
       if (dayChanges.length > 0 || (isFirstPeriod && startDay > 1)) {
         const sorted = [...dayChanges].sort((a, b) => a.day - b.day);
         let runBal = balance;
         let weightedSum = 0;
-        let prevDay = startDay;
+        let prevDay = effectiveStartDay;
 
         for (const dc of sorted) {
-          if (dc.day < startDay) continue;
+          if (dc.day < effectiveStartDay) continue;
           const daysAtBal = Math.max(0, dc.day - prevDay);
           weightedSum += runBal * daysAtBal;
           runBal = Math.max(0, runBal + dc.amount);
