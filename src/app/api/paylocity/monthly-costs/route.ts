@@ -200,10 +200,18 @@ export async function POST(request: NextRequest) {
             // Daily rate for accrual estimates (calendar days)
             const dailyRate = annualComp / 365;
 
-            // Fetch pay statements
+            // Fetch pay statements for the target year AND the next year.
+            // Paychecks issued in early Jan of year+1 may cover a Dec pay
+            // period — the Paylocity API only returns them under year+1.
             let summaries: Awaited<ReturnType<typeof client.getPayStatementSummary>> = [];
+            let details: Awaited<ReturnType<typeof client.getPayStatementDetails>> = [];
+
             try {
-              summaries = await client.getPayStatementSummary(emp.id, year);
+              const [s1, s2] = await Promise.all([
+                client.getPayStatementSummary(emp.id, year),
+                client.getPayStatementSummary(emp.id, year + 1).catch(() => []),
+              ]);
+              summaries = [...s1, ...s2];
               totalSummaries += summaries.length;
             } catch (err) {
               summaryErrors++;
@@ -212,9 +220,12 @@ export async function POST(request: NextRequest) {
               }
             }
 
-            let details: Awaited<ReturnType<typeof client.getPayStatementDetails>> = [];
             try {
-              details = await client.getPayStatementDetails(emp.id, year);
+              const [d1, d2] = await Promise.all([
+                client.getPayStatementDetails(emp.id, year),
+                client.getPayStatementDetails(emp.id, year + 1).catch(() => []),
+              ]);
+              details = [...d1, ...d2];
               totalDetails += details.length;
             } catch (err) {
               detailErrors++;
