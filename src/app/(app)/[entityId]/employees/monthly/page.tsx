@@ -44,8 +44,8 @@ import {
   Users,
   TrendingUp,
   RefreshCw,
-  Info,
 } from "lucide-react";
+import { PaycheckDetailSheet } from "./paycheck-detail-sheet";
 
 // --- Constants ---
 
@@ -161,6 +161,13 @@ export default function MonthlyEmployeeCostPage() {
   const [deptFilter, setDeptFilter] = useState<string>("all");
   const [costView, setCostView] = useState<"total" | "wages" | "taxes" | "benefits">("total");
   const [includeErCosts, setIncludeErCosts] = useState(true);
+  const [detailTarget, setDetailTarget] = useState<{
+    employeeId: string;
+    companyId: string;
+    year: number;
+    month: number;
+    name: string;
+  } | null>(null);
 
   const currentEntity = OPERATING_ENTITIES.find((e) => e.id === entityId);
   const years = Array.from({ length: 3 }, (_, i) => currentYear - 2 + i);
@@ -546,37 +553,44 @@ export default function MonthlyEmployeeCostPage() {
                                     isAccrual ? "text-muted-foreground italic" : ""
                                   }`}
                                 >
-                                  {isAccrual ? (
-                                    <Tooltip>
-                                      <TooltipTrigger asChild>
-                                        <span className="cursor-help border-b border-dashed border-muted-foreground">
-                                          {formatCurrency(amount)}
-                                        </span>
-                                      </TooltipTrigger>
-                                      <TooltipContent side="top" className="text-xs">
-                                        Accrued estimate — no paycheck data yet
-                                      </TooltipContent>
-                                    </Tooltip>
-                                  ) : (
-                                    <Tooltip>
-                                      <TooltipTrigger asChild>
-                                        <span>
-                                          {formatCurrency(amount)}
-                                        </span>
-                                      </TooltipTrigger>
-                                      <TooltipContent side="top" className="text-xs max-w-[200px]">
-                                        <div className="space-y-0.5">
-                                          <div>Gross: {formatCurrency(m.gross_pay)}</div>
-                                          <div>ER Taxes: {formatCurrency(m.er_taxes)}</div>
-                                          <div>ER Benefits: {formatCurrency(m.er_benefits)}</div>
-                                          {m.hours_worked > 0 && (
-                                            <div>{m.hours_worked}h ({m.regular_hours}reg + {m.overtime_hours}OT)</div>
-                                          )}
-                                          <div>{m.check_count} paycheck{m.check_count !== 1 ? "s" : ""}</div>
-                                        </div>
-                                      </TooltipContent>
-                                    </Tooltip>
-                                  )}
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <button
+                                        onClick={() =>
+                                          setDetailTarget({
+                                            employeeId: emp.employeeId,
+                                            companyId: emp.companyId,
+                                            year: selectedYear,
+                                            month: mi + 1,
+                                            name: emp.name,
+                                          })
+                                        }
+                                        className={`hover:underline cursor-pointer ${
+                                          isAccrual ? "border-b border-dashed border-muted-foreground" : ""
+                                        }`}
+                                      >
+                                        {formatCurrency(amount)}
+                                      </button>
+                                    </TooltipTrigger>
+                                    <TooltipContent side="top" className="text-xs max-w-[200px]">
+                                      <div className="space-y-0.5">
+                                        {isAccrual ? (
+                                          <div>Accrued estimate — click for detail</div>
+                                        ) : (
+                                          <>
+                                            <div>Gross: {formatCurrency(m.gross_pay)}</div>
+                                            <div>ER Taxes: {formatCurrency(m.er_taxes)}</div>
+                                            <div>ER Benefits: {formatCurrency(m.er_benefits)}</div>
+                                            {m.hours_worked > 0 && (
+                                              <div>{m.hours_worked}h ({m.regular_hours}reg + {m.overtime_hours}OT)</div>
+                                            )}
+                                            <div>{m.check_count} paycheck{m.check_count !== 1 ? "s" : ""}</div>
+                                            <div className="text-muted-foreground pt-0.5">Click for detail</div>
+                                          </>
+                                        )}
+                                      </div>
+                                    </TooltipContent>
+                                  </Tooltip>
                                 </TableCell>
                               );
                             })}
@@ -621,6 +635,11 @@ export default function MonthlyEmployeeCostPage() {
             </Card>
           </>
         )}
+        {/* Paycheck detail sheet */}
+        <PaycheckDetailSheet
+          target={detailTarget}
+          onClose={() => setDetailTarget(null)}
+        />
       </div>
     </TooltipProvider>
   );

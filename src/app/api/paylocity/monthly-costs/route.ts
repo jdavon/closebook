@@ -156,6 +156,9 @@ export async function POST(request: NextRequest) {
       updated_at: string;
     }[] = [];
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const paycheckDetailRows: any[] = [];
+
     let totalEmployees = 0;
     let totalSummaries = 0;
     let totalDetails = 0;
@@ -243,16 +246,93 @@ export async function POST(request: NextRequest) {
               };
             }
 
-            // Build benefit amounts per checkDate for pro-rating
+            // ── Group detail lines by checkDate for paycheck-level storage ──
+
+            const detailsByCheck: Record<string, typeof details> = {};
             const benefitsByCheck: Record<string, number> = {};
+            const benefitDetailByCheck: Record<string, Record<string, number>> = {};
+
             for (const d of details) {
+              const ck = stripTime(d.checkDate);
+              if (!detailsByCheck[ck]) detailsByCheck[ck] = [];
+              detailsByCheck[ck].push(d);
+
               const detTypeLower = (d.detType ?? "").toLowerCase();
               if (detTypeLower === "memo" || detTypeLower === "memoermatch") {
                 const amount = d.amount ?? 0;
-                if (amount > 0 && d.checkDate) {
+                if (amount > 0) {
                   benefitsByCheck[d.checkDate] = (benefitsByCheck[d.checkDate] ?? 0) + amount;
+                  if (!benefitDetailByCheck[ck]) benefitDetailByCheck[ck] = {};
+                  const code = d.detCode ?? "OTHER";
+                  benefitDetailByCheck[ck][code] = (benefitDetailByCheck[ck][code] ?? 0) + amount;
                 }
               }
+            }
+
+            // Build per-paycheck detail rows
+            for (const ps of summaries) {
+              const ck = stripTime(ps.checkDate);
+              const checkDetails = detailsByCheck[ck] ?? [];
+
+              let regHrs = 0, regDollars = 0;
+              let otHrs = 0, otDollars = 0;
+              let dtHrs = 0, dtDollars = 0;
+              let mealDollars = 0;
+              let otherDollars = 0;
+
+              for (const d of checkDetails) {
+                const detTypeLower = (d.detType ?? "").toLowerCase();
+                if (detTypeLower !== "earning") continue;
+                const code = (d.detCode ?? "").toUpperCase();
+                const hrs = d.hours ?? 0;
+                const amt = d.amount ?? 0;
+
+                switch (code) {
+                  case "REG":
+                    regHrs += hrs; regDollars += amt; break;
+                  case "OT":
+                    otHrs += hrs; otDollars += amt; break;
+                  case "DT":
+                    dtHrs += hrs; dtDollars += amt; break;
+                  case "MEAL":
+                    mealDollars += amt; break;
+                  default:
+                    otherDollars += amt; break;
+                }
+              }
+
+              const erBenefitsCheck = benefitsByCheck[ps.checkDate] ?? 0;
+              const erTaxesEst = round(estimateAnnualERTaxes((ps.grossPay || 0) * 26).total / 26);
+
+              paycheckDetailRows.push({
+                employee_id: emp.id,
+                paylocity_company_id: companyId,
+                employee_name: displayName,
+                year,
+                check_date: ck,
+                begin_date: stripTime(ps.beginDate || ps.checkDate),
+                end_date: stripTime(ps.endDate || ps.checkDate),
+                transaction_number: String(ps.transactionNumber ?? ck),
+                gross_pay: round(ps.grossPay || 0),
+                net_pay: round(ps.netPay || 0),
+                hours: round(ps.hours || 0),
+                regular_hours: round(regHrs),
+                regular_dollars: round(regDollars),
+                overtime_hours: round(otHrs),
+                overtime_dollars: round(otDollars),
+                doubletime_hours: round(dtHrs),
+                doubletime_dollars: round(dtDollars),
+                meal_dollars: round(mealDollars),
+                other_earnings_dollars: round(otherDollars),
+                er_taxes_estimated: erTaxesEst,
+                er_benefits: round(erBenefitsCheck),
+                er_benefit_detail: benefitDetailByCheck[ck] ?? {},
+                detail_lines: checkDetails.map((d) => ({
+                  detType: d.detType, detCode: d.detCode,
+                  amount: d.amount, hours: d.hours, rate: d.rate,
+                })),
+                synced_at: syncedAt,
+              });
             }
 
             for (const ps of summaries) {
@@ -401,13 +481,33 @@ export async function POST(request: NextRequest) {
       upsertedCount += batch.length;
     }
 
-    // Clean up stale rows: delete any rows for this year that weren't
-    // touched by this sync (employees with no data, old accrual rows, etc.)
-    await supabase
-      .from("employee_monthly_costs")
-      .delete()
-      .eq("year", year)
-      .lt("synced_at", syncedAt);
+    // Upsert paycheck details in batches
+    for (let i = 0; i < paycheckDetailRows.length; i += upsertBatchSize) {
+      const batch = paycheckDetailRows.slice(i, i + upsertBatchSize);
+      const { error } = await supabase
+        .from("employee_paycheck_details")
+        .upsert(batch, {
+          onConflict: "employee_id,paylocity_company_id,year,check_date,transaction_number",
+        });
+      if (error) {
+        // Non-fatal — monthly data is already saved
+        console.error("Paycheck detail upsert error:", error.message);
+      }
+    }
+
+    // Clean up stale rows for both tables
+    await Promise.all([
+      supabase
+        .from("employee_monthly_costs")
+        .delete()
+        .eq("year", year)
+        .lt("synced_at", syncedAt),
+      supabase
+        .from("employee_paycheck_details")
+        .delete()
+        .eq("year", year)
+        .lt("synced_at", syncedAt),
+    ]);
 
     // Grab a sample pay statement for diagnostics
     let sampleStatement = null;
@@ -456,6 +556,11 @@ export async function POST(request: NextRequest) {
 
 function round(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+/** Strip time portion from ISO date string */
+function stripTime(dateStr: string): string {
+  return dateStr.includes("T") ? dateStr.split("T")[0] : dateStr;
 }
 
 /** Parse "YYYY-MM-DD" or "YYYY-MM-DDTHH:MM:SS" to a Date at midnight local time */
