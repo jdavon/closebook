@@ -186,6 +186,18 @@ export async function POST(request: NextRequest) {
               // Silent fail
             }
 
+            // Build checkDate → pay period month lookup from summaries.
+            // Use endDate (pay period end) to determine the month the cost
+            // belongs to, NOT checkDate (when the check was issued). A check
+            // dated Jan 5 may cover a Dec 16-31 pay period.
+            const checkDateToMonth: Record<string, number> = {};
+            for (const ps of summaries) {
+              const periodMonth = ps.endDate
+                ? parseInt(ps.endDate.split("-")[1], 10)
+                : parseInt(ps.checkDate.split("-")[1], 10);
+              checkDateToMonth[ps.checkDate] = periodMonth;
+            }
+
             // Extract benefit costs per month from details
             const benefitsByMonth: Record<number, number> = {};
             for (const d of details) {
@@ -193,20 +205,22 @@ export async function POST(request: NextRequest) {
               if (detTypeLower === "memo" || detTypeLower === "memoermatch") {
                 const amount = d.amount ?? 0;
                 if (amount > 0 && d.checkDate) {
-                  const m = parseInt(d.checkDate.split("-")[1], 10);
+                  const m = checkDateToMonth[d.checkDate]
+                    ?? parseInt(d.checkDate.split("-")[1], 10);
                   benefitsByMonth[m] = (benefitsByMonth[m] ?? 0) + amount;
                 }
               }
             }
 
-            // Group pay summaries by month
+            // Group pay summaries by pay period month (not check date)
             const byMonth: Record<
               number,
               { gross: number; hours: number; regHours: number; otHours: number; checks: number }
             > = {};
 
             for (const ps of summaries) {
-              const m = parseInt(ps.checkDate.split("-")[1], 10);
+              const m = checkDateToMonth[ps.checkDate]
+                ?? parseInt(ps.checkDate.split("-")[1], 10);
               if (!byMonth[m]) {
                 byMonth[m] = { gross: 0, hours: 0, regHours: 0, otHours: 0, checks: 0 };
               }
