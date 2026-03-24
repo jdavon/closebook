@@ -182,7 +182,9 @@ export function DebtReconciliationTab({ entityId }: DebtReconciliationTabProps) 
     const instrIds = instruments.map((i) => i.id);
 
     // Fetch ALL transactions for these instruments up through end of selected period
-    const periodEnd = `${periodYear}-${String(periodMonth).padStart(2, "0")}-31`;
+    // Use actual last day of month (not hardcoded 31, which is invalid for Feb/Apr/Jun/Sep/Nov)
+    const lastDay = new Date(periodYear, periodMonth, 0).getDate();
+    const periodEnd = `${periodYear}-${String(periodMonth).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
     let txnsByInstrument: Record<string, { transaction_type: string; amount: number; to_principal: number }[]> = {};
 
     if (instrIds.length > 0) {
@@ -193,7 +195,8 @@ export function DebtReconciliationTab({ entityId }: DebtReconciliationTabProps) 
         .in("debt_instrument_id", instrIds)
         .lte("effective_date", periodEnd)
         .order("effective_date", { ascending: true })
-        .order("created_at", { ascending: true });
+        .order("created_at", { ascending: true })
+        .limit(5000);
 
       for (const txn of (txnData ?? []) as { debt_instrument_id: string; transaction_type: string; amount: number; to_principal: number }[]) {
         if (!txnsByInstrument[txn.debt_instrument_id]) txnsByInstrument[txn.debt_instrument_id] = [];
@@ -272,7 +275,8 @@ export function DebtReconciliationTab({ entityId }: DebtReconciliationTabProps) 
         .in("debt_instrument_id", instrIds)
         .lte("effective_date", periodEnd)
         .order("effective_date", { ascending: true })
-        .order("created_at", { ascending: true });
+        .order("created_at", { ascending: true })
+        .limit(5000);
 
       // Group transactions by instrument → month
       const principalTxnTypes = ["principal_payment", "vehicle_payoff", "payoff"];
