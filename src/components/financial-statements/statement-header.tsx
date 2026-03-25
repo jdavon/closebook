@@ -1,7 +1,19 @@
 "use client";
 
+import Image from "next/image";
 import { getStatementPeriodDescription } from "./format-utils";
 import type { Granularity } from "./types";
+
+/** Map company names (lowercased) to logo paths */
+const ENTITY_LOGOS: Record<string, string> = {
+  "silverco enterprises": "/logos/silverco.svg",
+  "versatile studios": "/logos/versatile-studios.svg",
+};
+
+function getLogoForEntity(companyName: string): string | null {
+  const key = companyName.toLowerCase().trim();
+  return ENTITY_LOGOS[key] ?? null;
+}
 
 interface StatementHeaderProps {
   companyName: string;
@@ -32,11 +44,26 @@ export function StatementHeader({
     granularity
   );
 
+  const logo = getLogoForEntity(companyName);
+
   return (
     <div className="stmt-header text-center py-4 space-y-0.5">
-      <div className="text-sm font-bold uppercase tracking-wide">
-        {companyName}
-      </div>
+      {logo ? (
+        <div className="flex justify-center py-1">
+          <Image
+            src={logo}
+            alt={companyName}
+            width={160}
+            height={28}
+            className="h-7 w-auto object-contain"
+            priority
+          />
+        </div>
+      ) : (
+        <div className="text-sm font-bold uppercase tracking-wide">
+          {companyName}
+        </div>
+      )}
       <div className="text-sm font-bold uppercase tracking-wide">
         {statementTitle}
       </div>

@@ -225,6 +225,11 @@
   height: 1rem;
 }
 
+/* Larger separator — extra breathing room (e.g. between operating margin and non-operating items) */
+.stmt-separator-lg td {
+  height: 1.75rem;
+}
+
 /* Fixed-layout variant for entity breakdown / multi-column tables */
 .stmt-table-fixed {
   table-layout: fixed;
@@ -411,6 +416,9 @@
   /* Separator rows */
   .stmt-separator td {
     height: 3pt !important;
+  }
+  .stmt-separator-lg td {
+    height: 6pt !important;
   }
 
   /* Alternating row stripe */

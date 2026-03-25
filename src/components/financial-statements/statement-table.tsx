@@ -348,6 +348,10 @@ export function StatementTable({
                     ? "stmt-margin-row"
                     : "";
 
+              // Extra spacing after operating margin % to visually separate
+              // operating results from non-operating items below the line
+              const addExtraGap = section.id === "operating_margin_pct";
+
               return (
                 <tbody key={section.id}>
                   <tr className={rowClass}>
@@ -361,6 +365,11 @@ export function StatementTable({
                     {renderPeriodCells(line, "computed")}
                     {showYoY && renderYoYCells(line)}
                   </tr>
+                  {addExtraGap && (
+                    <tr className="stmt-separator-lg">
+                      <td colSpan={totalCols}></td>
+                    </tr>
+                  )}
                 </tbody>
               );
             }
