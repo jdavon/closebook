@@ -4,10 +4,12 @@ import Image from "next/image";
 import { getStatementPeriodDescription } from "./format-utils";
 import type { Granularity } from "./types";
 
-/** Map company names (lowercased) to logo paths */
+/** Map company/reporting entity names (lowercased) to logo paths */
 const ENTITY_LOGOS: Record<string, string> = {
   "silverco enterprises": "/logos/silverco.svg",
+  "avon": "/logos/silverco.svg",
   "versatile studios": "/logos/versatile-studios.svg",
+  "versatile": "/logos/versatile-studios.svg",
 };
 
 function getLogoForEntity(companyName: string): string | null {
