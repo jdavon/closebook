@@ -106,6 +106,7 @@ export function DebtReconciliationTab({ entityId }: DebtReconciliationTabProps) 
     Record<string, ReconciliationRecord>
   >({});
   const [unlinkedInstruments, setUnlinkedInstruments] = useState<InstrumentSummary[]>([]);
+  const [yearSchedule, setYearSchedule] = useState<Record<string, boolean | null>>({});
 
   // Account picker state
   const [addingToGroup, setAddingToGroup] = useState<string | null>(null);
@@ -501,6 +502,19 @@ export function DebtReconciliationTab({ entityId }: DebtReconciliationTabProps) 
     setReconciliations(reconMap);
     setNotes(notesMap);
 
+    // 6. Fetch year-wide reconciliation status for schedule overview
+    const { data: yearReconData } = await supabase
+      .from("debt_reconciliations")
+      .select("period_month, gl_account_group, is_reconciled")
+      .eq("entity_id", entityId)
+      .eq("period_year", periodYear);
+
+    const scheduleMap: Record<string, boolean | null> = {};
+    for (const r of (yearReconData ?? []) as { period_month: number; gl_account_group: string; is_reconciled: boolean }[]) {
+      scheduleMap[`${r.period_month}_${r.gl_account_group}`] = r.is_reconciled;
+    }
+    setYearSchedule(scheduleMap);
+
     setLoading(false);
   }, [supabase, entityId, periodYear, periodMonth]);
 
@@ -643,6 +657,61 @@ export function DebtReconciliationTab({ entityId }: DebtReconciliationTabProps) 
         <p className="text-sm text-muted-foreground">Loading reconciliation data...</p>
       ) : (
         <div className="space-y-6">
+          {/* Year-at-a-Glance Reconciliation Schedule */}
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-lg">
+                {periodYear} Reconciliation Schedule
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-[120px]">Month</TableHead>
+                    {DEBT_GL_ACCOUNT_GROUPS.map((group) => (
+                      <TableHead key={group.key} className="text-center">
+                        {group.displayName}
+                      </TableHead>
+                    ))}
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {MONTHS.map((monthName, idx) => {
+                    const month = idx + 1;
+                    const isSelected = month === periodMonth;
+                    return (
+                      <TableRow
+                        key={month}
+                        className={`cursor-pointer hover:bg-muted/50 ${
+                          isSelected ? "bg-muted" : ""
+                        }`}
+                        onClick={() => setPeriodMonth(month)}
+                      >
+                        <TableCell className="font-medium text-sm">
+                          {monthName}
+                        </TableCell>
+                        {DEBT_GL_ACCOUNT_GROUPS.map((group) => {
+                          const key = `${month}_${group.key}`;
+                          const status = yearSchedule[key];
+                          return (
+                            <TableCell key={group.key} className="text-center">
+                              {status === true ? (
+                                <CheckCircle2 className="h-5 w-5 text-green-600 inline-block" />
+                              ) : status === false ? (
+                                <X className="h-5 w-5 text-red-500 inline-block" />
+                              ) : null}
+                            </TableCell>
+                          );
+                        })}
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {DEBT_GL_ACCOUNT_GROUPS.map((group) => {
               const glBal = glBalances[group.key] ?? 0;
