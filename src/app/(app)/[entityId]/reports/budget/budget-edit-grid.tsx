@@ -317,6 +317,12 @@ export function BudgetEditGrid({
     other_income: "net_income",
   };
 
+  // Display titles for sections that have empty titles in config
+  const sectionDisplayTitles: Record<string, string> = {
+    other_expense: "Other Expense",
+    other_income: "Other Income",
+  };
+
   return (
     <div>
       {/* Toolbar */}
@@ -387,22 +393,28 @@ export function BudgetEditGrid({
             const sectionRows = groupedSections[config.id] ?? [];
             const subtotal = sectionTotals[config.id];
 
-            // Skip sections with no rows and no title to show
-            if (sectionRows.length === 0 && !config.title) return null;
-
             const computedId = computedAfterSection[config.id];
             const comp = computedId
               ? computedLines.find((c) => c.id === computedId)
               : null;
 
+            // Use display title (fallback to config title or mapped name)
+            const displayTitle =
+              config.title || sectionDisplayTitles[config.id] || "";
+
+            // Skip sections with no rows, no computed line, and no display title
+            if (sectionRows.length === 0 && !comp && !displayTitle) {
+              return null;
+            }
+
             return (
               <tbody key={config.id}>
                 {/* Section header */}
-                {config.title && (
+                {displayTitle && (
                   <>
                     <tr className="stmt-section-header">
                       <td colSpan={15}>
-                        <span className="font-bold">{config.title}</span>
+                        <span className="font-bold">{displayTitle}</span>
                       </td>
                     </tr>
                     <tr className="stmt-separator">
@@ -465,9 +477,7 @@ export function BudgetEditGrid({
                 {sectionRows.length > 0 && subtotal && (
                   <tr className="stmt-subtotal">
                     <td>
-                      {config.title
-                        ? `Total ${config.title.charAt(0)}${config.title.slice(1).toLowerCase()}`
-                        : "Subtotal"}
+                      Total {displayTitle.charAt(0).toLowerCase()}{displayTitle.slice(1)}
                     </td>
                     {MONTHS.map((m) => (
                       <td key={m}>
@@ -482,9 +492,11 @@ export function BudgetEditGrid({
                 )}
 
                 {/* Separator after section */}
-                <tr className="stmt-separator">
-                  <td colSpan={15}></td>
-                </tr>
+                {sectionRows.length > 0 && (
+                  <tr className="stmt-separator">
+                    <td colSpan={15}></td>
+                  </tr>
+                )}
 
                 {/* Computed line (Gross Margin, Operating Margin, Net Income) */}
                 {comp && (
