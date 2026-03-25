@@ -28,6 +28,12 @@ import {
 } from "@/components/ui/collapsible";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
   CheckCircle2,
   AlertTriangle,
   ChevronDown,
@@ -106,7 +112,7 @@ export function DebtReconciliationTab({ entityId }: DebtReconciliationTabProps) 
     Record<string, ReconciliationRecord>
   >({});
   const [unlinkedInstruments, setUnlinkedInstruments] = useState<InstrumentSummary[]>([]);
-  const [yearSchedule, setYearSchedule] = useState<Record<string, "reconciled" | "pending" | null>>({});
+  const [yearSchedule, setYearSchedule] = useState<Record<string, "reconciled" | "stale" | "pending" | null>>({});
 
   // Account picker state
   const [addingToGroup, setAddingToGroup] = useState<string | null>(null);
@@ -505,43 +511,59 @@ export function DebtReconciliationTab({ entityId }: DebtReconciliationTabProps) 
     // 6. Fetch year-wide reconciliation status + GL data for schedule overview
     const { data: yearReconData } = await supabase
       .from("debt_reconciliations")
-      .select("period_month, gl_account_group, is_reconciled")
+      .select("period_month, gl_account_group, is_reconciled, gl_balance")
       .eq("entity_id", entityId)
       .eq("period_year", periodYear);
 
-    const yearReconByKey: Record<string, boolean> = {};
-    for (const r of (yearReconData ?? []) as { period_month: number; gl_account_group: string; is_reconciled: boolean }[]) {
-      yearReconByKey[`${r.period_month}_${r.gl_account_group}`] = r.is_reconciled;
+    interface YearReconEntry { is_reconciled: boolean; gl_balance: number | null; }
+    const yearReconByKey: Record<string, YearReconEntry> = {};
+    for (const r of (yearReconData ?? []) as { period_month: number; gl_account_group: string; is_reconciled: boolean; gl_balance: number | null }[]) {
+      yearReconByKey[`${r.period_month}_${r.gl_account_group}`] = {
+        is_reconciled: r.is_reconciled,
+        gl_balance: r.gl_balance,
+      };
     }
 
-    // Fetch GL balances for all months of the year to detect which months have data
+    // Fetch GL balances for all months of the year to detect data and check for stale reconciliations
+    const yearGlTotals: Record<string, number> = {};
     const yearHasData: Record<string, boolean> = {};
     if (allAccountIds.length > 0) {
       const { data: yearGlData } = await supabase
         .from("gl_balances")
-        .select("account_id, period_month")
+        .select("account_id, period_month, ending_balance")
         .eq("entity_id", entityId)
         .eq("period_year", periodYear)
         .in("account_id", allAccountIds);
 
-      for (const row of (yearGlData ?? []) as { account_id: string; period_month: number }[]) {
+      for (const row of (yearGlData ?? []) as { account_id: string; period_month: number; ending_balance: number }[]) {
         for (const group of DEBT_GL_ACCOUNT_GROUPS) {
           const groupAcctIds = mapped[group.key]?.map((m) => m.account_id) ?? [];
           if (groupAcctIds.includes(row.account_id)) {
-            yearHasData[`${row.period_month}_${group.key}`] = true;
+            const key = `${row.period_month}_${group.key}`;
+            yearHasData[key] = true;
+            yearGlTotals[key] = (yearGlTotals[key] ?? 0) + Math.abs(Number(row.ending_balance ?? 0));
           }
         }
       }
     }
 
-    // Build schedule: reconciled > pending (has data) > blank (no data)
-    const scheduleMap: Record<string, "reconciled" | "pending" | null> = {};
+    // Build schedule: reconciled / stale / pending / blank
+    const scheduleMap: Record<string, "reconciled" | "stale" | "pending" | null> = {};
     for (let m = 1; m <= 12; m++) {
       for (const group of DEBT_GL_ACCOUNT_GROUPS) {
         const key = `${m}_${group.key}`;
-        if (yearReconByKey[key] === true) {
-          scheduleMap[key] = "reconciled";
-        } else if (yearHasData[key] || yearReconByKey[key] === false) {
+        const recon = yearReconByKey[key];
+
+        if (recon?.is_reconciled) {
+          // Check if GL balance has changed since reconciliation was recorded
+          const storedGl = recon.gl_balance ?? 0;
+          const currentGl = yearGlTotals[key] ?? 0;
+          if (Math.abs(storedGl - currentGl) > 0.01) {
+            scheduleMap[key] = "stale";
+          } else {
+            scheduleMap[key] = "reconciled";
+          }
+        } else if (yearHasData[key] || recon?.is_reconciled === false) {
           scheduleMap[key] = "pending";
         }
         // else: no data → leave undefined (blank)
@@ -699,50 +721,61 @@ export function DebtReconciliationTab({ entityId }: DebtReconciliationTabProps) 
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-[120px]">Month</TableHead>
-                    {DEBT_GL_ACCOUNT_GROUPS.map((group) => (
-                      <TableHead key={group.key} className="text-center">
-                        {group.displayName}
-                      </TableHead>
-                    ))}
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {MONTHS.map((monthName, idx) => {
-                    const month = idx + 1;
-                    const isSelected = month === periodMonth;
-                    return (
-                      <TableRow
-                        key={month}
-                        className={`cursor-pointer hover:bg-muted/50 ${
-                          isSelected ? "bg-muted" : ""
-                        }`}
-                        onClick={() => setPeriodMonth(month)}
-                      >
-                        <TableCell className="font-medium text-sm">
-                          {monthName}
-                        </TableCell>
-                        {DEBT_GL_ACCOUNT_GROUPS.map((group) => {
-                          const key = `${month}_${group.key}`;
-                          const status = yearSchedule[key];
-                          return (
-                            <TableCell key={group.key} className="text-center">
-                              {status === "reconciled" ? (
-                                <CheckCircle2 className="h-5 w-5 text-green-600 inline-block" />
-                              ) : status === "pending" ? (
-                                <X className="h-5 w-5 text-red-500 inline-block" />
-                              ) : null}
-                            </TableCell>
-                          );
-                        })}
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
+              <TooltipProvider>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-[120px]">Month</TableHead>
+                      {DEBT_GL_ACCOUNT_GROUPS.map((group) => (
+                        <TableHead key={group.key} className="text-center">
+                          {group.displayName}
+                        </TableHead>
+                      ))}
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {MONTHS.map((monthName, idx) => {
+                      const month = idx + 1;
+                      const isSelected = month === periodMonth;
+                      return (
+                        <TableRow
+                          key={month}
+                          className={`cursor-pointer hover:bg-muted/50 ${
+                            isSelected ? "bg-muted" : ""
+                          }`}
+                          onClick={() => setPeriodMonth(month)}
+                        >
+                          <TableCell className="font-medium text-sm">
+                            {monthName}
+                          </TableCell>
+                          {DEBT_GL_ACCOUNT_GROUPS.map((group) => {
+                            const key = `${month}_${group.key}`;
+                            const status = yearSchedule[key];
+                            return (
+                              <TableCell key={group.key} className="text-center">
+                                {status === "reconciled" ? (
+                                  <CheckCircle2 className="h-5 w-5 text-green-600 inline-block" />
+                                ) : status === "stale" ? (
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <AlertTriangle className="h-5 w-5 text-amber-500 inline-block" />
+                                    </TooltipTrigger>
+                                    <TooltipContent side="top" className="max-w-[240px]">
+                                      GL balance has changed since this was reconciled. Click to review and re-reconcile.
+                                    </TooltipContent>
+                                  </Tooltip>
+                                ) : status === "pending" ? (
+                                  <X className="h-5 w-5 text-red-500 inline-block" />
+                                ) : null}
+                              </TableCell>
+                            );
+                          })}
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </TooltipProvider>
             </CardContent>
           </Card>
 
@@ -753,13 +786,15 @@ export function DebtReconciliationTab({ entityId }: DebtReconciliationTabProps) 
               const variance = glBal - subBal;
               const recon = reconciliations[group.key];
               const isReconciled = recon?.is_reconciled ?? false;
+              const isStale = isReconciled && recon?.gl_balance != null
+                && Math.abs((recon.gl_balance ?? 0) - glBal) > 0.01;
               const instrumentList = subledgerBalances[group.key]?.instruments ?? [];
               const isExpanded = expandedGroups.has(group.key);
               const groupMappings = mappedAccounts[group.key] ?? [];
               const isAdding = addingToGroup === group.key;
 
               return (
-                <Card key={group.key}>
+                <Card key={group.key} className={isStale ? "border-amber-400" : ""}>
                   <CardHeader className="pb-3">
                     <div className="flex items-center justify-between">
                       <div>
@@ -768,7 +803,12 @@ export function DebtReconciliationTab({ entityId }: DebtReconciliationTabProps) 
                           {group.description}
                         </p>
                       </div>
-                      {isReconciled ? (
+                      {isStale ? (
+                        <Badge className="bg-amber-100 text-amber-800 hover:bg-amber-100">
+                          <AlertTriangle className="mr-1 h-3.5 w-3.5" />
+                          Balance Changed
+                        </Badge>
+                      ) : isReconciled ? (
                         <Badge className="bg-green-100 text-green-800 hover:bg-green-100">
                           <CheckCircle2 className="mr-1 h-3.5 w-3.5" />
                           Reconciled
@@ -784,6 +824,12 @@ export function DebtReconciliationTab({ entityId }: DebtReconciliationTabProps) 
                         </Badge>
                       )}
                     </div>
+                    {isStale && (
+                      <p className="text-sm text-amber-700 mt-2">
+                        The GL balance has changed since this was marked reconciled.
+                        Please review and re-reconcile.
+                      </p>
+                    )}
                   </CardHeader>
                   <CardContent className="space-y-4">
                     {/* Mapped GL Accounts */}
