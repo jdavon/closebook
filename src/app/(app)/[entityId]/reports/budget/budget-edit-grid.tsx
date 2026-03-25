@@ -477,7 +477,7 @@ export function BudgetEditGrid({
                 {sectionRows.length > 0 && subtotal && (
                   <tr className="stmt-subtotal">
                     <td>
-                      Total {displayTitle.charAt(0).toLowerCase()}{displayTitle.slice(1)}
+                      Total {displayTitle}
                     </td>
                     {MONTHS.map((m) => (
                       <td key={m}>
