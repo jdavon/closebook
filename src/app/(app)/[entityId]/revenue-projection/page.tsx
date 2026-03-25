@@ -31,7 +31,15 @@ import {
   BookOpen,
   ChevronDown,
   ChevronRight,
+  Lightbulb,
+  Activity,
+  Save,
+  ArrowUpRight,
+  ArrowDownRight,
+  Minus,
+  Calendar,
 } from "lucide-react";
+import { toast } from "sonner";
 import { formatCurrency } from "@/lib/utils/dates";
 import {
   EQUIPMENT_TYPE_LABELS,
@@ -60,6 +68,21 @@ import {
   Cell,
   ReferenceLine,
 } from "recharts";
+
+// ─── Snapshot Row Type ──────────────────────────────────────────────────────
+
+interface SnapshotRow {
+  id: string;
+  entity_id: string;
+  period_year: number;
+  period_month: number;
+  section_id: string;
+  projected_amount: number;
+  snapshot_date: string;
+  source: string;
+  created_by: string;
+  created_at: string;
+}
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -314,6 +337,68 @@ export default function RevenueProjectionPage() {
     });
   }, [filteredInvoices, dateMode, invoiceMonthFilter]);
 
+  // Snapshot / Trends state
+  const [snapshots, setSnapshots] = useState<SnapshotRow[]>([]);
+  const [snapshotsLoading, setSnapshotsLoading] = useState(false);
+  const [savingSnapshot, setSavingSnapshot] = useState(false);
+
+  const fetchSnapshots = useCallback(async () => {
+    setSnapshotsLoading(true);
+    try {
+      const now = new Date();
+      const res = await fetch(
+        `/api/revenue-projections/snapshot?entityId=${entityId}&year=${now.getFullYear()}&month=${now.getMonth() + 1}`
+      );
+      if (res.ok) {
+        const json = await res.json();
+        setSnapshots(json.snapshots ?? []);
+      }
+    } catch {
+      // non-fatal
+    } finally {
+      setSnapshotsLoading(false);
+    }
+  }, [entityId]);
+
+  const saveSnapshot = useCallback(async () => {
+    if (!data) return;
+    setSavingSnapshot(true);
+    try {
+      const now = new Date();
+      const res = await fetch("/api/revenue-projections/snapshot", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          entityId,
+          periodYear: now.getFullYear(),
+          periodMonth: now.getMonth() + 1,
+          projections: [
+            { sectionId: "revenue", amount: data.currentMonthProjected },
+            { sectionId: "pipeline", amount: data.pipelineValue },
+            { sectionId: "ytd", amount: data.ytdRevenue },
+          ],
+          source: "manual",
+        }),
+      });
+      if (res.ok) {
+        toast.success("Snapshot saved for today");
+        fetchSnapshots();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        toast.error(err.error || "Failed to save snapshot");
+      }
+    } catch {
+      toast.error("Failed to save snapshot");
+    } finally {
+      setSavingSnapshot(false);
+    }
+  }, [data, entityId, fetchSnapshots]);
+
+  // Fetch snapshots on mount
+  useEffect(() => {
+    fetchSnapshots();
+  }, [fetchSnapshots]);
+
   const [expandedCustomers, setExpandedCustomers] = useState<Set<string>>(new Set());
 
   // Reset expanded state when filter changes
@@ -425,6 +510,19 @@ export default function RevenueProjectionPage() {
             </button>
           </div>
           <Button
+            onClick={saveSnapshot}
+            variant="outline"
+            size="sm"
+            disabled={savingSnapshot || !data}
+          >
+            {savingSnapshot ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <Save className="mr-2 h-4 w-4" />
+            )}
+            Save Snapshot
+          </Button>
+          <Button
             onClick={() => fetchData()}
             variant="outline"
             size="sm"
@@ -480,6 +578,14 @@ export default function RevenueProjectionPage() {
           </TabsTrigger>
           <TabsTrigger value="quotes">
             Quotes ({data.pipelineQuotes.length})
+          </TabsTrigger>
+          <TabsTrigger value="insights">
+            <Lightbulb className="mr-1.5 h-3.5 w-3.5" />
+            Insights
+          </TabsTrigger>
+          <TabsTrigger value="trends">
+            <Activity className="mr-1.5 h-3.5 w-3.5" />
+            Trends
           </TabsTrigger>
           <TabsTrigger value="accruals">
             <BookOpen className="mr-1.5 h-3.5 w-3.5" />
@@ -1060,6 +1166,23 @@ export default function RevenueProjectionPage() {
               )}
             </CardContent>
           </Card>
+        </TabsContent>
+
+        {/* Insights Tab */}
+        <TabsContent value="insights" className="space-y-6">
+          <InsightsPanel data={data} />
+        </TabsContent>
+
+        {/* Trends Tab */}
+        <TabsContent value="trends" className="space-y-6">
+          <TrendsPanel
+            snapshots={snapshots}
+            loading={snapshotsLoading}
+            onRefresh={fetchSnapshots}
+            onSaveSnapshot={saveSnapshot}
+            saving={savingSnapshot}
+            currentProjected={data.currentMonthProjected}
+          />
         </TabsContent>
 
         {/* Accruals Tab — JE Schedule (always uses invoice_date data) */}
@@ -1646,5 +1769,515 @@ function KPICard({
         <p className="text-muted-foreground text-xs">{description}</p>
       </CardContent>
     </Card>
+  );
+}
+
+// ─── Insights Panel ─────────────────────────────────────────────────────────
+
+function InsightsPanel({ data }: { data: RevenueProjectionResponse }) {
+  const insights = useMemo(() => {
+    const now = new Date();
+    const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+
+    // Month-over-month growth
+    const sortedMonths = [...data.monthlyData]
+      .filter((m) => m.closed > 0)
+      .sort((a, b) => a.month.localeCompare(b.month));
+    const lastTwo = sortedMonths.slice(-2);
+    let momGrowth: number | null = null;
+    let momPrior = 0;
+    let momCurrent = 0;
+    if (lastTwo.length === 2 && lastTwo[0].closed > 0) {
+      momPrior = lastTwo[0].closed;
+      momCurrent = lastTwo[1].closed;
+      momGrowth = ((momCurrent - momPrior) / momPrior) * 100;
+    }
+
+    // Top customers by revenue
+    const customerRevenue = new Map<string, number>();
+    for (const inv of data.closedInvoices) {
+      const key = inv.customer || "Unknown";
+      customerRevenue.set(key, (customerRevenue.get(key) ?? 0) + inv.subTotal);
+    }
+    const topCustomers = Array.from(customerRevenue.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5);
+    const totalInvoiceRevenue = data.closedInvoices.reduce((s, i) => s + i.subTotal, 0);
+
+    // Revenue concentration — top customer %
+    const topCustomerPct =
+      topCustomers.length > 0 && totalInvoiceRevenue > 0
+        ? (topCustomers[0][1] / totalInvoiceRevenue) * 100
+        : 0;
+
+    // Annualized run rate from current month projected
+    const annualRunRate = data.currentMonthProjected * 12;
+
+    // Days remaining in month
+    const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+    const daysElapsed = now.getDate();
+    const daysRemaining = daysInMonth - daysElapsed;
+
+    // Daily run rate this month
+    const dailyRate = daysElapsed > 0 ? data.currentMonthActual / daysElapsed : 0;
+    const projectedAtCurrentPace = dailyRate * daysInMonth;
+
+    // Pipeline conversion — if all pipeline converts
+    const pipelineUpsidePct =
+      data.currentMonthActual > 0
+        ? (data.pipelineValue / data.currentMonthActual) * 100
+        : 0;
+
+    // Best month in last 12
+    const bestMonth = sortedMonths.reduce(
+      (best, m) => (m.closed > best.closed ? m : best),
+      sortedMonths[0] ?? { month: "", label: "N/A", closed: 0 },
+    );
+
+    // Average monthly revenue
+    const avgMonthly =
+      sortedMonths.length > 0
+        ? sortedMonths.reduce((s, m) => s + m.closed, 0) / sortedMonths.length
+        : 0;
+
+    // Current month vs average
+    const vsAvgPct =
+      avgMonthly > 0
+        ? ((data.currentMonthActual - avgMonthly) / avgMonthly) * 100
+        : 0;
+
+    // Equipment type with highest revenue
+    const topEquipment = data.equipmentBreakdown.length > 0
+      ? data.equipmentBreakdown.reduce((best, e) => (e.amount > best.amount ? e : best), data.equipmentBreakdown[0])
+      : null;
+
+    return {
+      momGrowth,
+      momPrior,
+      momCurrent,
+      topCustomers,
+      totalInvoiceRevenue,
+      topCustomerPct,
+      annualRunRate,
+      daysRemaining,
+      daysInMonth,
+      daysElapsed,
+      dailyRate,
+      projectedAtCurrentPace,
+      pipelineUpsidePct,
+      bestMonth,
+      avgMonthly,
+      vsAvgPct,
+      topEquipment,
+      currentMonthKey,
+    };
+  }, [data]);
+
+  const TrendIcon = ({ value }: { value: number }) => {
+    if (value > 0) return <ArrowUpRight className="h-4 w-4 text-emerald-600" />;
+    if (value < 0) return <ArrowDownRight className="h-4 w-4 text-rose-600" />;
+    return <Minus className="h-4 w-4 text-gray-400" />;
+  };
+
+  return (
+    <>
+      {/* Key Metrics Row */}
+      <div className="grid gap-4 md:grid-cols-3">
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium flex items-center gap-2">
+              Month-over-Month Growth
+              <TrendIcon value={insights.momGrowth ?? 0} />
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {insights.momGrowth !== null ? (
+              <>
+                <div className={`text-2xl font-bold ${insights.momGrowth >= 0 ? "text-emerald-700" : "text-rose-700"}`}>
+                  {insights.momGrowth >= 0 ? "+" : ""}{insights.momGrowth.toFixed(1)}%
+                </div>
+                <p className="text-muted-foreground text-xs mt-1">
+                  {formatCurrency(insights.momPrior)} → {formatCurrency(insights.momCurrent)}
+                </p>
+              </>
+            ) : (
+              <p className="text-muted-foreground text-sm">Need 2+ months of data</p>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium">Annualized Run Rate</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{formatCurrency(insights.annualRunRate)}</div>
+            <p className="text-muted-foreground text-xs mt-1">
+              Based on {formatCurrency(data.currentMonthProjected)}/mo projected
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium flex items-center gap-2">
+              Pacing This Month
+              <TrendIcon value={insights.vsAvgPct} />
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{formatCurrency(insights.projectedAtCurrentPace)}</div>
+            <p className="text-muted-foreground text-xs mt-1">
+              {formatCurrency(insights.dailyRate)}/day &middot; {insights.daysElapsed}d elapsed, {insights.daysRemaining}d remaining
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Detailed Insights */}
+      <div className="grid gap-4 md:grid-cols-2">
+        {/* Top Customers */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm font-medium">Top Customers by Revenue</CardTitle>
+            <CardDescription>Invoiced revenue concentration</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-3">
+              {insights.topCustomers.map(([customer, revenue], i) => {
+                const pct = insights.totalInvoiceRevenue > 0 ? (revenue / insights.totalInvoiceRevenue) * 100 : 0;
+                return (
+                  <div key={customer}>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-sm font-medium truncate max-w-[200px]">
+                        {i + 1}. {customer}
+                      </span>
+                      <span className="text-sm font-semibold tabular-nums">{formatCurrency(revenue)}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="h-2 flex-1 rounded-full bg-gray-100 overflow-hidden">
+                        <div
+                          className="h-full rounded-full bg-blue-500"
+                          style={{ width: `${Math.min(pct, 100)}%` }}
+                        />
+                      </div>
+                      <span className="text-xs text-muted-foreground w-12 text-right tabular-nums">{pct.toFixed(1)}%</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            {insights.topCustomerPct > 40 && (
+              <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                <strong>Concentration risk:</strong> Top customer accounts for {insights.topCustomerPct.toFixed(0)}% of revenue
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Key Metrics */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm font-medium">Performance Summary</CardTitle>
+            <CardDescription>Key revenue indicators</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-muted-foreground">Current Month vs. Average</span>
+                <span className={`text-sm font-semibold ${insights.vsAvgPct >= 0 ? "text-emerald-700" : "text-rose-700"}`}>
+                  {insights.vsAvgPct >= 0 ? "+" : ""}{insights.vsAvgPct.toFixed(1)}%
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-muted-foreground">Monthly Average (trailing)</span>
+                <span className="text-sm font-semibold tabular-nums">{formatCurrency(insights.avgMonthly)}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-muted-foreground">Best Month</span>
+                <span className="text-sm font-semibold tabular-nums">
+                  {insights.bestMonth.label} — {formatCurrency(insights.bestMonth.closed)}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-muted-foreground">Pipeline Upside</span>
+                <span className="text-sm font-semibold tabular-nums">
+                  {formatCurrency(data.pipelineValue)} ({insights.pipelineUpsidePct.toFixed(0)}% of actual)
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-muted-foreground">Quote Opportunities</span>
+                <span className="text-sm font-semibold tabular-nums">
+                  {formatCurrency(data.quoteOpportunities)} ({data.pipelineQuotes.length} quotes)
+                </span>
+              </div>
+              {insights.topEquipment && (
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-muted-foreground">Top Equipment Category</span>
+                  <span className="text-sm font-semibold">
+                    {insights.topEquipment.label} ({insights.topEquipment.percentage.toFixed(0)}%)
+                  </span>
+                </div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Pipeline Highlights */}
+      {data.pipelineOrders.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm font-medium">Largest Pipeline Deals</CardTitle>
+            <CardDescription>Top open orders by value</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Order #</TableHead>
+                  <TableHead>Customer</TableHead>
+                  <TableHead>Description</TableHead>
+                  <TableHead className="text-right">Value</TableHead>
+                  <TableHead>Status</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {[...data.pipelineOrders]
+                  .sort((a, b) => b.total - a.total)
+                  .slice(0, 5)
+                  .map((order) => (
+                    <TableRow key={order.orderId}>
+                      <TableCell className="font-medium">{order.orderNumber}</TableCell>
+                      <TableCell>{order.customer}</TableCell>
+                      <TableCell className="max-w-[250px] truncate">{order.description}</TableCell>
+                      <TableCell className="text-right font-semibold tabular-nums">
+                        {formatCurrency(order.total)}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="outline">{order.status}</Badge>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      )}
+    </>
+  );
+}
+
+// ─── Trends Panel ───────────────────────────────────────────────────────────
+
+function TrendsPanel({
+  snapshots,
+  loading,
+  onRefresh,
+  onSaveSnapshot,
+  saving,
+  currentProjected,
+}: {
+  snapshots: SnapshotRow[];
+  loading: boolean;
+  onRefresh: () => void;
+  onSaveSnapshot: () => void;
+  saving: boolean;
+  currentProjected: number;
+}) {
+  // Group snapshots by date, summing revenue section
+  const chartData = useMemo(() => {
+    const byDate = new Map<string, { revenue: number; pipeline: number; ytd: number }>();
+    for (const s of snapshots) {
+      if (!byDate.has(s.snapshot_date)) {
+        byDate.set(s.snapshot_date, { revenue: 0, pipeline: 0, ytd: 0 });
+      }
+      const entry = byDate.get(s.snapshot_date)!;
+      if (s.section_id === "revenue") entry.revenue = Number(s.projected_amount);
+      else if (s.section_id === "pipeline") entry.pipeline = Number(s.projected_amount);
+      else if (s.section_id === "ytd") entry.ytd = Number(s.projected_amount);
+    }
+
+    return Array.from(byDate.entries())
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([date, values]) => ({
+        date,
+        label: new Date(date + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+        ...values,
+      }));
+  }, [snapshots]);
+
+  // Calculate day-over-day changes
+  const changes = useMemo(() => {
+    if (chartData.length < 2) return [];
+    return chartData.slice(1).map((cur, i) => {
+      const prev = chartData[i];
+      const delta = cur.revenue - prev.revenue;
+      const pct = prev.revenue !== 0 ? (delta / prev.revenue) * 100 : 0;
+      return { ...cur, delta, pct, prevRevenue: prev.revenue };
+    });
+  }, [chartData]);
+
+  const now = new Date();
+  const monthLabel = now.toLocaleDateString("en-US", { month: "long", year: "numeric" });
+
+  if (loading) {
+    return (
+      <Card>
+        <CardContent className="pt-6">
+          <div className="flex items-center justify-center py-12">
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            <span className="ml-2 text-muted-foreground">Loading trend data...</span>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <>
+      {/* Trend Chart */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle>Projection Trend — {monthLabel}</CardTitle>
+              <CardDescription>
+                How the projected revenue for this month has changed day over day
+              </CardDescription>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button onClick={onSaveSnapshot} variant="outline" size="sm" disabled={saving}>
+                {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+                Save Today
+              </Button>
+              <Button onClick={onRefresh} variant="ghost" size="sm">
+                <RefreshCw className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {chartData.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-12 text-center">
+              <Calendar className="h-10 w-10 text-muted-foreground mb-3" />
+              <p className="text-muted-foreground text-sm">No snapshots yet for {monthLabel}.</p>
+              <p className="text-muted-foreground text-xs mt-1">
+                Click &quot;Save Today&quot; to capture today&apos;s projection ({formatCurrency(currentProjected)}) and start tracking.
+              </p>
+            </div>
+          ) : (
+            <ResponsiveContainer width="100%" height={350}>
+              <ComposedChart data={chartData} margin={{ top: 10, right: 30, left: 10, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                <XAxis dataKey="label" className="text-xs" tick={{ fontSize: 12 }} />
+                <YAxis tickFormatter={formatCompact} className="text-xs" tick={{ fontSize: 12 }} />
+                <RechartsTooltip
+                  content={({ active, payload, label }) => {
+                    if (!active || !payload?.length) return null;
+                    return (
+                      <div className="rounded-lg border bg-white px-3 py-2 shadow-lg text-sm" style={{ zIndex: 50 }}>
+                        <p className="font-semibold text-gray-900 mb-1.5">{label}</p>
+                        {payload.map((entry) => (
+                          <div key={entry.dataKey as string} className="flex items-center justify-between gap-6">
+                            <span className="text-gray-500 capitalize">{entry.dataKey as string}</span>
+                            <span className="font-medium tabular-nums">{formatCurrency(entry.value as number)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  }}
+                  allowEscapeViewBox={{ x: true, y: true }}
+                  wrapperStyle={{ zIndex: 50, pointerEvents: "none" }}
+                />
+                <Legend />
+                <Bar dataKey="revenue" name="Projected Revenue" fill="#2563eb" radius={[3, 3, 0, 0]} />
+                <Line dataKey="pipeline" name="Pipeline" stroke="#16a34a" strokeWidth={2} dot={{ r: 3 }} />
+              </ComposedChart>
+            </ResponsiveContainer>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Day-over-Day Changes Table */}
+      {changes.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm font-medium">Daily Changes</CardTitle>
+            <CardDescription>Day-over-day projection movement</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Date</TableHead>
+                  <TableHead className="text-right">Previous</TableHead>
+                  <TableHead className="text-right">Current</TableHead>
+                  <TableHead className="text-right">Change</TableHead>
+                  <TableHead className="text-right">% Change</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {[...changes].reverse().map((row) => (
+                  <TableRow key={row.date}>
+                    <TableCell className="font-medium">{row.label}</TableCell>
+                    <TableCell className="text-right tabular-nums text-muted-foreground">
+                      {formatCurrency(row.prevRevenue)}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums font-medium">
+                      {formatCurrency(row.revenue)}
+                    </TableCell>
+                    <TableCell className={`text-right tabular-nums font-medium ${row.delta > 0 ? "text-emerald-700" : row.delta < 0 ? "text-rose-700" : ""}`}>
+                      {row.delta > 0 ? "+" : ""}{formatCurrency(row.delta)}
+                    </TableCell>
+                    <TableCell className={`text-right tabular-nums ${row.pct > 0 ? "text-emerald-700" : row.pct < 0 ? "text-rose-700" : ""}`}>
+                      {row.pct > 0 ? "+" : ""}{row.pct.toFixed(1)}%
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* All Snapshots */}
+      {chartData.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm font-medium">Snapshot History</CardTitle>
+            <CardDescription>All saved snapshots for {monthLabel}</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Date</TableHead>
+                  <TableHead className="text-right">Projected Revenue</TableHead>
+                  <TableHead className="text-right">Pipeline</TableHead>
+                  <TableHead className="text-right">YTD Revenue</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {[...chartData].reverse().map((row) => (
+                  <TableRow key={row.date}>
+                    <TableCell className="font-medium">{row.label}</TableCell>
+                    <TableCell className="text-right tabular-nums font-semibold">
+                      {row.revenue > 0 ? formatCurrency(row.revenue) : "—"}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {row.pipeline > 0 ? formatCurrency(row.pipeline) : "—"}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {row.ytd > 0 ? formatCurrency(row.ytd) : "—"}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      )}
+    </>
   );
 }

@@ -5,6 +5,60 @@ import { createAdminClient } from "@/lib/supabase/admin";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyClient = any;
 
+// GET — fetch historical snapshots for an entity/period (powers the Trends chart)
+export async function GET(request: Request) {
+  try {
+    const supabase = await createClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    const { searchParams } = new URL(request.url);
+    const entityId = searchParams.get("entityId");
+    const year = searchParams.get("year");
+    const month = searchParams.get("month");
+
+    if (!entityId) {
+      return NextResponse.json(
+        { error: "entityId is required" },
+        { status: 400 }
+      );
+    }
+
+    const admin: AnyClient = createAdminClient();
+
+    let query = admin
+      .from("revenue_projection_snapshots")
+      .select("*")
+      .eq("entity_id", entityId)
+      .order("snapshot_date", { ascending: true });
+
+    if (year && month) {
+      query = query
+        .eq("period_year", Number(year))
+        .eq("period_month", Number(month));
+    }
+
+    const { data: snapshots, error } = await query;
+
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+
+    return NextResponse.json({ snapshots: snapshots ?? [] });
+  } catch (err) {
+    console.error("GET /api/revenue-projections/snapshot error:", err);
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Internal server error" },
+      { status: 500 }
+    );
+  }
+}
+
 // POST — store a daily run-rate snapshot
 // Can be called by the external tool, a cron job, or manually
 export async function POST(request: Request) {
