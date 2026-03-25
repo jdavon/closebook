@@ -202,6 +202,22 @@ export async function GET(request: Request) {
     }
   }
 
+  // Take RentalWorks revenue snapshot (Versatile Studios)
+  let rwSnapshotResult: Record<string, unknown> | null = null;
+  try {
+    const rwResp = await fetch(`${baseUrl}/api/rw-revenue/snapshot`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-cron-secret": cronSecret,
+      },
+      body: JSON.stringify({}),
+    });
+    rwSnapshotResult = await rwResp.json();
+  } catch {
+    // RW snapshot failure should not block the sync summary
+  }
+
   // Summary stats
   const totalSyncs = results.reduce((sum, r) => sum + r.months.length, 0);
   const successfulSyncs = results.reduce(
@@ -227,5 +243,6 @@ export async function GET(request: Request) {
     changedPeriods,
     totalRecords,
     results,
+    rwRevenueSnapshot: rwSnapshotResult,
   });
 }

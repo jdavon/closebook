@@ -4763,6 +4763,111 @@ export type Database = {
         }
         Relationships: []
       }
+      rw_revenue_snapshots: {
+        Row: {
+          id: string
+          entity_id: string
+          snapshot_date: string
+          ytd_revenue: number
+          current_month_actual: number
+          current_month_projected: number
+          pipeline_value: number
+          quote_opportunities: number
+          pipeline_order_count: number
+          pipeline_quote_count: number
+          closed_invoice_count: number
+          full_payload: Json
+          date_mode: string
+          data_as_of: string
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          entity_id: string
+          snapshot_date?: string
+          ytd_revenue: number
+          current_month_actual: number
+          current_month_projected: number
+          pipeline_value: number
+          quote_opportunities: number
+          pipeline_order_count?: number
+          pipeline_quote_count?: number
+          closed_invoice_count?: number
+          full_payload: Json
+          date_mode?: string
+          data_as_of: string
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          entity_id?: string
+          snapshot_date?: string
+          ytd_revenue?: number
+          current_month_actual?: number
+          current_month_projected?: number
+          pipeline_value?: number
+          quote_opportunities?: number
+          pipeline_order_count?: number
+          pipeline_quote_count?: number
+          closed_invoice_count?: number
+          full_payload?: Json
+          date_mode?: string
+          data_as_of?: string
+          created_at?: string
+        }
+        Relationships: []
+      }
+      rw_revenue_snapshot_months: {
+        Row: {
+          id: string
+          snapshot_id: string
+          entity_id: string
+          snapshot_date: string
+          month_key: string
+          month_label: string
+          closed: number
+          pending: number
+          pipeline: number
+          forecast: number | null
+          billed: number
+          earned: number
+          accrued: number
+          deferred: number
+        }
+        Insert: {
+          id?: string
+          snapshot_id: string
+          entity_id: string
+          snapshot_date: string
+          month_key: string
+          month_label: string
+          closed?: number
+          pending?: number
+          pipeline?: number
+          forecast?: number | null
+          billed?: number
+          earned?: number
+          accrued?: number
+          deferred?: number
+        }
+        Update: {
+          id?: string
+          snapshot_id?: string
+          entity_id?: string
+          snapshot_date?: string
+          month_key?: string
+          month_label?: string
+          closed?: number
+          pending?: number
+          pipeline?: number
+          forecast?: number | null
+          billed?: number
+          earned?: number
+          accrued?: number
+          deferred?: number
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
