@@ -106,7 +106,7 @@ export function DebtReconciliationTab({ entityId }: DebtReconciliationTabProps) 
     Record<string, ReconciliationRecord>
   >({});
   const [unlinkedInstruments, setUnlinkedInstruments] = useState<InstrumentSummary[]>([]);
-  const [yearSchedule, setYearSchedule] = useState<Record<string, boolean | null>>({});
+  const [yearSchedule, setYearSchedule] = useState<Record<string, "reconciled" | "pending" | null>>({});
 
   // Account picker state
   const [addingToGroup, setAddingToGroup] = useState<string | null>(null);
@@ -502,16 +502,50 @@ export function DebtReconciliationTab({ entityId }: DebtReconciliationTabProps) 
     setReconciliations(reconMap);
     setNotes(notesMap);
 
-    // 6. Fetch year-wide reconciliation status for schedule overview
+    // 6. Fetch year-wide reconciliation status + GL data for schedule overview
     const { data: yearReconData } = await supabase
       .from("debt_reconciliations")
       .select("period_month, gl_account_group, is_reconciled")
       .eq("entity_id", entityId)
       .eq("period_year", periodYear);
 
-    const scheduleMap: Record<string, boolean | null> = {};
+    const yearReconByKey: Record<string, boolean> = {};
     for (const r of (yearReconData ?? []) as { period_month: number; gl_account_group: string; is_reconciled: boolean }[]) {
-      scheduleMap[`${r.period_month}_${r.gl_account_group}`] = r.is_reconciled;
+      yearReconByKey[`${r.period_month}_${r.gl_account_group}`] = r.is_reconciled;
+    }
+
+    // Fetch GL balances for all months of the year to detect which months have data
+    const yearHasData: Record<string, boolean> = {};
+    if (allAccountIds.length > 0) {
+      const { data: yearGlData } = await supabase
+        .from("gl_balances")
+        .select("account_id, period_month")
+        .eq("entity_id", entityId)
+        .eq("period_year", periodYear)
+        .in("account_id", allAccountIds);
+
+      for (const row of (yearGlData ?? []) as { account_id: string; period_month: number }[]) {
+        for (const group of DEBT_GL_ACCOUNT_GROUPS) {
+          const groupAcctIds = mapped[group.key]?.map((m) => m.account_id) ?? [];
+          if (groupAcctIds.includes(row.account_id)) {
+            yearHasData[`${row.period_month}_${group.key}`] = true;
+          }
+        }
+      }
+    }
+
+    // Build schedule: reconciled > pending (has data) > blank (no data)
+    const scheduleMap: Record<string, "reconciled" | "pending" | null> = {};
+    for (let m = 1; m <= 12; m++) {
+      for (const group of DEBT_GL_ACCOUNT_GROUPS) {
+        const key = `${m}_${group.key}`;
+        if (yearReconByKey[key] === true) {
+          scheduleMap[key] = "reconciled";
+        } else if (yearHasData[key] || yearReconByKey[key] === false) {
+          scheduleMap[key] = "pending";
+        }
+        // else: no data → leave undefined (blank)
+      }
     }
     setYearSchedule(scheduleMap);
 
@@ -696,9 +730,9 @@ export function DebtReconciliationTab({ entityId }: DebtReconciliationTabProps) 
                           const status = yearSchedule[key];
                           return (
                             <TableCell key={group.key} className="text-center">
-                              {status === true ? (
+                              {status === "reconciled" ? (
                                 <CheckCircle2 className="h-5 w-5 text-green-600 inline-block" />
-                              ) : status === false ? (
+                              ) : status === "pending" ? (
                                 <X className="h-5 w-5 text-red-500 inline-block" />
                               ) : null}
                             </TableCell>
