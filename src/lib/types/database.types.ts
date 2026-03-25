@@ -4868,6 +4868,39 @@ export type Database = {
         }
         Relationships: []
       }
+      debt_transaction_documents: {
+        Row: {
+          id: string
+          transaction_id: string
+          file_name: string
+          file_path: string
+          file_size_bytes: number | null
+          uploaded_by: string | null
+          notes: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          transaction_id: string
+          file_name: string
+          file_path: string
+          file_size_bytes?: number | null
+          uploaded_by?: string | null
+          notes?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          transaction_id?: string
+          file_name?: string
+          file_path?: string
+          file_size_bytes?: number | null
+          uploaded_by?: string | null
+          notes?: string | null
+          created_at?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never

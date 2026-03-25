@@ -50,6 +50,11 @@ import {
 } from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
 import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
   ArrowLeft,
   Save,
   Link as LinkIcon,
@@ -62,6 +67,9 @@ import {
   DollarSign,
   Trash2,
   Download,
+  Paperclip,
+  Upload,
+  X,
 } from "lucide-react";
 import {
   formatCurrency,
@@ -169,6 +177,10 @@ export default function DebtDetailPage() {
   const [linkedAsset, setLinkedAsset] = useState<FixedAssetRef | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+
+  // Transaction document attachments
+  const [txnDocs, setTxnDocs] = useState<Map<string, AnyRow[]>>(new Map());
+  const [uploadingDocTxnId, setUploadingDocTxnId] = useState<string | null>(null);
 
   // GL linkage
   const [liabilityAccountId, setLiabilityAccountId] = useState("");
@@ -485,6 +497,76 @@ export default function DebtDetailPage() {
     }
   }
 
+  // --- Transaction document handlers ---
+
+  async function handleDocUpload(txnId: string, e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadingDocTxnId(txnId);
+
+    const timestamp = Date.now();
+    const storagePath = `${entityId}/debt/${debtId}/${txnId}/${timestamp}_${file.name}`;
+
+    const { error: uploadError } = await supabase.storage
+      .from("debt-documents")
+      .upload(storagePath, file, { contentType: file.type, upsert: false });
+
+    if (uploadError) {
+      toast.error(`Upload failed: ${uploadError.message}`);
+      setUploadingDocTxnId(null);
+      e.target.value = "";
+      return;
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error: dbError } = await (supabase as any)
+      .from("debt_transaction_documents")
+      .insert({
+        transaction_id: txnId,
+        file_name: file.name,
+        file_path: storagePath,
+        file_size_bytes: file.size,
+      });
+
+    if (dbError) toast.error(dbError.message);
+    else toast.success("Document uploaded");
+    setUploadingDocTxnId(null);
+    e.target.value = "";
+    loadData();
+  }
+
+  async function handleDocDownload(filePath: string, fileName: string) {
+    try {
+      const res = await fetch("/api/storage/signed-download-url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bucket: "debt-documents", path: filePath }),
+      });
+      if (!res.ok) throw new Error("Failed to get download URL");
+      const { signedUrl } = await res.json();
+      const link = document.createElement("a");
+      link.href = signedUrl;
+      link.download = fileName;
+      link.target = "_blank";
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch {
+      toast.error("Failed to download document");
+    }
+  }
+
+  async function handleDocDelete(docId: string, filePath: string) {
+    if (!confirm("Delete this document?")) return;
+    // Remove from storage
+    await supabase.storage.from("debt-documents").remove([filePath]);
+    // Remove from database
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (supabase as any).from("debt_transaction_documents").delete().eq("id", docId);
+    toast.success("Document deleted");
+    loadData();
+  }
+
   function exportTransactionsToXlsx() {
     if (transactions.length === 0) {
       toast.error("No transactions to export");
@@ -576,10 +658,33 @@ export default function DebtDetailPage() {
       }
     }
 
+    const txns = (txnResult.data as AnyRow[]) ?? [];
     setAmortization((amortResult.data as AnyRow[]) ?? []);
     setRateHistory((rateResult.data as AnyRow[]) ?? []);
-    setTransactions((txnResult.data as AnyRow[]) ?? []);
+    setTransactions(txns);
     setAccounts((accountsResult.data as Account[]) ?? []);
+
+    // Fetch document attachments for all transactions
+    if (txns.length > 0) {
+      const txnIds = txns.map((t: AnyRow) => t.id);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: docs } = await (supabase as any)
+        .from("debt_transaction_documents")
+        .select("*")
+        .in("transaction_id", txnIds)
+        .order("created_at", { ascending: false });
+
+      const docMap = new Map<string, AnyRow[]>();
+      for (const doc of (docs ?? [])) {
+        const existing = docMap.get(doc.transaction_id) ?? [];
+        existing.push(doc);
+        docMap.set(doc.transaction_id, existing);
+      }
+      setTxnDocs(docMap);
+    } else {
+      setTxnDocs(new Map());
+    }
+
     setLoading(false);
   }, [supabase, debtId, entityId]);
 
@@ -1929,6 +2034,7 @@ export default function DebtDetailPage() {
                         <TableHead className="text-right">To Fees</TableHead>
                         <TableHead className="text-right">Balance</TableHead>
                         <TableHead>Ref #</TableHead>
+                        <TableHead className="text-center">Doc</TableHead>
                         <TableHead></TableHead>
                       </TableRow>
                     </TableHeader>
@@ -1948,6 +2054,66 @@ export default function DebtDetailPage() {
                           <TableCell className="text-right tabular-nums">{txn.to_fees ? formatCurrency(txn.to_fees) : "---"}</TableCell>
                           <TableCell className="text-right tabular-nums font-medium">{txn.running_balance != null ? formatCurrency(txn.running_balance) : "---"}</TableCell>
                           <TableCell className="text-xs text-muted-foreground font-mono">{txn.reference_number ?? ""}</TableCell>
+                          <TableCell className="text-center">
+                            {(() => {
+                              const docs = txnDocs.get(txn.id) ?? [];
+                              const hasDoc = docs.length > 0;
+                              return (
+                                <Popover>
+                                  <PopoverTrigger asChild>
+                                    <Button variant="ghost" size="sm" className={`h-7 w-7 p-0 ${hasDoc ? "text-blue-600" : "text-muted-foreground/40 hover:text-muted-foreground"}`}>
+                                      <Paperclip className="h-3.5 w-3.5" />
+                                    </Button>
+                                  </PopoverTrigger>
+                                  <PopoverContent className="w-72 p-3" align="end">
+                                    <div className="space-y-2">
+                                      <div className="flex items-center justify-between">
+                                        <span className="text-sm font-medium">Documents</span>
+                                        <label className="cursor-pointer">
+                                          <input
+                                            type="file"
+                                            className="hidden"
+                                            onChange={(e) => handleDocUpload(txn.id, e)}
+                                            disabled={uploadingDocTxnId === txn.id}
+                                          />
+                                          <span className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700">
+                                            <Upload className="h-3 w-3" />
+                                            {uploadingDocTxnId === txn.id ? "Uploading..." : "Upload"}
+                                          </span>
+                                        </label>
+                                      </div>
+                                      {docs.length === 0 ? (
+                                        <p className="text-xs text-muted-foreground py-1">No documents attached.</p>
+                                      ) : (
+                                        <div className="space-y-1">
+                                          {docs.map((doc: AnyRow) => (
+                                            <div key={doc.id} className="flex items-center gap-2 text-xs rounded-md border px-2 py-1.5">
+                                              <FileText className="h-3 w-3 shrink-0 text-muted-foreground" />
+                                              <button
+                                                className="truncate text-left hover:underline flex-1"
+                                                onClick={() => handleDocDownload(doc.file_path, doc.file_name)}
+                                                title={doc.file_name}
+                                              >
+                                                {doc.file_name}
+                                              </button>
+                                              <Button
+                                                variant="ghost"
+                                                size="sm"
+                                                className="h-5 w-5 p-0 shrink-0 text-muted-foreground hover:text-destructive"
+                                                onClick={() => handleDocDelete(doc.id, doc.file_path)}
+                                              >
+                                                <X className="h-3 w-3" />
+                                              </Button>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      )}
+                                    </div>
+                                  </PopoverContent>
+                                </Popover>
+                              );
+                            })()}
+                          </TableCell>
                           <TableCell>
                             <div className="flex items-center gap-1">
                               {txn.is_reconciled && <Badge variant="secondary" className="text-xs">Reconciled</Badge>}
