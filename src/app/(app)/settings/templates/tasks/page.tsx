@@ -34,6 +34,11 @@ import { Plus, Trash2, Zap } from "lucide-react";
 import { CLOSE_PHASES, AUTO_DISCOVERY_MODULES } from "@/lib/utils/close-management";
 import type { ClosePhase } from "@/lib/types/database";
 
+interface Entity {
+  id: string;
+  name: string;
+}
+
 interface TaskTemplate {
   id: string;
   name: string;
@@ -46,6 +51,7 @@ interface TaskTemplate {
   is_active: boolean;
   phase: number;
   source_module: string | null;
+  entity_ids: string[] | null;
 }
 
 const PHASE_LABELS: Record<ClosePhase, string> = {
@@ -58,6 +64,7 @@ const PHASE_LABELS: Record<ClosePhase, string> = {
 export default function TaskTemplatesPage() {
   const supabase = createClient();
   const [templates, setTemplates] = useState<TaskTemplate[]>([]);
+  const [entities, setEntities] = useState<Entity[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Form state
@@ -84,15 +91,24 @@ export default function TaskTemplatesPage() {
 
     if (!membership) return;
 
-    const { data } = await supabase
-      .from("close_task_templates")
-      .select("*")
-      .eq("organization_id", membership.organization_id)
-      .order("phase")
-      .order("display_order")
-      .order("name");
+    const [{ data }, { data: entityData }] = await Promise.all([
+      supabase
+        .from("close_task_templates")
+        .select("*")
+        .eq("organization_id", membership.organization_id)
+        .order("phase")
+        .order("display_order")
+        .order("name"),
+      supabase
+        .from("entities")
+        .select("id, name")
+        .eq("organization_id", membership.organization_id)
+        .eq("is_active", true)
+        .order("name"),
+    ]);
 
     setTemplates((data as TaskTemplate[]) ?? []);
+    setEntities((entityData as Entity[]) ?? []);
     setLoading(false);
   }, [supabase]);
 
@@ -217,13 +233,19 @@ export default function TaskTemplatesPage() {
                     <SelectValue placeholder="Select..." />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="Reconciliation">
-                      Reconciliation
-                    </SelectItem>
+                    <SelectItem value="Pre-Close">Pre-Close</SelectItem>
+                    <SelectItem value="Revenue & AR">Revenue & AR</SelectItem>
+                    <SelectItem value="AP & Expenses">AP & Expenses</SelectItem>
+                    <SelectItem value="Payroll">Payroll</SelectItem>
+                    <SelectItem value="Bank & Cash">Bank & Cash</SelectItem>
+                    <SelectItem value="Fixed Assets & Depreciation">Fixed Assets & Depreciation</SelectItem>
+                    <SelectItem value="Intercompany">Intercompany</SelectItem>
+                    <SelectItem value="Tax & Compliance">Tax & Compliance</SelectItem>
+                    <SelectItem value="Financial Reporting">Financial Reporting</SelectItem>
+                    <SelectItem value="Management Review">Management Review</SelectItem>
+                    <SelectItem value="Reconciliation">Reconciliation</SelectItem>
                     <SelectItem value="Accruals">Accruals</SelectItem>
-                    <SelectItem value="Journal Entries">
-                      Journal Entries
-                    </SelectItem>
+                    <SelectItem value="Journal Entries">Journal Entries</SelectItem>
                     <SelectItem value="Review">Review</SelectItem>
                     <SelectItem value="Reporting">Reporting</SelectItem>
                     <SelectItem value="Other">Other</SelectItem>
@@ -392,7 +414,7 @@ export default function TaskTemplatesPage() {
                         <TableRow>
                           <TableHead>Name</TableHead>
                           <TableHead>Category</TableHead>
-                          <TableHead>Account Class</TableHead>
+                          <TableHead>Entities</TableHead>
                           <TableHead>Due Day</TableHead>
                           <TableHead>Reconciliation</TableHead>
                           <TableHead></TableHead>
@@ -410,7 +432,14 @@ export default function TaskTemplatesPage() {
                               )}
                             </TableCell>
                             <TableCell className="text-muted-foreground">
-                              {tpl.account_classification ?? "All"}
+                              {tpl.entity_ids
+                                ? tpl.entity_ids
+                                    .map((id) => {
+                                      const e = entities.find((ent) => ent.id === id);
+                                      return e ? e.name.replace(/\s*(Enterprises|Studios|Rental Holdings).*/, "") : id.slice(0, 8);
+                                    })
+                                    .join(", ")
+                                : "All"}
                             </TableCell>
                             <TableCell>
                               {tpl.relative_due_day

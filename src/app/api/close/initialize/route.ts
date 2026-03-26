@@ -76,6 +76,11 @@ export async function POST(request: Request) {
       .eq("is_active", true);
 
     for (const template of templates) {
+      // Skip templates scoped to other entities
+      if (template.entity_ids && !template.entity_ids.includes(entityId)) {
+        continue;
+      }
+
       if (template.account_classification || template.account_type) {
         const matchingAccounts = (accounts ?? []).filter(
           (a) =>

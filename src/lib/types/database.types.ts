@@ -241,6 +241,7 @@ export type Database = {
           requires_reconciliation: boolean
           phase: number
           source_module: string | null
+          entity_ids: string[] | null
           created_at: string
           updated_at: string
         }
@@ -259,6 +260,7 @@ export type Database = {
           requires_reconciliation?: boolean
           phase?: number
           source_module?: string | null
+          entity_ids?: string[] | null
           created_at?: string
           updated_at?: string
         }
@@ -277,6 +279,7 @@ export type Database = {
           requires_reconciliation?: boolean
           phase?: number
           source_module?: string | null
+          entity_ids?: string[] | null
           created_at?: string
           updated_at?: string
         }
