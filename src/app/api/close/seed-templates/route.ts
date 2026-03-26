@@ -5,30 +5,50 @@ import { createClient } from "@/lib/supabase/server";
 // Seeds close task templates from best-practice month-end close checklist.
 // Idempotent: skips templates whose name already exists for the organization.
 
-export async function POST() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+export async function POST(request: Request) {
+  const cronSecret = request.headers.get("x-cron-secret");
+  let orgId: string;
 
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (cronSecret === process.env.CRON_SECRET) {
+    // Cron/admin auth — use first org in the system
+    const { createAdminClient } = await import("@/lib/supabase/admin");
+    const admin = createAdminClient();
+    const { data: orgs } = await admin
+      .from("organizations")
+      .select("id")
+      .limit(1)
+      .single();
+    if (!orgs) {
+      return NextResponse.json({ error: "No organization found" }, { status: 404 });
+    }
+    orgId = orgs.id;
+  } else {
+    // User auth
+    const supabase = await createClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    const { data: membership } = await supabase
+      .from("organization_members")
+      .select("organization_id")
+      .eq("user_id", user.id)
+      .single();
+
+    if (!membership) {
+      return NextResponse.json({ error: "No organization found" }, { status: 404 });
+    }
+    orgId = membership.organization_id;
   }
 
-  const { data: membership } = await supabase
-    .from("organization_members")
-    .select("organization_id")
-    .eq("user_id", user.id)
-    .single();
-
-  if (!membership) {
-    return NextResponse.json({ error: "No organization found" }, { status: 404 });
-  }
-
-  const orgId = membership.organization_id;
-
-  // Look up entity IDs by name
-  const { data: entities } = await supabase
+  // Look up entity IDs by name (use admin client for full access)
+  const { createAdminClient } = await import("@/lib/supabase/admin");
+  const adminClient = createAdminClient();
+  const { data: entities } = await adminClient
     .from("entities")
     .select("id, name, code")
     .eq("organization_id", orgId)
@@ -58,7 +78,7 @@ export async function POST() {
   }
 
   // Check existing templates to avoid duplicates
-  const { data: existing } = await supabase
+  const { data: existing } = await adminClient
     .from("close_task_templates")
     .select("name")
     .eq("organization_id", orgId);
@@ -1033,7 +1053,7 @@ export async function POST() {
     });
   }
 
-  const { error } = await supabase
+  const { error } = await adminClient
     .from("close_task_templates")
     .insert(toInsert);
 
