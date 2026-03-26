@@ -114,6 +114,8 @@ export function AppSidebar({ user, entityId: entityIdProp, entities = [] }: AppS
   const currentEntity = entities.find((e) => e.id === entityId);
   const entityLogo = currentEntity ? ENTITY_LOGOS[currentEntity.name] : null;
 
+  const isVersatile = currentEntity?.name?.includes("Versatile") ?? false;
+
   const toolsItems = entityId
     ? [
         {
@@ -126,21 +128,29 @@ export function AppSidebar({ user, entityId: entityIdProp, entities = [] }: AppS
           url: `${entityPrefix}/commissions`,
           icon: Percent,
         },
-        {
-          title: "Rebate Tracker",
-          url: `${entityPrefix}/rebates`,
-          icon: HandCoins,
-        },
+        ...(isVersatile
+          ? [
+              {
+                title: "Rebate Tracker",
+                url: `${entityPrefix}/rebates`,
+                icon: HandCoins,
+              },
+            ]
+          : []),
         {
           title: "Insurance",
           url: `${entityPrefix}/insurance`,
           icon: Shield,
         },
-        {
-          title: "Revenue Projection",
-          url: `${entityPrefix}/revenue-projection`,
-          icon: TrendingUp,
-        },
+        ...(isVersatile
+          ? [
+              {
+                title: "Revenue Projection",
+                url: `${entityPrefix}/revenue-projection`,
+                icon: TrendingUp,
+              },
+            ]
+          : []),
       ]
     : [];
 
