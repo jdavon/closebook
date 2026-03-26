@@ -30,6 +30,11 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { Plus, Trash2, Zap } from "lucide-react";
 import { CLOSE_PHASES, AUTO_DISCOVERY_MODULES } from "@/lib/utils/close-management";
 import type { ClosePhase } from "@/lib/types/database";
@@ -166,6 +171,21 @@ export default function TaskTemplatesPage() {
     }
 
     setCreating(false);
+  }
+
+  async function handleUpdate(id: string, field: string, value: unknown) {
+    const { error } = await supabase
+      .from("close_task_templates")
+      .update({ [field]: value })
+      .eq("id", id);
+
+    if (error) {
+      toast.error(error.message);
+    } else {
+      setTemplates((prev) =>
+        prev.map((t) => (t.id === id ? { ...t, [field]: value } : t))
+      );
+    }
   }
 
   async function handleDelete(id: string) {
@@ -426,29 +446,162 @@ export default function TaskTemplatesPage() {
                             <TableCell className="font-medium">
                               {tpl.name}
                             </TableCell>
+
+                            {/* Category — inline select */}
                             <TableCell>
-                              {tpl.category && (
-                                <Badge variant="outline">{tpl.category}</Badge>
-                              )}
+                              <Popover>
+                                <PopoverTrigger asChild>
+                                  <button className="text-left hover:bg-muted px-2 py-1 rounded cursor-pointer transition-colors">
+                                    {tpl.category ? (
+                                      <Badge variant="outline">{tpl.category}</Badge>
+                                    ) : (
+                                      <span className="text-muted-foreground text-sm">Set...</span>
+                                    )}
+                                  </button>
+                                </PopoverTrigger>
+                                <PopoverContent className="w-52 p-1" align="start">
+                                  {[
+                                    "Pre-Close",
+                                    "Revenue & AR",
+                                    "AP & Expenses",
+                                    "Payroll",
+                                    "Bank & Cash",
+                                    "Fixed Assets & Depreciation",
+                                    "Intercompany",
+                                    "Tax & Compliance",
+                                    "Financial Reporting",
+                                    "Management Review",
+                                    "Reconciliation",
+                                    "Accruals",
+                                    "Journal Entries",
+                                    "Review",
+                                    "Reporting",
+                                    "Other",
+                                  ].map((cat) => (
+                                    <button
+                                      key={cat}
+                                      className={`w-full text-left text-sm px-3 py-1.5 rounded hover:bg-muted transition-colors ${
+                                        tpl.category === cat ? "bg-muted font-medium" : ""
+                                      }`}
+                                      onClick={() => handleUpdate(tpl.id, "category", cat)}
+                                    >
+                                      {cat}
+                                    </button>
+                                  ))}
+                                </PopoverContent>
+                              </Popover>
                             </TableCell>
-                            <TableCell className="text-muted-foreground">
-                              {tpl.entity_ids
-                                ? tpl.entity_ids
-                                    .map((id) => {
-                                      const e = entities.find((ent) => ent.id === id);
-                                      return e ? e.name.replace(/\s*(Enterprises|Studios|Rental Holdings).*/, "") : id.slice(0, 8);
-                                    })
-                                    .join(", ")
-                                : "All"}
-                            </TableCell>
+
+                            {/* Entities — inline multi-select */}
                             <TableCell>
-                              {tpl.relative_due_day
-                                ? `+${tpl.relative_due_day} days`
-                                : "---"}
+                              <Popover>
+                                <PopoverTrigger asChild>
+                                  <button className="text-left text-muted-foreground hover:bg-muted px-2 py-1 rounded cursor-pointer transition-colors text-sm">
+                                    {tpl.entity_ids
+                                      ? tpl.entity_ids
+                                          .map((id) => {
+                                            const e = entities.find((ent) => ent.id === id);
+                                            return e
+                                              ? e.name.replace(/\s*(Enterprises|Studios|Rental Holdings).*/, "")
+                                              : id.slice(0, 8);
+                                          })
+                                          .join(", ")
+                                      : "All"}
+                                  </button>
+                                </PopoverTrigger>
+                                <PopoverContent className="w-56 p-2" align="start">
+                                  <div className="space-y-1">
+                                    <button
+                                      className={`w-full text-left text-sm px-3 py-1.5 rounded hover:bg-muted transition-colors ${
+                                        !tpl.entity_ids ? "bg-muted font-medium" : ""
+                                      }`}
+                                      onClick={() => handleUpdate(tpl.id, "entity_ids", null)}
+                                    >
+                                      All entities
+                                    </button>
+                                    <div className="border-t my-1" />
+                                    {entities.map((ent) => {
+                                      const checked = tpl.entity_ids?.includes(ent.id) ?? false;
+                                      return (
+                                        <label
+                                          key={ent.id}
+                                          className="flex items-center gap-2 text-sm px-3 py-1.5 rounded hover:bg-muted cursor-pointer transition-colors"
+                                        >
+                                          <Checkbox
+                                            checked={checked}
+                                            onCheckedChange={(isChecked) => {
+                                              const current = tpl.entity_ids ?? [];
+                                              const next = isChecked
+                                                ? [...current, ent.id]
+                                                : current.filter((id) => id !== ent.id);
+                                              handleUpdate(
+                                                tpl.id,
+                                                "entity_ids",
+                                                next.length > 0 ? next : null
+                                              );
+                                            }}
+                                          />
+                                          {ent.name.replace(/\s*(Enterprises|Studios|Rental Holdings).*/, "")}
+                                        </label>
+                                      );
+                                    })}
+                                  </div>
+                                </PopoverContent>
+                              </Popover>
                             </TableCell>
+
+                            {/* Due Day — inline input */}
                             <TableCell>
-                              {tpl.requires_reconciliation ? "Yes" : "No"}
+                              <Popover>
+                                <PopoverTrigger asChild>
+                                  <button className="text-left hover:bg-muted px-2 py-1 rounded cursor-pointer transition-colors text-sm">
+                                    {tpl.relative_due_day != null
+                                      ? `+${tpl.relative_due_day} days`
+                                      : "---"}
+                                  </button>
+                                </PopoverTrigger>
+                                <PopoverContent className="w-40 p-2" align="start">
+                                  <Label className="text-xs text-muted-foreground">
+                                    Days after period end
+                                  </Label>
+                                  <Input
+                                    type="number"
+                                    min="0"
+                                    max="30"
+                                    defaultValue={tpl.relative_due_day ?? ""}
+                                    className="mt-1"
+                                    onBlur={(e) => {
+                                      const val = parseInt(e.target.value);
+                                      if (!isNaN(val) && val !== tpl.relative_due_day) {
+                                        handleUpdate(tpl.id, "relative_due_day", val);
+                                      }
+                                    }}
+                                    onKeyDown={(e) => {
+                                      if (e.key === "Enter") {
+                                        (e.target as HTMLInputElement).blur();
+                                      }
+                                    }}
+                                  />
+                                </PopoverContent>
+                              </Popover>
                             </TableCell>
+
+                            {/* Reconciliation — inline toggle */}
+                            <TableCell>
+                              <button
+                                className="hover:bg-muted px-2 py-1 rounded cursor-pointer transition-colors text-sm"
+                                onClick={() =>
+                                  handleUpdate(
+                                    tpl.id,
+                                    "requires_reconciliation",
+                                    !tpl.requires_reconciliation
+                                  )
+                                }
+                              >
+                                {tpl.requires_reconciliation ? "Yes" : "No"}
+                              </button>
+                            </TableCell>
+
                             <TableCell>
                               <Button
                                 variant="ghost"
