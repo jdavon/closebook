@@ -31,6 +31,18 @@ export function canManageEntity(role: UserRole): boolean {
   return hasMinRole(role, "controller");
 }
 
+export function canInviteMembers(role: UserRole): boolean {
+  return role === "admin";
+}
+
+export function canManageMembers(role: UserRole): boolean {
+  return role === "admin";
+}
+
+export function canManageEntityAccess(role: UserRole): boolean {
+  return hasMinRole(role, "controller");
+}
+
 export function getRoleLabel(role: UserRole): string {
   const labels: Record<UserRole, string> = {
     admin: "Admin",

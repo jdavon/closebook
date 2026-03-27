@@ -4,6 +4,8 @@ export type { Database } from "./database.types";
 // Convenience type aliases used throughout the app
 export type UserRole = "admin" | "controller" | "preparer" | "reviewer";
 
+export type InviteStatus = "pending" | "accepted" | "cancelled" | "expired";
+
 export type CloseStatus =
   | "open"
   | "in_progress"

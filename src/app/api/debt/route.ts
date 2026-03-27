@@ -5,6 +5,7 @@ import {
   type DebtForAmortization,
 } from "@/lib/utils/amortization";
 import { getCurrentPeriod } from "@/lib/utils/dates";
+import { logAuditEvent } from "@/lib/utils/audit";
 
 /**
  * POST /api/debt
@@ -133,6 +134,26 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  // Audit log
+  const { data: membership } = await supabase
+    .from("organization_members")
+    .select("organization_id")
+    .eq("user_id", user.id)
+    .single();
+
+  if (membership) {
+    logAuditEvent({
+      organizationId: membership.organization_id,
+      entityId: entity_id,
+      userId: user.id,
+      action: "create",
+      resourceType: "debt_instrument",
+      resourceId: data.id,
+      newValues: { instrument_name, debt_type, original_amount, lender_name },
+      request,
+    });
+  }
+
   return NextResponse.json(data, { status: 201 });
 }
 
@@ -164,8 +185,16 @@ export async function PATCH(request: NextRequest) {
     updates.spread_margin = updates.spread_margin / 100;
   }
 
+  // Fetch old values for audit
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data, error } = await (supabase as any)
+  const sb = supabase as any;
+  const { data: existing } = await sb
+    .from("debt_instruments")
+    .select("*")
+    .eq("id", id)
+    .single();
+
+  const { data, error } = await sb
     .from("debt_instruments")
     .update(updates)
     .eq("id", id)
@@ -173,6 +202,28 @@ export async function PATCH(request: NextRequest) {
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // Audit log
+  const { data: membership } = await supabase
+    .from("organization_members")
+    .select("organization_id")
+    .eq("user_id", user.id)
+    .single();
+
+  if (membership) {
+    logAuditEvent({
+      organizationId: membership.organization_id,
+      entityId: existing?.entity_id,
+      userId: user.id,
+      action: "update",
+      resourceType: "debt_instrument",
+      resourceId: id,
+      oldValues: existing,
+      newValues: updates,
+      request,
+    });
+  }
+
   return NextResponse.json(data);
 }
 
@@ -191,18 +242,46 @@ export async function DELETE(request: NextRequest) {
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const sb = supabase as any;
+  const sbDel = supabase as any;
+
+  // Fetch instrument for audit before deleting
+  const { data: instrument } = await sbDel
+    .from("debt_instruments")
+    .select("instrument_name, entity_id, debt_type, lender_name")
+    .eq("id", id)
+    .single();
 
   // Delete child records first (amortization, transactions, rate history)
-  await sb.from("debt_amortization").delete().eq("debt_instrument_id", id);
-  await sb.from("debt_transactions").delete().eq("debt_instrument_id", id);
-  await sb.from("debt_rate_history").delete().eq("debt_instrument_id", id);
+  await sbDel.from("debt_amortization").delete().eq("debt_instrument_id", id);
+  await sbDel.from("debt_transactions").delete().eq("debt_instrument_id", id);
+  await sbDel.from("debt_rate_history").delete().eq("debt_instrument_id", id);
 
-  const { error } = await sb
+  const { error } = await sbDel
     .from("debt_instruments")
     .delete()
     .eq("id", id);
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // Audit log
+  const { data: membershipDel } = await supabase
+    .from("organization_members")
+    .select("organization_id")
+    .eq("user_id", user.id)
+    .single();
+
+  if (membershipDel) {
+    logAuditEvent({
+      organizationId: membershipDel.organization_id,
+      entityId: instrument?.entity_id,
+      userId: user.id,
+      action: "delete",
+      resourceType: "debt_instrument",
+      resourceId: id,
+      oldValues: instrument ? { instrument_name: instrument.instrument_name, debt_type: instrument.debt_type, lender_name: instrument.lender_name } : null,
+      request,
+    });
+  }
+
   return NextResponse.json({ success: true });
 }

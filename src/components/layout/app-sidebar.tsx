@@ -30,6 +30,7 @@ import {
   TrendingUp,
   Shield,
   ChevronRight,
+  History,
 } from "lucide-react";
 import {
   Sidebar,
@@ -284,6 +285,11 @@ export function AppSidebar({ user, entityId: entityIdProp, entities = [] }: AppS
       title: "Members",
       url: "/settings/members",
       icon: Settings,
+    },
+    {
+      title: "Audit Log",
+      url: "/settings/audit-log",
+      icon: History,
     },
     {
       title: "Close Templates",

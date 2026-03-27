@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { GATE_CHECKS } from "@/lib/utils/close-management";
+import { logAuditEvent } from "@/lib/utils/audit";
 import type { Database } from "@/lib/types/database.types";
 
 type CloseTaskInsert = Database["public"]["Tables"]["close_tasks"]["Insert"];
@@ -306,6 +307,17 @@ export async function POST(request: Request) {
   if (gateError) {
     console.error("Error inserting gate checks:", gateError);
   }
+
+  logAuditEvent({
+    organizationId: membership.organization_id,
+    entityId: entityId,
+    userId: user.id,
+    action: "create",
+    resourceType: "close_period",
+    resourceId: period.id,
+    newValues: { period_year: periodYear, period_month: periodMonth, task_count: tasksToInsert.length },
+    request,
+  });
 
   return NextResponse.json({
     period,

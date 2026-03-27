@@ -1086,6 +1086,48 @@ export type Database = {
         }
         Relationships: []
       }
+      organization_invites: {
+        Row: {
+          id: string
+          organization_id: string
+          email: string
+          role: string
+          invited_by: string
+          status: string
+          token: string
+          expires_at: string
+          accepted_at: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          organization_id: string
+          email: string
+          role: string
+          invited_by: string
+          status?: string
+          token?: string
+          expires_at?: string
+          accepted_at?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          organization_id?: string
+          email?: string
+          role?: string
+          invited_by?: string
+          status?: string
+          token?: string
+          expires_at?: string
+          accepted_at?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       organization_members: {
         Row: {
           id: string
