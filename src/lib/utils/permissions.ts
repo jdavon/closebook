@@ -5,6 +5,7 @@ const ROLE_HIERARCHY: Record<UserRole, number> = {
   controller: 3,
   reviewer: 2,
   preparer: 1,
+  viewer: 0,
 };
 
 export function hasMinRole(userRole: UserRole, requiredRole: UserRole): boolean {
@@ -49,6 +50,7 @@ export function getRoleLabel(role: UserRole): string {
     controller: "Controller",
     reviewer: "Reviewer",
     preparer: "Preparer",
+    viewer: "Viewer",
   };
   return labels[role];
 }

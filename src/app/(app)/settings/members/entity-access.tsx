@@ -294,6 +294,7 @@ export function EntityAccessSection({
                   <SelectItem value="controller">Controller</SelectItem>
                   <SelectItem value="reviewer">Reviewer</SelectItem>
                   <SelectItem value="preparer">Preparer</SelectItem>
+                  <SelectItem value="viewer">Viewer</SelectItem>
                 </SelectContent>
               </Select>
             </div>

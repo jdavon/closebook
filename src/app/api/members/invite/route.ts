@@ -35,7 +35,7 @@ export async function POST(request: Request) {
     );
   }
 
-  const validRoles: UserRole[] = ["admin", "controller", "preparer", "reviewer"];
+  const validRoles: UserRole[] = ["admin", "controller", "preparer", "reviewer", "viewer"];
   if (!validRoles.includes(role)) {
     return NextResponse.json({ error: "Invalid role" }, { status: 400 });
   }
