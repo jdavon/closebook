@@ -226,6 +226,7 @@ export default function RevenueProjectionPage() {
   const [error, setError] = useState<string | null>(null);
   const [dateMode, setDateMode] = useState<DateMode>("invoice_date");
   const [invoiceMonthFilter, setInvoiceMonthFilter] = useState<string>("all");
+  const [chartDrillDown, setChartDrillDown] = useState<{ month: string; label: string; category: "closed" | "pending" | "pipeline" } | null>(null);
 
   const fetchData = async () => {
     setLoading(true);
@@ -253,6 +254,7 @@ export default function RevenueProjectionPage() {
 
   const handleDateModeChange = (mode: DateMode) => {
     setDateMode(mode);
+    setChartDrillDown(null);
   };
 
   useEffect(() => {
@@ -336,6 +338,47 @@ export default function RevenueProjectionPage() {
       return aVal - bVal;
     });
   }, [filteredInvoices, dateMode, invoiceMonthFilter]);
+
+  // Drill-down data for chart click
+  const drillDownItems = useMemo(() => {
+    if (!chartDrillDown || !data) return { invoices: [], orders: [] };
+    const { month, category } = chartDrillDown;
+    if (category === "pipeline") {
+      // Pipeline = open orders grouped by order date month
+      const orders = data.pipelineOrders.filter((o) => {
+        const mk = o.orderDate ? o.orderDate.slice(0, 7) : "";
+        return mk === month;
+      });
+      return { invoices: [], orders };
+    }
+    // Closed or pending — filter invoices by status and month
+    const statusSet = category === "closed"
+      ? new Set(["CLOSED", "PROCESSED"])
+      : new Set(["NEW", "APPROVED"]);
+    const invoices = data.closedInvoices.filter((inv) => {
+      if (!statusSet.has(inv.status)) return false;
+      if (dateMode === "rental_period") {
+        if (inv.allocations) {
+          return inv.allocations.some((a) => a.month === month);
+        }
+        return inv.month === month;
+      }
+      return inv.month === month;
+    });
+    return { invoices, orders: [] };
+  }, [chartDrillDown, data, dateMode]);
+
+  const handleBarClick = useCallback((category: "closed" | "pending" | "pipeline") => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return (barData: any) => {
+      const payload = barData?.payload as MonthlyRevenue | undefined;
+      if (!payload?.month) return;
+      setChartDrillDown((prev) => {
+        if (prev && prev.month === payload.month && prev.category === category) return null;
+        return { month: payload.month, label: payload.label || payload.month, category };
+      });
+    };
+  }, []);
 
   // Snapshot / Trends state
   const [snapshots, setSnapshots] = useState<SnapshotRow[]>([]);
@@ -635,6 +678,8 @@ export default function RevenueProjectionPage() {
                     fill="#2563eb"
                     stackId="a"
                     radius={[0, 0, 0, 0]}
+                    cursor="pointer"
+                    onClick={handleBarClick("closed")}
                   />
                   <Bar
                     dataKey="pending"
@@ -642,6 +687,8 @@ export default function RevenueProjectionPage() {
                     fill="#f59e0b"
                     stackId="a"
                     radius={[0, 0, 0, 0]}
+                    cursor="pointer"
+                    onClick={handleBarClick("pending")}
                   />
                   <Bar
                     dataKey="pipeline"
@@ -649,6 +696,8 @@ export default function RevenueProjectionPage() {
                     fill="#94a3b8"
                     stackId="a"
                     radius={[2, 2, 0, 0]}
+                    cursor="pointer"
+                    onClick={handleBarClick("pipeline")}
                   />
                   <Line
                     dataKey="forecast"
@@ -663,6 +712,143 @@ export default function RevenueProjectionPage() {
               </ResponsiveContainer>
             </CardContent>
           </Card>
+
+          {/* Chart Drill-Down Panel */}
+          {chartDrillDown && (
+            <Card>
+              <CardHeader className="pb-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle className="flex items-center gap-2 text-base">
+                      <span
+                        className="inline-block h-3 w-3 rounded-sm"
+                        style={{
+                          backgroundColor:
+                            chartDrillDown.category === "closed" ? "#2563eb"
+                            : chartDrillDown.category === "pending" ? "#f59e0b"
+                            : "#94a3b8",
+                        }}
+                      />
+                      {chartDrillDown.label} —{" "}
+                      {chartDrillDown.category === "closed" ? "Recognized"
+                        : chartDrillDown.category === "pending" ? "Pending"
+                        : "Pipeline"}
+                    </CardTitle>
+                    <CardDescription>
+                      {chartDrillDown.category === "pipeline"
+                        ? `${drillDownItems.orders.length} open orders`
+                        : `${drillDownItems.invoices.length} invoices`}
+                      {" — "}
+                      {formatCurrency(
+                        chartDrillDown.category === "pipeline"
+                          ? drillDownItems.orders.reduce((s, o) => s + o.total, 0)
+                          : drillDownItems.invoices.reduce((s, i) => s + i.subTotal, 0),
+                      )}
+                    </CardDescription>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setChartDrillDown(null)}
+                    className="text-muted-foreground hover:text-foreground"
+                  >
+                    ✕
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent>
+                {chartDrillDown.category === "pipeline" ? (
+                  drillDownItems.orders.length === 0 ? (
+                    <p className="text-muted-foreground py-4 text-center text-sm">No orders for this month.</p>
+                  ) : (
+                    <div className="overflow-x-auto max-h-[400px] overflow-y-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Order #</TableHead>
+                            <TableHead>Customer</TableHead>
+                            <TableHead>Deal</TableHead>
+                            <TableHead>Description</TableHead>
+                            <TableHead className="text-right">Total</TableHead>
+                            <TableHead>Status</TableHead>
+                            <TableHead>Type</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {drillDownItems.orders.map((order) => (
+                            <TableRow key={order.orderId}>
+                              <TableCell className="font-medium">{order.orderNumber}</TableCell>
+                              <TableCell>{order.customer}</TableCell>
+                              <TableCell className="max-w-[150px] truncate">{order.deal}</TableCell>
+                              <TableCell className="max-w-[200px] truncate">{order.description}</TableCell>
+                              <TableCell className="text-right font-medium tabular-nums">{formatCurrency(order.total)}</TableCell>
+                              <TableCell><Badge variant="outline">{order.status}</Badge></TableCell>
+                              <TableCell><Badge variant="secondary">{EQUIPMENT_TYPE_LABELS[order.equipmentType] || order.equipmentType}</Badge></TableCell>
+                            </TableRow>
+                          ))}
+                          <TableRow className="border-t-2 font-semibold">
+                            <TableCell colSpan={4}>Total ({drillDownItems.orders.length} orders)</TableCell>
+                            <TableCell className="text-right tabular-nums">{formatCurrency(drillDownItems.orders.reduce((s, o) => s + o.total, 0))}</TableCell>
+                            <TableCell colSpan={2} />
+                          </TableRow>
+                        </TableBody>
+                      </Table>
+                    </div>
+                  )
+                ) : (
+                  drillDownItems.invoices.length === 0 ? (
+                    <p className="text-muted-foreground py-4 text-center text-sm">No invoices for this month.</p>
+                  ) : (
+                    <div className="overflow-x-auto max-h-[400px] overflow-y-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Invoice #</TableHead>
+                            <TableHead>Customer</TableHead>
+                            <TableHead>Order / Description</TableHead>
+                            <TableHead>Invoice Date</TableHead>
+                            <TableHead>Billing Period</TableHead>
+                            <TableHead className="text-right">Subtotal</TableHead>
+                            <TableHead className="text-right">Tax</TableHead>
+                            <TableHead className="text-right">Total</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {drillDownItems.invoices.map((inv) => (
+                            <TableRow key={inv.invoiceId}>
+                              <TableCell className="font-medium">
+                                <span className="flex items-center gap-1.5">
+                                  {inv.invoiceNumber}
+                                  {inv.status !== "CLOSED" && inv.status !== "PROCESSED" && (
+                                    <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{inv.status}</Badge>
+                                  )}
+                                </span>
+                              </TableCell>
+                              <TableCell>{inv.customer}</TableCell>
+                              <TableCell className="max-w-[200px] truncate">{inv.orderDescription || inv.orderNumber}</TableCell>
+                              <TableCell className="text-muted-foreground whitespace-nowrap">{formatDate(inv.invoiceDate)}</TableCell>
+                              <TableCell className="text-muted-foreground whitespace-nowrap">
+                                {inv.billingStartDate ? `${formatDate(inv.billingStartDate)} – ${formatDate(inv.billingEndDate)}` : "—"}
+                              </TableCell>
+                              <TableCell className="text-right tabular-nums">{formatCurrency(inv.subTotal)}</TableCell>
+                              <TableCell className="text-right tabular-nums text-muted-foreground">{formatCurrency(inv.tax)}</TableCell>
+                              <TableCell className="text-right tabular-nums font-medium">{formatCurrency(inv.grossTotal)}</TableCell>
+                            </TableRow>
+                          ))}
+                          <TableRow className="border-t-2 font-semibold">
+                            <TableCell colSpan={5}>Total ({drillDownItems.invoices.length} invoices)</TableCell>
+                            <TableCell className="text-right tabular-nums">{formatCurrency(drillDownItems.invoices.reduce((s, i) => s + i.subTotal, 0))}</TableCell>
+                            <TableCell className="text-right tabular-nums">{formatCurrency(drillDownItems.invoices.reduce((s, i) => s + i.tax, 0))}</TableCell>
+                            <TableCell className="text-right tabular-nums">{formatCurrency(drillDownItems.invoices.reduce((s, i) => s + i.grossTotal, 0))}</TableCell>
+                          </TableRow>
+                        </TableBody>
+                      </Table>
+                    </div>
+                  )
+                )}
+              </CardContent>
+            </Card>
+          )}
 
           {/* Accrued & Deferred Revenue Chart */}
           {data.monthlyData.some((m) => m.accrued > 0 || m.deferred > 0) && (
