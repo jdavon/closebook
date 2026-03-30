@@ -505,17 +505,16 @@ export function processRevenueData(
   });
 
   // --- KPIs ---
+  // YTD = recognized (closed) revenue only
   let ytdRevenue = 0;
   if (useRentalPeriod) {
-    // Sum only the portions of revenue that fall in the current year
     const ytdMonths = monthKeys.filter((mk) => mk.startsWith(String(currentYear)));
     for (const mk of ytdMonths) {
       const bucket = monthMap.get(mk);
-      ytdRevenue += (bucket?.closed ?? 0) + (bucket?.pending ?? 0);
+      ytdRevenue += bucket?.closed ?? 0;
     }
   } else {
-    const allInvoicesForYtd = [...closedInvoices, ...pendingInvoices];
-    ytdRevenue = allInvoicesForYtd
+    ytdRevenue = closedInvoices
       .filter((inv) => {
         const parts = parseDateParts(getInvoiceGroupDate(inv));
         return parts !== null && parts.y === currentYear;
@@ -545,8 +544,8 @@ export function processRevenueData(
     0,
   );
 
-  // --- Equipment breakdown (YTD invoices — closed + pending) ---
-  const allInvoices = [...closedInvoices, ...pendingInvoices];
+  // --- Equipment breakdown (YTD recognized invoices only) ---
+  const allInvoices = closedInvoices;
   const equipTotals: Record<string, number> = {};
   for (const inv of allInvoices) {
     const type = classifyEquipmentType(

@@ -255,6 +255,7 @@ export default function RevenueProjectionPage() {
   const handleDateModeChange = (mode: DateMode) => {
     setDateMode(mode);
     setChartDrillDown(null);
+    setInvoiceMonthFilter("all");
   };
 
   useEffect(() => {
@@ -267,6 +268,13 @@ export default function RevenueProjectionPage() {
     if (!rawInvoices || !rawOrders || !rawQuotes) return null;
     return processRevenueData(rawInvoices, rawOrders, rawQuotes, dateMode);
   }, [rawInvoices, rawOrders, rawQuotes, dateMode]);
+
+  // KPIs always use billing_date for stable revenue recognition
+  const billingData = useMemo(() => {
+    if (!rawInvoices || !rawOrders || !rawQuotes) return null;
+    if (dateMode === "billing_date") return data;
+    return processRevenueData(rawInvoices, rawOrders, rawQuotes, "billing_date");
+  }, [rawInvoices, rawOrders, rawQuotes, dateMode, data]);
 
   // Accruals tab always uses invoice_date mode
   const accrualData = useMemo(() => {
@@ -624,33 +632,35 @@ export default function RevenueProjectionPage() {
         </div>
       </div>
 
-      {/* KPI Cards */}
-      <div className="grid gap-4 md:grid-cols-4">
-        <KPICard
-          title="YTD Revenue"
-          value={formatCurrency(data.ytdRevenue)}
-          description="Closed invoices this year"
-          icon={<DollarSign className="text-muted-foreground h-4 w-4" />}
-        />
-        <KPICard
-          title="Current Month"
-          value={formatCurrency(data.currentMonthActual)}
-          description={`Projected: ${formatCurrency(data.currentMonthProjected)}`}
-          icon={<TrendingUp className="text-muted-foreground h-4 w-4" />}
-        />
-        <KPICard
-          title="Pipeline Value"
-          value={formatCurrency(data.pipelineValue)}
-          description={`${data.pipelineOrders.length} open orders`}
-          icon={<Layers className="text-muted-foreground h-4 w-4" />}
-        />
-        <KPICard
-          title="Quote Opportunities"
-          value={formatCurrency(data.quoteOpportunities)}
-          description={`${data.pipelineQuotes.length} active quotes`}
-          icon={<FileText className="text-muted-foreground h-4 w-4" />}
-        />
-      </div>
+      {/* KPI Cards — always based on billing date for stable revenue recognition */}
+      {billingData && (
+        <div className="grid gap-4 md:grid-cols-4">
+          <KPICard
+            title="YTD Revenue"
+            value={formatCurrency(billingData.ytdRevenue)}
+            description="Recognized revenue this year"
+            icon={<DollarSign className="text-muted-foreground h-4 w-4" />}
+          />
+          <KPICard
+            title="Current Month"
+            value={formatCurrency(billingData.currentMonthActual)}
+            description={`Projected: ${formatCurrency(billingData.currentMonthProjected)}`}
+            icon={<TrendingUp className="text-muted-foreground h-4 w-4" />}
+          />
+          <KPICard
+            title="Pipeline Value"
+            value={formatCurrency(billingData.pipelineValue)}
+            description={`${billingData.pipelineOrders.length} open orders`}
+            icon={<Layers className="text-muted-foreground h-4 w-4" />}
+          />
+          <KPICard
+            title="Quote Opportunities"
+            value={formatCurrency(billingData.quoteOpportunities)}
+            description={`${billingData.pipelineQuotes.length} active quotes`}
+            icon={<FileText className="text-muted-foreground h-4 w-4" />}
+          />
+        </div>
+      )}
 
       {/* Tabs */}
       <Tabs defaultValue="overview">
@@ -1465,11 +1475,22 @@ interface InvoiceMonthDetail {
   adjustment: number; // positive = accrual, negative = deferral
 }
 
+/** UTC-safe date parser matching the server-side parseDateParts logic */
+function parseDatePartsClient(dateStr: string): { y: number; m: number; d: number } | null {
+  const isoMatch = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (isoMatch) return { y: Number(isoMatch[1]), m: Number(isoMatch[2]) - 1, d: Number(isoMatch[3]) };
+  const slashMatch = dateStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (slashMatch) return { y: Number(slashMatch[3]), m: Number(slashMatch[1]) - 1, d: Number(slashMatch[2]) };
+  const fallback = new Date(dateStr);
+  if (isNaN(fallback.getTime())) return null;
+  return { y: fallback.getUTCFullYear(), m: fallback.getUTCMonth(), d: fallback.getUTCDate() };
+}
+
 function getMonthKeyClient(dateStr: string | null | undefined): string {
   if (!dateStr) return "";
-  const d = new Date(dateStr);
-  if (isNaN(d.getTime())) return "";
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  const parts = parseDatePartsClient(dateStr);
+  if (!parts) return "";
+  return `${parts.y}-${String(parts.m + 1).padStart(2, "0")}`;
 }
 
 function computeEarnedForMonth(
@@ -1481,25 +1502,35 @@ function computeEarnedForMonth(
 ): number {
   if (amount === 0) return 0;
 
-  const startDate = startDateStr ? new Date(startDateStr) : null;
-  const endDate = endDateStr ? new Date(endDateStr) : null;
+  const startParts = startDateStr ? parseDatePartsClient(startDateStr) : null;
+  const endParts = endDateStr ? parseDatePartsClient(endDateStr) : null;
 
-  if (!startDate || !endDate || isNaN(startDate.getTime()) || isNaN(endDate.getTime()) || endDate < startDate) {
+  if (!startParts || !endParts) {
     return getMonthKeyClient(fallbackDateStr) === targetMonth ? amount : 0;
   }
 
-  const totalDays = Math.round((endDate.getTime() - startDate.getTime()) / 86400000) + 1;
+  const startMs = Date.UTC(startParts.y, startParts.m, startParts.d);
+  const endMs = Date.UTC(endParts.y, endParts.m, endParts.d);
+
+  if (endMs < startMs) {
+    return getMonthKeyClient(fallbackDateStr) === targetMonth ? amount : 0;
+  }
+
+  const MS_PER_DAY = 86400000;
+  const totalDays = (endMs - startMs) / MS_PER_DAY + 1;
   if (totalDays <= 0) {
     return getMonthKeyClient(fallbackDateStr) === targetMonth ? amount : 0;
   }
 
   const [ty, tm] = targetMonth.split("-").map(Number);
-  const monthStart = new Date(ty, tm - 1, 1);
-  const monthEnd = new Date(ty, tm, 0);
+  const monthStartMs = Date.UTC(ty, tm - 1, 1);
+  const monthEndMs = Date.UTC(ty, tm, 0); // last day of month
 
-  const overlapStart = startDate > monthStart ? startDate : monthStart;
-  const overlapEnd = endDate < monthEnd ? endDate : monthEnd;
-  const daysInMonth = Math.round((overlapEnd.getTime() - overlapStart.getTime()) / 86400000) + 1;
+  const overlapStartMs = Math.max(startMs, monthStartMs);
+  const overlapEndMs = Math.min(endMs, monthEndMs);
+  const daysInMonth = overlapEndMs >= overlapStartMs
+    ? (overlapEndMs - overlapStartMs) / MS_PER_DAY + 1
+    : 0;
 
   if (daysInMonth <= 0) return 0;
 
