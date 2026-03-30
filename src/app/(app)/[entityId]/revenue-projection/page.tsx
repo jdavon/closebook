@@ -344,11 +344,35 @@ export default function RevenueProjectionPage() {
     if (!chartDrillDown || !data) return { invoices: [], orders: [] };
     const { month, category } = chartDrillDown;
     if (category === "pipeline") {
-      // Pipeline = open orders grouped by order date month
-      const orders = data.pipelineOrders.filter((o) => {
-        const mk = o.orderDate ? o.orderDate.slice(0, 7) : "";
-        return mk === month;
-      });
+      // Match the same date logic the chart uses for pipeline allocation
+      const toMonthKey = (dateStr: string) => {
+        if (!dateStr) return "";
+        // Handle ISO "2026-03-01" format
+        const iso = dateStr.match(/^(\d{4})-(\d{2})/);
+        if (iso) return `${iso[1]}-${iso[2]}`;
+        // Handle US "03/01/2026" format
+        const us = dateStr.match(/^(\d{1,2})\/\d{1,2}\/(\d{4})/);
+        if (us) return `${us[2]}-${String(us[1]).padStart(2, "0")}`;
+        return "";
+      };
+      const orderMatchesMonth = (o: typeof data.pipelineOrders[number]) => {
+        if (dateMode === "rental_period" && o.estimatedStartDate && o.estimatedStopDate) {
+          const start = new Date(o.estimatedStartDate);
+          const end = new Date(o.estimatedStopDate);
+          if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+            return toMonthKey(o.orderDate) === month;
+          }
+          const [y, m] = month.split("-").map(Number);
+          const monthStart = new Date(y, m - 1, 1);
+          const monthEnd = new Date(y, m, 0);
+          return start <= monthEnd && end >= monthStart;
+        } else if (dateMode === "billing_date" && o.estimatedStartDate) {
+          return toMonthKey(o.estimatedStopDate || o.estimatedStartDate) === month;
+        } else {
+          return toMonthKey(o.orderDate) === month;
+        }
+      };
+      const orders = data.pipelineOrders.filter(orderMatchesMonth);
       return { invoices: [], orders };
     }
     // Closed or pending — filter invoices by status and month
