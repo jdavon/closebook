@@ -692,7 +692,7 @@ export default function RevenueProjectionPage() {
             <CardContent>
               <ResponsiveContainer width="100%" height={400}>
                 <ComposedChart
-                  data={data.monthlyData}
+                  data={data.monthlyData.filter((m) => m.month >= `${new Date().getFullYear()}-01`)}
                   margin={{ top: 10, right: 30, left: 10, bottom: 0 }}
                 >
                   <CartesianGrid
