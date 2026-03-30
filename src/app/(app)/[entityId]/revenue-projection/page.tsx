@@ -224,7 +224,7 @@ export default function RevenueProjectionPage() {
   const [rawQuotes, setRawQuotes] = useState<RWQuoteRow[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [dateMode, setDateMode] = useState<DateMode>("invoice_date");
+  const [dateMode, setDateMode] = useState<DateMode>("billing_date");
   const [invoiceMonthFilter, setInvoiceMonthFilter] = useState<string>("all");
   const [chartDrillDown, setChartDrillDown] = useState<{ month: string; label: string; category: "closed" | "pending" | "pipeline" } | null>(null);
 

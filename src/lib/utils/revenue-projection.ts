@@ -457,9 +457,20 @@ export function processRevenueData(
   );
 
   for (const ord of activeOrders) {
-    const mk = getMonthKey(ord.OrderDate);
-    if (mk && monthMap.has(mk)) {
-      monthMap.get(mk)!.pipeline += toNum(ord.Total);
+    const amount = toNum(ord.Total);
+    if (useRentalPeriod && ord.EstimatedStartDate && ord.EstimatedStopDate) {
+      const allocations = allocateToMonths(
+        ord.EstimatedStartDate, ord.EstimatedStopDate, amount, ord.OrderDate,
+      );
+      for (const [mk, entry] of allocations) {
+        if (monthMap.has(mk)) monthMap.get(mk)!.pipeline += entry.amount;
+      }
+    } else if (dateMode === "billing_date" && ord.EstimatedStartDate) {
+      const mk = getMonthKey(ord.EstimatedStopDate || ord.EstimatedStartDate);
+      if (mk && monthMap.has(mk)) monthMap.get(mk)!.pipeline += amount;
+    } else {
+      const mk = getMonthKey(ord.OrderDate);
+      if (mk && monthMap.has(mk)) monthMap.get(mk)!.pipeline += amount;
     }
   }
 
