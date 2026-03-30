@@ -769,6 +769,7 @@ export default function RevenueProjectionPage() {
                             <TableHead>Customer</TableHead>
                             <TableHead>Deal</TableHead>
                             <TableHead>Description</TableHead>
+                            <TableHead>Order Date</TableHead>
                             <TableHead className="text-right">Total</TableHead>
                             <TableHead>Status</TableHead>
                             <TableHead>Type</TableHead>
@@ -781,13 +782,14 @@ export default function RevenueProjectionPage() {
                               <TableCell>{order.customer}</TableCell>
                               <TableCell className="max-w-[150px] truncate">{order.deal}</TableCell>
                               <TableCell className="max-w-[200px] truncate">{order.description}</TableCell>
+                              <TableCell className="text-muted-foreground whitespace-nowrap">{formatDate(order.orderDate)}</TableCell>
                               <TableCell className="text-right font-medium tabular-nums">{formatCurrency(order.total)}</TableCell>
                               <TableCell><Badge variant="outline">{order.status}</Badge></TableCell>
                               <TableCell><Badge variant="secondary">{EQUIPMENT_TYPE_LABELS[order.equipmentType] || order.equipmentType}</Badge></TableCell>
                             </TableRow>
                           ))}
                           <TableRow className="border-t-2 font-semibold">
-                            <TableCell colSpan={4}>Total ({drillDownItems.orders.length} orders)</TableCell>
+                            <TableCell colSpan={5}>Total ({drillDownItems.orders.length} orders)</TableCell>
                             <TableCell className="text-right tabular-nums">{formatCurrency(drillDownItems.orders.reduce((s, o) => s + o.total, 0))}</TableCell>
                             <TableCell colSpan={2} />
                           </TableRow>
