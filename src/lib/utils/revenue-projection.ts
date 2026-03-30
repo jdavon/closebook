@@ -29,6 +29,8 @@ export interface RWOrderRow {
   OrderId: string;
   OrderNumber: string;
   OrderDate: string;
+  EstimatedStartDate: string;
+  EstimatedStopDate: string;
   Description: string;
   Customer: string;
   CustomerId: string;
@@ -73,6 +75,8 @@ export interface PipelineOrder {
   total: number;
   status: string;
   orderDate: string;
+  estimatedStartDate: string;
+  estimatedStopDate: string;
   equipmentType: string;
   warehouse: string;
 }
@@ -576,6 +580,8 @@ export function processRevenueData(
       total: toNum(o.Total),
       status: o.Status,
       orderDate: o.OrderDate,
+      estimatedStartDate: o.EstimatedStartDate || "",
+      estimatedStopDate: o.EstimatedStopDate || "",
       equipmentType: classifyEquipmentType(o.Description || ""),
       warehouse: o.Warehouse,
     }))
