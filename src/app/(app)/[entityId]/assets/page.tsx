@@ -49,7 +49,7 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Plus, ArrowRight, Car, Search, Upload, Trash2, DollarSign, ChevronsUpDown, Check, Settings, Calculator } from "lucide-react";
+import { Plus, ArrowRight, Car, Search, Upload, Trash2, DollarSign, ChevronsUpDown, Check, Settings, Calculator, Download } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { formatCurrency } from "@/lib/utils/dates";
@@ -348,6 +348,65 @@ export default function AssetsPage() {
   const totalBookNbv = filteredAssets.reduce((s, a) => s + a.book_net_value, 0);
   const totalTaxNbv = filteredAssets.reduce((s, a) => s + a.tax_net_value, 0);
 
+  function handleDownloadCSV() {
+    const headers = [
+      "Asset Tag",
+      "Asset Name",
+      "Class",
+      "Class Name",
+      "Reporting Group",
+      "Vehicle Year",
+      "Vehicle Make",
+      "Vehicle Model",
+      "VIN",
+      "In Service Date",
+      "Acquisition Cost",
+      "Book NBV",
+      "Tax NBV",
+      "Status",
+    ];
+
+    const rows = filteredAssets.map((asset) => {
+      const classification = getVehicleClassification(asset.vehicle_class, customClasses);
+      return [
+        asset.asset_tag ?? "",
+        asset.asset_name,
+        classification?.class ?? "",
+        classification?.className ?? "",
+        classification?.reportingGroup ?? "",
+        asset.vehicle_year ?? "",
+        asset.vehicle_make ?? "",
+        asset.vehicle_model ?? "",
+        asset.vin ?? "",
+        asset.in_service_date,
+        asset.acquisition_cost.toFixed(2),
+        asset.book_net_value.toFixed(2),
+        asset.tax_net_value.toFixed(2),
+        STATUS_LABELS[asset.status] ?? asset.status,
+      ];
+    });
+
+    const csvContent = [
+      headers.join(","),
+      ...rows.map((row) =>
+        row.map((cell) => {
+          const str = String(cell);
+          return str.includes(",") || str.includes('"')
+            ? `"${str.replace(/"/g, '""')}"`
+            : str;
+        }).join(",")
+      ),
+    ].join("\n");
+
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `rental-assets-${entityId.slice(0, 8)}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -367,6 +426,10 @@ export default function AssetsPage() {
               Delete ({selectedIds.size})
             </Button>
           )}
+          <Button variant="outline" onClick={handleDownloadCSV} disabled={filteredAssets.length === 0}>
+            <Download className="mr-2 h-4 w-4" />
+            Export CSV
+          </Button>
           <Button variant="outline" onClick={() => setDeprRulesOpen(true)}>
             <Calculator className="mr-2 h-4 w-4" />
             Depr Rules
