@@ -13,6 +13,7 @@ import {
   Table,
   TableBody,
   TableCell,
+  TableFooter,
   TableHead,
   TableHeader,
   TableRow,
@@ -614,6 +615,27 @@ export default function AssetsPage() {
                   );
                 })}
               </TableBody>
+              <TableFooter>
+                <TableRow className="font-semibold">
+                  <TableCell></TableCell>
+                  <TableCell></TableCell>
+                  <TableCell></TableCell>
+                  <TableCell></TableCell>
+                  <TableCell></TableCell>
+                  <TableCell>Total ({filteredAssets.length})</TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {formatCurrency(totalCost)}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {formatCurrency(totalBookNbv)}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {formatCurrency(totalTaxNbv)}
+                  </TableCell>
+                  <TableCell></TableCell>
+                  <TableCell></TableCell>
+                </TableRow>
+              </TableFooter>
             </Table>
           )}
         </CardContent>
