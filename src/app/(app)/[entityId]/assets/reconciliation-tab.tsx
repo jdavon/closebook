@@ -68,6 +68,8 @@ interface AssetRow {
   acquisition_cost: number;
   book_accumulated_depreciation: number;
   book_net_value: number;
+  cost_account_id: string | null;
+  accum_depr_account_id: string | null;
 }
 
 interface DeprRow {
@@ -198,11 +200,11 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
     }
     setGlBalances(balances);
 
-    // 4. Fetch all assets with accum depr
+    // 4. Fetch all assets with accum depr and GL overrides
     const { data: assetsData } = await supabase
       .from("fixed_assets")
       .select(
-        "id, asset_name, vehicle_class, acquisition_cost, book_accumulated_depreciation, book_net_value"
+        "id, asset_name, vehicle_class, acquisition_cost, book_accumulated_depreciation, book_net_value, cost_account_id, accum_depr_account_id"
       )
       .eq("entity_id", entityId);
 
@@ -228,36 +230,64 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
     }
 
     // 6. Group assets by recon group and compute totals
+    //    If an asset has cost_account_id or accum_depr_account_id set,
+    //    place it in whichever recon group has that account linked (GL override).
+    //    Otherwise fall back to vehicle_class → master type mapping.
     const grouped: Record<string, SubledgerGroup> = {};
     for (const group of RECON_GROUPS) {
       grouped[group.key] = { total: 0, assets: [] };
     }
     grouped[UNALLOCATED_KEY] = { total: 0, assets: [] };
 
-    for (const asset of assets) {
-      const glGroup = getAssetGLGroup(asset.vehicle_class, cc);
-      if (!glGroup) {
-        const depr = deprMap[asset.id];
-        const nbv = depr ? Number(depr.book_net_value) : asset.book_net_value;
-        grouped[UNALLOCATED_KEY].total += nbv;
-        grouped[UNALLOCATED_KEY].assets.push({ ...asset, periodValue: nbv });
-        continue;
+    // Build reverse lookup: account_id → recon group key
+    const accountToReconGroup: Record<string, string> = {};
+    for (const [groupKey, mappings] of Object.entries(mapped)) {
+      for (const m of mappings) {
+        accountToReconGroup[m.account_id] = groupKey;
       }
+    }
 
-      const costKey = `${glGroup}_cost`;
-      const accumKey = `${glGroup}_accum_depr`;
-
+    for (const asset of assets) {
       const depr = deprMap[asset.id];
       const cost = asset.acquisition_cost;
       const accumDepr = depr
         ? -Math.abs(Number(depr.book_accumulated))
         : -Math.abs(asset.book_accumulated_depreciation);
 
-      if (grouped[costKey]) {
+      // Check for GL account override on the asset
+      const costOverrideGroup = asset.cost_account_id
+        ? accountToReconGroup[asset.cost_account_id]
+        : null;
+      const accumOverrideGroup = asset.accum_depr_account_id
+        ? accountToReconGroup[asset.accum_depr_account_id]
+        : null;
+
+      // Determine cost group: override → vehicle class fallback
+      let costKey: string | null = costOverrideGroup ?? null;
+      let accumKey: string | null = accumOverrideGroup ?? null;
+
+      if (!costKey || !accumKey) {
+        // Fall back to vehicle class → master type
+        const glGroup = getAssetGLGroup(asset.vehicle_class, cc);
+        if (glGroup) {
+          if (!costKey) costKey = `${glGroup}_cost`;
+          if (!accumKey) accumKey = `${glGroup}_accum_depr`;
+        }
+      }
+
+      // If neither override nor class mapping, put in unallocated
+      if (!costKey && !accumKey) {
+        const nbv = depr ? Number(depr.book_net_value) : asset.book_net_value;
+        grouped[UNALLOCATED_KEY].total += nbv;
+        grouped[UNALLOCATED_KEY].assets.push({ ...asset, periodValue: nbv });
+        continue;
+      }
+
+      if (costKey && grouped[costKey]) {
         grouped[costKey].total += cost;
         grouped[costKey].assets.push({ ...asset, periodValue: cost });
       }
-      if (grouped[accumKey]) {
+      if (accumKey && grouped[accumKey]) {
         grouped[accumKey].total += accumDepr;
         grouped[accumKey].assets.push({ ...asset, periodValue: accumDepr });
       }

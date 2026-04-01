@@ -13,6 +13,7 @@ import {
 import { formatCurrency } from "@/lib/utils/dates";
 import {
   GL_ACCOUNT_GROUPS,
+  RECON_GROUPS,
   getAssetGLGroup,
   type GLAccountGroup,
 } from "@/lib/utils/asset-gl-groups";
@@ -31,6 +32,7 @@ interface AssetRecord {
   book_net_value: number;
   status: string;
   disposed_date: string | null;
+  cost_account_id: string | null;
 }
 
 interface DeprEntry {
@@ -96,12 +98,16 @@ function computeRollForward(
   deprEntries: DeprEntry[],
   months: { year: number; month: number }[],
   baselineYear: number,
-  baselineMonth: number
+  baselineMonth: number,
+  resolveGLGroup?: (asset: AssetRecord) => string | null
 ): MonthlyRollForward[] {
-  // Filter assets to this group
-  const groupAssets = assets.filter(
-    (a) => getAssetGLGroup(a.vehicle_class) === group.key
-  );
+  // Filter assets to this group, using resolver if provided
+  const groupAssets = assets.filter((a) => {
+    const resolved = resolveGLGroup
+      ? resolveGLGroup(a)
+      : getAssetGLGroup(a.vehicle_class);
+    return resolved === group.key;
+  });
 
   // Build depreciation lookup: assetId -> monthKey -> entry
   const deprByAssetMonth: Record<string, Record<string, DeprEntry>> = {};
@@ -205,14 +211,34 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
     const baselineMonth = startMonth === 1 ? 12 : startMonth - 1;
     const baselineYear = startMonth === 1 ? startYear - 1 : startYear;
 
-    // Fetch all assets
+    // Fetch all assets (including GL override fields)
     const { data: assetsData } = await supabase
       .from("fixed_assets")
       .select(
-        "id, asset_name, vehicle_class, acquisition_cost, in_service_date, book_accumulated_depreciation, book_net_value, status, disposed_date"
+        "id, asset_name, vehicle_class, acquisition_cost, in_service_date, book_accumulated_depreciation, book_net_value, status, disposed_date, cost_account_id"
       )
       .eq("entity_id", entityId);
     const assets = (assetsData ?? []) as AssetRecord[];
+
+    // Fetch recon links so we can resolve GL overrides
+    const linkRes = await fetch(`/api/assets/recon-links?entityId=${entityId}`);
+    const linkData = linkRes.ok ? await linkRes.json() : [];
+    const accountToParent: Record<string, string> = {};
+    for (const m of linkData as { recon_group: string; account_id: string }[]) {
+      // Map account_id → parent GL group key (e.g. "vehicles_net" or "trailers_net")
+      const reconGroup = RECON_GROUPS.find((g) => g.key === m.recon_group);
+      if (reconGroup) {
+        accountToParent[m.account_id] = reconGroup.parentKey;
+      }
+    }
+
+    // Build resolver: asset GL override → parent group, else vehicle_class
+    const resolveGLGroup = (asset: AssetRecord): string | null => {
+      if (asset.cost_account_id && accountToParent[asset.cost_account_id]) {
+        return accountToParent[asset.cost_account_id];
+      }
+      return getAssetGLGroup(asset.vehicle_class);
+    };
 
     // Fetch all depreciation entries from baseline through end period
     const assetIds = assets.map((a) => a.id);
@@ -244,7 +270,8 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
         allDepr,
         months,
         baselineYear,
-        baselineMonth
+        baselineMonth,
+        resolveGLGroup
       );
     }
     setRollForwardData(data);
