@@ -42,13 +42,15 @@ interface Account {
   account_number: string | null;
 }
 
-interface PayrollAccrualGLMapping {
-  wages_account_id: string | null;
-  wages_offset_account_id: string | null;
-  tax_account_id: string | null;
-  tax_offset_account_id: string | null;
-  pto_account_id: string | null;
-  pto_offset_account_id: string | null;
+interface PayrollGLMapping {
+  wages_debit_account_id: string | null;
+  wages_credit_account_id: string | null;
+  payroll_tax_debit_account_id: string | null;
+  payroll_tax_credit_account_id: string | null;
+  benefits_debit_account_id: string | null;
+  benefits_credit_account_id: string | null;
+  pto_debit_account_id: string | null;
+  pto_credit_account_id: string | null;
 }
 
 export default function EmployeeSettingsPage() {
@@ -72,13 +74,15 @@ export default function EmployeeSettingsPage() {
   const [disconnecting, setDisconnecting] = useState(false);
 
   // GL mappings
-  const [glMapping, setGlMapping] = useState<PayrollAccrualGLMapping>({
-    wages_account_id: null,
-    wages_offset_account_id: null,
-    tax_account_id: null,
-    tax_offset_account_id: null,
-    pto_account_id: null,
-    pto_offset_account_id: null,
+  const [glMapping, setGlMapping] = useState<PayrollGLMapping>({
+    wages_debit_account_id: null,
+    wages_credit_account_id: null,
+    payroll_tax_debit_account_id: null,
+    payroll_tax_credit_account_id: null,
+    benefits_debit_account_id: null,
+    benefits_credit_account_id: null,
+    pto_debit_account_id: null,
+    pto_credit_account_id: null,
   });
   const [savingGL, setSavingGL] = useState(false);
 
@@ -103,34 +107,27 @@ export default function EmployeeSettingsPage() {
 
     setAccounts((accts as Account[]) ?? []);
 
-    // Load GL mappings from most recent accruals
-    const { data: recentAccruals } = await supabase
-      .from("payroll_accruals")
-      .select("accrual_type, account_id, offset_account_id")
-      .eq("entity_id", entityId)
-      .order("created_at", { ascending: false })
-      .limit(10);
+    // Load GL mappings from dedicated table
+    const { data: mappings } = await supabase
+      .from("payroll_gl_mappings")
+      .select("accrual_type, debit_account_id, credit_account_id")
+      .eq("entity_id", entityId);
 
-    if (recentAccruals && recentAccruals.length > 0) {
-      const mapping: PayrollAccrualGLMapping = { ...glMapping };
-      for (const a of recentAccruals as Array<{
-        accrual_type: string;
-        account_id: string | null;
-        offset_account_id: string | null;
-      }>) {
-        if (a.accrual_type === "wages") {
-          mapping.wages_account_id = mapping.wages_account_id ?? a.account_id;
-          mapping.wages_offset_account_id =
-            mapping.wages_offset_account_id ?? a.offset_account_id;
-        } else if (a.accrual_type === "payroll_tax") {
-          mapping.tax_account_id = mapping.tax_account_id ?? a.account_id;
-          mapping.tax_offset_account_id =
-            mapping.tax_offset_account_id ?? a.offset_account_id;
-        } else if (a.accrual_type === "pto") {
-          mapping.pto_account_id = mapping.pto_account_id ?? a.account_id;
-          mapping.pto_offset_account_id =
-            mapping.pto_offset_account_id ?? a.offset_account_id;
-        }
+    if (mappings && mappings.length > 0) {
+      const mapping: PayrollGLMapping = {
+        wages_debit_account_id: null,
+        wages_credit_account_id: null,
+        payroll_tax_debit_account_id: null,
+        payroll_tax_credit_account_id: null,
+        benefits_debit_account_id: null,
+        benefits_credit_account_id: null,
+        pto_debit_account_id: null,
+        pto_credit_account_id: null,
+      };
+      for (const m of mappings) {
+        const key = m.accrual_type as string;
+        mapping[`${key}_debit_account_id` as keyof PayrollGLMapping] = m.debit_account_id;
+        mapping[`${key}_credit_account_id` as keyof PayrollGLMapping] = m.credit_account_id;
       }
       setGlMapping(mapping);
     }
@@ -204,33 +201,41 @@ export default function EmployeeSettingsPage() {
   async function handleSaveGL() {
     setSavingGL(true);
 
-    const updates = [
-      {
-        type: "wages",
-        account_id: glMapping.wages_account_id,
-        offset_account_id: glMapping.wages_offset_account_id,
-      },
-      {
-        type: "payroll_tax",
-        account_id: glMapping.tax_account_id,
-        offset_account_id: glMapping.tax_offset_account_id,
-      },
-      {
-        type: "pto",
-        account_id: glMapping.pto_account_id,
-        offset_account_id: glMapping.pto_offset_account_id,
-      },
-    ];
+    const types = ["wages", "payroll_tax", "benefits", "pto"] as const;
 
-    for (const u of updates) {
+    for (const type of types) {
+      const debitKey = `${type}_debit_account_id` as keyof PayrollGLMapping;
+      const creditKey = `${type}_credit_account_id` as keyof PayrollGLMapping;
+
       await supabase
-        .from("payroll_accruals")
-        .update({
-          account_id: u.account_id,
-          offset_account_id: u.offset_account_id,
-        })
-        .eq("entity_id", entityId)
-        .eq("accrual_type", u.type);
+        .from("payroll_gl_mappings")
+        .upsert(
+          {
+            entity_id: entityId,
+            accrual_type: type,
+            debit_account_id: glMapping[debitKey],
+            credit_account_id: glMapping[creditKey],
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: "entity_id,accrual_type" }
+        );
+    }
+
+    // Also update any existing accrual records so JE worksheet picks up the accounts
+    for (const type of types) {
+      const debitKey = `${type}_debit_account_id` as keyof PayrollGLMapping;
+      const creditKey = `${type}_credit_account_id` as keyof PayrollGLMapping;
+
+      if (glMapping[debitKey] || glMapping[creditKey]) {
+        await supabase
+          .from("payroll_accruals")
+          .update({
+            account_id: glMapping[debitKey],
+            offset_account_id: glMapping[creditKey],
+          })
+          .eq("entity_id", entityId)
+          .eq("accrual_type", type);
+      }
     }
 
     toast.success("GL account mappings saved");
@@ -370,198 +375,105 @@ export default function EmployeeSettingsPage() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
-          {/* Wages */}
-          <div className="space-y-3">
-            <h4 className="font-medium">Accrued Wages</h4>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label className="text-xs text-muted-foreground">
-                  Credit: Wages Payable (Liability)
-                </Label>
-                <Select
-                  value={glMapping.wages_account_id ?? "none"}
-                  onValueChange={(v) =>
-                    setGlMapping((m) => ({
-                      ...m,
-                      wages_account_id: v === "none" ? null : v,
-                    }))
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">-- None --</SelectItem>
-                    {accounts.map((a) => (
-                      <SelectItem key={a.id} value={a.id}>
-                        {a.account_number
-                          ? `${a.account_number} - ${a.name}`
-                          : a.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+          {[
+            {
+              type: "wages",
+              label: "Accrued Wages",
+              debitLabel: "Debit: Wage Expense",
+              creditLabel: "Credit: Wages Payable (Liability)",
+              hint: null,
+            },
+            {
+              type: "payroll_tax",
+              label: "Payroll Tax",
+              debitLabel: "Debit: Payroll Tax Expense",
+              creditLabel: "Credit: Payroll Tax Payable (Liability)",
+              hint: "FICA 7.65% + FUTA 0.6% + CA SUI 3.4% + CA ETT 0.1% + CA SDI 1.1%",
+            },
+            {
+              type: "benefits",
+              label: "Employer Benefits",
+              debitLabel: "Debit: Employee Benefits Expense",
+              creditLabel: "Credit: Accrued Benefits Payable (Liability)",
+              hint: "Employer-paid medical, 401(k) match, etc.",
+            },
+            {
+              type: "pto",
+              label: "PTO Liability",
+              debitLabel: "Debit: PTO Expense",
+              creditLabel: "Credit: PTO Payable (Liability)",
+              hint: null,
+            },
+          ].map(({ type, label, debitLabel, creditLabel, hint }) => {
+            const debitKey = `${type}_debit_account_id` as keyof PayrollGLMapping;
+            const creditKey = `${type}_credit_account_id` as keyof PayrollGLMapping;
+            return (
+              <div key={type} className="space-y-3">
+                <h4 className="font-medium">{label}</h4>
+                {hint && (
+                  <p className="text-xs text-muted-foreground">{hint}</p>
+                )}
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label className="text-xs text-muted-foreground">
+                      {debitLabel}
+                    </Label>
+                    <Select
+                      value={glMapping[debitKey] ?? "none"}
+                      onValueChange={(v) =>
+                        setGlMapping((m) => ({
+                          ...m,
+                          [debitKey]: v === "none" ? null : v,
+                        }))
+                      }
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">-- None --</SelectItem>
+                        {accounts.map((a) => (
+                          <SelectItem key={a.id} value={a.id}>
+                            {a.account_number
+                              ? `${a.account_number} - ${a.name}`
+                              : a.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="text-xs text-muted-foreground">
+                      {creditLabel}
+                    </Label>
+                    <Select
+                      value={glMapping[creditKey] ?? "none"}
+                      onValueChange={(v) =>
+                        setGlMapping((m) => ({
+                          ...m,
+                          [creditKey]: v === "none" ? null : v,
+                        }))
+                      }
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">-- None --</SelectItem>
+                        {accounts.map((a) => (
+                          <SelectItem key={a.id} value={a.id}>
+                            {a.account_number
+                              ? `${a.account_number} - ${a.name}`
+                              : a.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
               </div>
-              <div className="space-y-2">
-                <Label className="text-xs text-muted-foreground">
-                  Debit: Wage Expense
-                </Label>
-                <Select
-                  value={glMapping.wages_offset_account_id ?? "none"}
-                  onValueChange={(v) =>
-                    setGlMapping((m) => ({
-                      ...m,
-                      wages_offset_account_id: v === "none" ? null : v,
-                    }))
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">-- None --</SelectItem>
-                    {accounts.map((a) => (
-                      <SelectItem key={a.id} value={a.id}>
-                        {a.account_number
-                          ? `${a.account_number} - ${a.name}`
-                          : a.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-          </div>
-
-          {/* Payroll Tax */}
-          <div className="space-y-3">
-            <h4 className="font-medium">Payroll Tax</h4>
-            <p className="text-xs text-muted-foreground">
-              Default rate: 12.85% (FICA 7.65% + FUTA 0.6% + CA SUI 3.4% + CA
-              ETT 0.1% + CA SDI 1.1%)
-            </p>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label className="text-xs text-muted-foreground">
-                  Credit: Payroll Tax Payable (Liability)
-                </Label>
-                <Select
-                  value={glMapping.tax_account_id ?? "none"}
-                  onValueChange={(v) =>
-                    setGlMapping((m) => ({
-                      ...m,
-                      tax_account_id: v === "none" ? null : v,
-                    }))
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">-- None --</SelectItem>
-                    {accounts.map((a) => (
-                      <SelectItem key={a.id} value={a.id}>
-                        {a.account_number
-                          ? `${a.account_number} - ${a.name}`
-                          : a.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label className="text-xs text-muted-foreground">
-                  Debit: Payroll Tax Expense
-                </Label>
-                <Select
-                  value={glMapping.tax_offset_account_id ?? "none"}
-                  onValueChange={(v) =>
-                    setGlMapping((m) => ({
-                      ...m,
-                      tax_offset_account_id: v === "none" ? null : v,
-                    }))
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">-- None --</SelectItem>
-                    {accounts.map((a) => (
-                      <SelectItem key={a.id} value={a.id}>
-                        {a.account_number
-                          ? `${a.account_number} - ${a.name}`
-                          : a.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-          </div>
-
-          {/* PTO */}
-          <div className="space-y-3">
-            <h4 className="font-medium">PTO Liability</h4>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label className="text-xs text-muted-foreground">
-                  Credit: PTO Payable (Liability)
-                </Label>
-                <Select
-                  value={glMapping.pto_account_id ?? "none"}
-                  onValueChange={(v) =>
-                    setGlMapping((m) => ({
-                      ...m,
-                      pto_account_id: v === "none" ? null : v,
-                    }))
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">-- None --</SelectItem>
-                    {accounts.map((a) => (
-                      <SelectItem key={a.id} value={a.id}>
-                        {a.account_number
-                          ? `${a.account_number} - ${a.name}`
-                          : a.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label className="text-xs text-muted-foreground">
-                  Debit: PTO Expense
-                </Label>
-                <Select
-                  value={glMapping.pto_offset_account_id ?? "none"}
-                  onValueChange={(v) =>
-                    setGlMapping((m) => ({
-                      ...m,
-                      pto_offset_account_id: v === "none" ? null : v,
-                    }))
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">-- None --</SelectItem>
-                    {accounts.map((a) => (
-                      <SelectItem key={a.id} value={a.id}>
-                        {a.account_number
-                          ? `${a.account_number} - ${a.name}`
-                          : a.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-          </div>
+            );
+          })}
 
           <Button onClick={handleSaveGL} disabled={savingGL}>
             {savingGL ? "Saving..." : "Save GL Mappings"}

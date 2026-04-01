@@ -117,7 +117,22 @@ export async function POST(request: NextRequest) {
     // 3. Run accrual calculation engine
     const accrualResult = calculateAccruals(inputs, periodYear, periodMonth);
 
-    // 4. Delete existing synced accruals for this period (replace with fresh)
+    // 4. Load GL account mappings for all entities so we can populate account IDs
+    const entityIds = [...new Set(accrualResult.lineItems.map((i) => i.operatingEntityId))];
+    const { data: glMappings } = await supabase
+      .from("payroll_gl_mappings")
+      .select("entity_id, accrual_type, debit_account_id, credit_account_id")
+      .in("entity_id", entityIds);
+
+    const glLookup: Record<string, { debit: string | null; credit: string | null }> = {};
+    for (const m of glMappings ?? []) {
+      glLookup[`${m.entity_id}:${m.accrual_type}`] = {
+        debit: m.debit_account_id,
+        credit: m.credit_account_id,
+      };
+    }
+
+    // 5. Delete existing synced accruals for this period (replace with fresh)
     await supabase
       .from("payroll_accruals")
       .delete()
@@ -125,23 +140,28 @@ export async function POST(request: NextRequest) {
       .eq("period_month", periodMonth)
       .eq("source", "paylocity_sync");
 
-    // 5. Insert new accrual records — one per entity per type
-    const accrualRows = accrualResult.lineItems.map((item) => ({
-      entity_id: item.operatingEntityId,
-      period_year: periodYear,
-      period_month: periodMonth,
-      accrual_type: item.type,
-      description: item.description,
-      amount: item.amount,
-      source: "paylocity_sync" as const,
-      payroll_sync_id: syncLogId,
-      status: "draft" as const,
-      notes: item.details
-        ? Object.entries(item.details)
-            .map(([k, v]) => `${k}: $${v.toFixed(2)}`)
-            .join(", ")
-        : null,
-    }));
+    // 6. Insert new accrual records — one per entity per type, with GL accounts
+    const accrualRows = accrualResult.lineItems.map((item) => {
+      const gl = glLookup[`${item.operatingEntityId}:${item.type}`];
+      return {
+        entity_id: item.operatingEntityId,
+        period_year: periodYear,
+        period_month: periodMonth,
+        accrual_type: item.type,
+        description: item.description,
+        amount: item.amount,
+        source: "paylocity_sync" as const,
+        payroll_sync_id: syncLogId,
+        status: "draft" as const,
+        account_id: gl?.debit ?? null,
+        offset_account_id: gl?.credit ?? null,
+        notes: item.details
+          ? Object.entries(item.details)
+              .map(([k, v]) => `${k}: $${v.toFixed(2)}`)
+              .join(", ")
+          : null,
+      };
+    });
 
     if (accrualRows.length > 0) {
       const { error: insertError } = await supabase

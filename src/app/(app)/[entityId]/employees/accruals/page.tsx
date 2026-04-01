@@ -51,6 +51,8 @@ import {
   Banknote,
   Search,
   Loader2,
+  CheckCircle,
+  FileText,
 } from "lucide-react";
 import { formatCurrency, getCurrentPeriod, getPeriodLabel } from "@/lib/utils/dates";
 
@@ -155,6 +157,9 @@ export default function PayrollAccrualsPage() {
   const [manualAmount, setManualAmount] = useState("");
   const [manualNotes, setManualNotes] = useState("");
   const [addingManual, setAddingManual] = useState(false);
+
+  // Post accruals
+  const [posting, setPosting] = useState(false);
 
   // --- Data Loading ---
 
@@ -287,6 +292,37 @@ export default function PayrollAccrualsPage() {
     setAddingManual(false);
   }
 
+  async function handlePostAccruals() {
+    const draftCount = accruals.filter((a) => a.status === "draft").length;
+    if (draftCount === 0) {
+      toast.error("No draft accruals to post");
+      return;
+    }
+
+    setPosting(true);
+    try {
+      const res = await fetch("/api/paylocity/post-accruals", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ entityId, periodYear, periodMonth }),
+      });
+
+      const json = await res.json();
+
+      if (!res.ok) {
+        toast.error(json.error || "Post failed");
+      } else {
+        toast.success(
+          `Posted ${json.posted} accrual${json.posted !== 1 ? "s" : ""} (${formatCurrency(json.totalAmount)}) — reversals generated for ${json.reversalPeriod}`
+        );
+        loadAccruals();
+      }
+    } catch {
+      toast.error("Post failed — network error");
+    }
+    setPosting(false);
+  }
+
   // --- Computed ---
 
   const totals = accruals.reduce(
@@ -380,9 +416,17 @@ export default function PayrollAccrualsPage() {
                 />
                 {syncing ? "Syncing..." : "Sync from Paylocity"}
               </Button>
+              <Button
+                variant="default"
+                onClick={handlePostAccruals}
+                disabled={posting || accruals.filter((a) => a.status === "draft").length === 0}
+              >
+                <CheckCircle className="mr-2 h-4 w-4" />
+                {posting ? "Posting..." : "Post Accruals & Generate JE"}
+              </Button>
               <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
                 <DialogTrigger asChild>
-                  <Button>
+                  <Button variant="outline">
                     <Plus className="mr-2 h-4 w-4" />
                     Add Manual
                   </Button>
@@ -493,6 +537,36 @@ export default function PayrollAccrualsPage() {
               </CardContent>
             </Card>
           </div>
+
+          {/* Posted JE Summary */}
+          {accruals.some((a) => a.status === "posted") && (
+            <Card className="border-green-200 bg-green-50 dark:border-green-900 dark:bg-green-950">
+              <CardContent className="pt-4 pb-3">
+                <div className="flex items-center gap-2 mb-2">
+                  <FileText className="h-4 w-4 text-green-700 dark:text-green-300" />
+                  <p className="text-sm font-medium text-green-800 dark:text-green-200">
+                    Journal Entries Generated
+                  </p>
+                </div>
+                <div className="text-xs text-green-700 dark:text-green-300 space-y-1">
+                  {accruals
+                    .filter((a) => a.status === "posted" && a.amount > 0)
+                    .map((a) => (
+                      <div key={a.id} className="flex justify-between">
+                        <span>
+                          DR {TYPE_LABELS[a.accrual_type] ?? a.accrual_type} Expense / CR{" "}
+                          {TYPE_LABELS[a.accrual_type] ?? a.accrual_type} Payable
+                        </span>
+                        <span className="font-mono">{formatCurrency(a.amount)}</span>
+                      </div>
+                    ))}
+                  <p className="pt-1 border-t border-green-300 dark:border-green-700">
+                    Auto-reversals will post on the 1st of the next period.
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+          )}
 
           {/* Accruals Table */}
           <Card>

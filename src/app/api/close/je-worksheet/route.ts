@@ -363,12 +363,19 @@ async function computePayrollEntries(
   periodYear: number,
   periodMonth: number
 ) {
-  const { data: accruals } = await admin
-    .from("payroll_accruals")
-    .select("*")
-    .eq("entity_id", entityId)
-    .eq("period_year", periodYear)
-    .eq("period_month", periodMonth);
+  // Fetch accruals and GL mappings in parallel
+  const [{ data: accruals }, { data: glMappings }] = await Promise.all([
+    admin
+      .from("payroll_accruals")
+      .select("*")
+      .eq("entity_id", entityId)
+      .eq("period_year", periodYear)
+      .eq("period_month", periodMonth),
+    admin
+      .from("payroll_gl_mappings")
+      .select("accrual_type, debit_account_id, credit_account_id")
+      .eq("entity_id", entityId),
+  ]);
 
   if (!accruals || accruals.length === 0) {
     return {
@@ -380,43 +387,92 @@ async function computePayrollEntries(
     };
   }
 
+  // Build GL mapping lookup for fallback
+  const glLookup: Record<string, { debit: string | null; credit: string | null }> = {};
+  for (const m of glMappings ?? []) {
+    glLookup[m.accrual_type] = {
+      debit: m.debit_account_id,
+      credit: m.credit_account_id,
+    };
+  }
+
   const entries: WorksheetEntry[] = [];
-  let totalAmount = 0;
+  let totalDebit = 0;
+  let totalCredit = 0;
 
   for (const accrual of accruals) {
     const amount = Number(accrual.amount ?? 0);
-    if (amount <= 0) continue;
+    if (amount === 0) continue;
 
-    totalAmount += amount;
+    const isReversal = amount < 0;
+    const absAmount = Math.abs(amount);
+    const gl = glLookup[accrual.accrual_type];
 
-    entries.push({
-      source: "payroll",
-      sourceRecordId: accrual.id,
-      sourceRecordName: accrual.description,
-      date: `${periodYear}-${String(periodMonth).padStart(2, "0")}-${lastDay(periodYear, periodMonth)}`,
-      description: accrual.description,
-      debits: [
-        {
-          account: accrualTypeToDebitAccount(accrual.accrual_type),
-          accountId: accrual.account_id ?? undefined,
-          amount,
-        },
-      ],
-      credits: [
-        {
-          account: accrualTypeToCreditAccount(accrual.accrual_type),
-          accountId: accrual.offset_account_id ?? undefined,
-          amount,
-        },
-      ],
-    });
+    // For positive accruals: DR Expense / CR Liability
+    // For reversals (negative): DR Liability / CR Expense (flip the sides)
+    const debitAccountId = accrual.account_id ?? gl?.debit ?? undefined;
+    const creditAccountId = accrual.offset_account_id ?? gl?.credit ?? undefined;
+
+    if (isReversal) {
+      // Reversal entry — debit the liability, credit the expense
+      totalDebit += absAmount;
+      totalCredit += absAmount;
+
+      entries.push({
+        source: "payroll",
+        sourceRecordId: accrual.id,
+        sourceRecordName: accrual.description,
+        date: `${periodYear}-${String(periodMonth).padStart(2, "0")}-01`,
+        description: accrual.description,
+        debits: [
+          {
+            account: accrualTypeToCreditAccount(accrual.accrual_type),
+            accountId: creditAccountId,
+            amount: absAmount,
+          },
+        ],
+        credits: [
+          {
+            account: accrualTypeToDebitAccount(accrual.accrual_type),
+            accountId: debitAccountId,
+            amount: absAmount,
+          },
+        ],
+      });
+    } else {
+      // Normal accrual — debit expense, credit liability
+      totalDebit += absAmount;
+      totalCredit += absAmount;
+
+      entries.push({
+        source: "payroll",
+        sourceRecordId: accrual.id,
+        sourceRecordName: accrual.description,
+        date: `${periodYear}-${String(periodMonth).padStart(2, "0")}-${lastDay(periodYear, periodMonth)}`,
+        description: accrual.description,
+        debits: [
+          {
+            account: accrualTypeToDebitAccount(accrual.accrual_type),
+            accountId: debitAccountId,
+            amount: absAmount,
+          },
+        ],
+        credits: [
+          {
+            account: accrualTypeToCreditAccount(accrual.accrual_type),
+            accountId: creditAccountId,
+            amount: absAmount,
+          },
+        ],
+      });
+    }
   }
 
   return {
     module: "payroll",
     entries,
-    totalDebit: round2(totalAmount),
-    totalCredit: round2(totalAmount),
+    totalDebit: round2(totalDebit),
+    totalCredit: round2(totalCredit),
     accrualCount: accruals.length,
     entriesWithAmount: entries.length,
   };

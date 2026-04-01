@@ -1870,6 +1870,36 @@ export type Database = {
         }
         Relationships: []
       }
+      payroll_gl_mappings: {
+        Row: {
+          id: string
+          entity_id: string
+          accrual_type: string
+          debit_account_id: string | null
+          credit_account_id: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          entity_id: string
+          accrual_type: string
+          debit_account_id?: string | null
+          credit_account_id?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          entity_id?: string
+          accrual_type?: string
+          debit_account_id?: string | null
+          credit_account_id?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       payroll_sync_logs: {
         Row: {
           id: string
