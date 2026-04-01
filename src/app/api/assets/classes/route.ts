@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 
 export async function GET(request: NextRequest) {
   const entityId = request.nextUrl.searchParams.get("entityId");
@@ -7,7 +7,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "entityId required" }, { status: 400 });
   }
 
-  const supabase = await createClient();
+  const supabase = createAdminClient();
   const { data, error } = await supabase
     .from("custom_vehicle_classes")
     .select("*")
@@ -31,7 +31,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "master_type must be Vehicle or Trailer" }, { status: 400 });
   }
 
-  const supabase = await createClient();
+  const supabase = createAdminClient();
   const { data, error } = await supabase
     .from("custom_vehicle_classes")
     .insert({ entity_id, class_code, class_name, reporting_group, master_type })
@@ -55,7 +55,7 @@ export async function PUT(request: NextRequest) {
     return NextResponse.json({ error: "id required" }, { status: 400 });
   }
 
-  const supabase = await createClient();
+  const supabase = createAdminClient();
   const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
   if (class_code !== undefined) updates.class_code = class_code;
   if (class_name !== undefined) updates.class_name = class_name;
@@ -89,7 +89,7 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ error: "id required" }, { status: 400 });
   }
 
-  const supabase = await createClient();
+  const supabase = createAdminClient();
   const { error } = await supabase
     .from("custom_vehicle_classes")
     .delete()
