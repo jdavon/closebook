@@ -334,8 +334,8 @@ export default function NewAssetPage() {
                       </SelectTrigger>
                       <SelectContent>
                         {getClassesGroupedByMasterType(customClasses).map((group) => (
-                          <SelectGroup key={group.masterType}>
-                            <SelectLabel>{group.masterType}s</SelectLabel>
+                          <SelectGroup key={group.label}>
+                            <SelectLabel>{group.label}</SelectLabel>
                             {group.classes.map((c) => (
                               <SelectItem key={c.class} value={c.class}>
                                 {getClassLabel(c.class, customClasses)}

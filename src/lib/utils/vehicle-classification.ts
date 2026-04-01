@@ -8,7 +8,7 @@ export interface VehicleClassification {
   class: string;
   className: string;
   reportingGroup: string;
-  masterType: VehicleMasterType;
+  masterType: VehicleMasterType | null;
   isCustom?: boolean;
 }
 
@@ -68,6 +68,7 @@ export const VEHICLE_CLASSIFICATIONS: Record<VehicleClass, VehicleClassification
   "40":  { class: "40",  className: "Shorty 40",                      reportingGroup: "Studio Box Truck",  masterType: "Vehicle" },
   "51":  { class: "51",  className: "Stakebed 4x4",                   reportingGroup: "Stakebed",          masterType: "Vehicle" },
   "52":  { class: "52",  className: "5th Wheel Stakebed",             reportingGroup: "Stakebed",          masterType: "Vehicle" },
+  "ADJ": { class: "ADJ", className: "Accounting Adjustment",          reportingGroup: "",                  masterType: null },
 };
 
 /** Convert DB rows to VehicleClassification objects */
@@ -152,20 +153,32 @@ export function getAllClasses(
 export function getClassesGroupedByMasterType(
   customClasses?: VehicleClassification[]
 ): Array<{
-  masterType: VehicleMasterType;
+  masterType: VehicleMasterType | null;
+  label: string;
   classes: VehicleClassification[];
 }> {
   const all = getAllClasses(customClasses);
-  return [
+  const groups: Array<{
+    masterType: VehicleMasterType | null;
+    label: string;
+    classes: VehicleClassification[];
+  }> = [
     {
       masterType: "Vehicle",
+      label: "Vehicle",
       classes: all.filter((c) => c.masterType === "Vehicle"),
     },
     {
       masterType: "Trailer",
+      label: "Trailer",
       classes: all.filter((c) => c.masterType === "Trailer"),
     },
   ];
+  const other = all.filter((c) => c.masterType === null);
+  if (other.length > 0) {
+    groups.push({ masterType: null, label: "Other", classes: other });
+  }
+  return groups;
 }
 
 /** All distinct reporting groups from built-in classes (display order) */
