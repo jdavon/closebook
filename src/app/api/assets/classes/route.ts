@@ -1,6 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 
+/** Look up the organization_id for a given entity */
+async function getOrgId(
+  supabase: ReturnType<typeof createAdminClient>,
+  entityId: string
+): Promise<string | null> {
+  const { data } = await supabase
+    .from("entities")
+    .select("organization_id")
+    .eq("id", entityId)
+    .single();
+  return data?.organization_id ?? null;
+}
+
 export async function GET(request: NextRequest) {
   const entityId = request.nextUrl.searchParams.get("entityId");
   if (!entityId) {
@@ -8,10 +21,15 @@ export async function GET(request: NextRequest) {
   }
 
   const supabase = createAdminClient();
+  const orgId = await getOrgId(supabase, entityId);
+  if (!orgId) {
+    return NextResponse.json({ error: "Entity not found" }, { status: 404 });
+  }
+
   const { data, error } = await supabase
     .from("custom_vehicle_classes")
     .select("*")
-    .eq("entity_id", entityId)
+    .eq("organization_id", orgId)
     .order("class_code");
 
   if (error) {
@@ -32,9 +50,21 @@ export async function POST(request: NextRequest) {
   }
 
   const supabase = createAdminClient();
+  const orgId = await getOrgId(supabase, entity_id);
+  if (!orgId) {
+    return NextResponse.json({ error: "Entity not found" }, { status: 404 });
+  }
+
   const { data, error } = await supabase
     .from("custom_vehicle_classes")
-    .insert({ entity_id, class_code, class_name, reporting_group, master_type })
+    .insert({
+      organization_id: orgId,
+      entity_id,
+      class_code,
+      class_name,
+      reporting_group,
+      master_type,
+    })
     .select()
     .single();
 

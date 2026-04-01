@@ -4817,7 +4817,8 @@ export type Database = {
       custom_vehicle_classes: {
         Row: {
           id: string
-          entity_id: string
+          organization_id: string
+          entity_id: string | null
           class_code: string
           class_name: string
           reporting_group: string
@@ -4827,7 +4828,8 @@ export type Database = {
         }
         Insert: {
           id?: string
-          entity_id: string
+          organization_id: string
+          entity_id?: string | null
           class_code: string
           class_name: string
           reporting_group: string
@@ -4837,7 +4839,8 @@ export type Database = {
         }
         Update: {
           id?: string
-          entity_id?: string
+          organization_id?: string
+          entity_id?: string | null
           class_code?: string
           class_name?: string
           reporting_group?: string
