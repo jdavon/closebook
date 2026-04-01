@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import {
   generateDepreciationSchedule,
@@ -40,16 +41,19 @@ interface AssetImportRow {
 /**
  * POST /api/assets/import
  * Bulk-imports fixed assets from pre-parsed JSON rows (from the import wizard).
+ * If an asset_tag already exists for the entity, the existing asset is updated
+ * (upsert behavior). Otherwise a new asset is created.
  */
 export async function POST(request: NextRequest) {
-  const supabase = await createClient();
-
+  const authClient = await createClient();
   const {
     data: { user },
-  } = await supabase.auth.getUser();
+  } = await authClient.auth.getUser();
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+
+  const supabase = createAdminClient();
 
   const body = await request.json();
   const { entityId, rows } = body as {
@@ -64,9 +68,30 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  // Pre-fetch existing assets by asset_tag for this entity so we can detect updates
+  const tagsInImport = rows
+    .map((r) => r.asset_tag?.trim())
+    .filter((t): t is string => !!t);
+
+  const existingByTag: Record<string, string> = {}; // asset_tag → id
+  if (tagsInImport.length > 0) {
+    const { data: existing } = await supabase
+      .from("fixed_assets")
+      .select("id, asset_tag")
+      .eq("entity_id", entityId)
+      .in("asset_tag", tagsInImport);
+
+    if (existing) {
+      for (const a of existing) {
+        if (a.asset_tag) existingByTag[a.asset_tag] = a.id;
+      }
+    }
+  }
+
   const currentPeriod = getCurrentPeriod();
   const results = {
     imported: 0,
+    updated: 0,
     skipped: 0,
     errors: [] as string[],
   };
@@ -108,58 +133,103 @@ export async function POST(request: NextRequest) {
     const bonusDepr = row.bonus_depreciation_amount || 0;
     const status = row.status || "active";
 
-    const { data: asset, error: insertError } = await supabase
-      .from("fixed_assets")
-      .insert({
-        entity_id: entityId,
-        asset_name: assetName,
-        asset_tag: row.asset_tag || null,
-        vehicle_year: row.vehicle_year ?? null,
-        vehicle_make: row.vehicle_make || null,
-        vehicle_model: row.vehicle_model || null,
-        vehicle_trim: row.vehicle_trim || null,
-        vin: row.vin?.toUpperCase() || null,
-        license_plate: row.license_plate?.toUpperCase() || null,
-        license_state: row.license_state?.toUpperCase() || null,
-        vehicle_class: row.vehicle_class || null,
-        mileage_at_acquisition: row.mileage_at_acquisition ?? null,
-        title_number: row.title_number || null,
-        registration_expiry: row.registration_expiry || null,
-        vehicle_notes: row.vehicle_notes || null,
-        acquisition_date: row.acquisition_date,
-        acquisition_cost: acquisitionCost,
-        in_service_date: row.in_service_date,
-        book_useful_life_months: bookUsefulLifeMonths,
-        book_salvage_value: bookSalvageValue,
-        book_depreciation_method: bookMethod,
-        tax_cost_basis: taxCostBasis,
-        tax_depreciation_method: taxMethod,
-        tax_useful_life_months: taxUsefulLifeMonths,
-        section_179_amount: section179,
-        bonus_depreciation_amount: bonusDepr,
-        status,
-        created_by: user.id,
-      })
-      .select()
-      .single();
+    const assetTag = row.asset_tag?.trim() || null;
+    const existingId = assetTag ? existingByTag[assetTag] : undefined;
 
-    if (insertError) {
-      results.errors.push(`Row ${rowNum}: ${insertError.message}`);
-      results.skipped++;
-      continue;
+    const assetFields = {
+      entity_id: entityId,
+      asset_name: assetName,
+      asset_tag: assetTag,
+      vehicle_year: row.vehicle_year ?? null,
+      vehicle_make: row.vehicle_make || null,
+      vehicle_model: row.vehicle_model || null,
+      vehicle_trim: row.vehicle_trim || null,
+      vin: row.vin?.toUpperCase() || null,
+      license_plate: row.license_plate?.toUpperCase() || null,
+      license_state: row.license_state?.toUpperCase() || null,
+      vehicle_class: row.vehicle_class || null,
+      mileage_at_acquisition: row.mileage_at_acquisition ?? null,
+      title_number: row.title_number || null,
+      registration_expiry: row.registration_expiry || null,
+      vehicle_notes: row.vehicle_notes || null,
+      acquisition_date: row.acquisition_date,
+      acquisition_cost: acquisitionCost,
+      in_service_date: row.in_service_date,
+      book_useful_life_months: bookUsefulLifeMonths,
+      book_salvage_value: bookSalvageValue,
+      book_depreciation_method: bookMethod,
+      tax_cost_basis: taxCostBasis,
+      tax_depreciation_method: taxMethod,
+      tax_useful_life_months: taxUsefulLifeMonths,
+      section_179_amount: section179,
+      bonus_depreciation_amount: bonusDepr,
+      status,
+    };
+
+    let assetId: string;
+
+    if (existingId) {
+      // ---- UPDATE existing asset ----
+      const { error: updateError } = await supabase
+        .from("fixed_assets")
+        .update(assetFields)
+        .eq("id", existingId);
+
+      if (updateError) {
+        results.errors.push(`Row ${rowNum} (update ${assetTag}): ${updateError.message}`);
+        results.skipped++;
+        continue;
+      }
+
+      assetId = existingId;
+
+      // Delete old depreciation schedule — will be regenerated below
+      await supabase
+        .from("fixed_asset_depreciation")
+        .delete()
+        .eq("fixed_asset_id", assetId);
+
+      results.updated++;
+    } else {
+      // ---- INSERT new asset ----
+      const { data: asset, error: insertError } = await supabase
+        .from("fixed_assets")
+        .insert({ ...assetFields, created_by: user.id })
+        .select("id")
+        .single();
+
+      if (insertError) {
+        results.errors.push(`Row ${rowNum}: ${insertError.message}`);
+        results.skipped++;
+        continue;
+      }
+
+      assetId = asset.id;
+      results.imported++;
     }
 
-    // Generate depreciation schedule through current period
-    // If user provided accumulated depreciation, use those values directly
-    const userBookAccumDepr = row.book_accumulated_depreciation != null ? Number(row.book_accumulated_depreciation) : null;
-    const userTaxAccumDepr = row.tax_accumulated_depreciation != null ? Number(row.tax_accumulated_depreciation) : null;
-    const hasUserOverride = (userBookAccumDepr !== null && !isNaN(userBookAccumDepr)) ||
-                            (userTaxAccumDepr !== null && !isNaN(userTaxAccumDepr));
+    // ---- Generate depreciation schedule ----
+    const userBookAccumDepr =
+      row.book_accumulated_depreciation != null
+        ? Number(row.book_accumulated_depreciation)
+        : null;
+    const userTaxAccumDepr =
+      row.tax_accumulated_depreciation != null
+        ? Number(row.tax_accumulated_depreciation)
+        : null;
+    const hasUserOverride =
+      (userBookAccumDepr !== null && !isNaN(userBookAccumDepr)) ||
+      (userTaxAccumDepr !== null && !isNaN(userTaxAccumDepr));
 
     if (hasUserOverride) {
-      // User provided accumulated depreciation — use it directly
-      const finalBookAccum = (userBookAccumDepr !== null && !isNaN(userBookAccumDepr)) ? userBookAccumDepr : 0;
-      const finalTaxAccum = (userTaxAccumDepr !== null && !isNaN(userTaxAccumDepr)) ? userTaxAccumDepr : 0;
+      const finalBookAccum =
+        userBookAccumDepr !== null && !isNaN(userBookAccumDepr)
+          ? userBookAccumDepr
+          : 0;
+      const finalTaxAccum =
+        userTaxAccumDepr !== null && !isNaN(userTaxAccumDepr)
+          ? userTaxAccumDepr
+          : 0;
       const effectiveTaxBasis = taxCostBasis ?? acquisitionCost;
 
       await supabase
@@ -168,22 +238,22 @@ export async function POST(request: NextRequest) {
           book_accumulated_depreciation: finalBookAccum,
           tax_accumulated_depreciation: finalTaxAccum,
         })
-        .eq("id", asset.id);
+        .eq("id", assetId);
 
-      // Insert a single summary entry for the current period to anchor the schedule
       await supabase.from("fixed_asset_depreciation").insert({
-        fixed_asset_id: asset.id,
+        fixed_asset_id: assetId,
         period_year: currentPeriod.year,
         period_month: currentPeriod.month,
         book_depreciation: 0,
         book_accumulated: finalBookAccum,
-        book_net_value: Math.round((acquisitionCost - finalBookAccum) * 100) / 100,
+        book_net_value:
+          Math.round((acquisitionCost - finalBookAccum) * 100) / 100,
         tax_depreciation: 0,
         tax_accumulated: finalTaxAccum,
-        tax_net_value: Math.round((effectiveTaxBasis - finalTaxAccum) * 100) / 100,
+        tax_net_value:
+          Math.round((effectiveTaxBasis - finalTaxAccum) * 100) / 100,
       });
     } else {
-      // No user override — auto-calculate the full schedule
       const deprInput: AssetForDepreciation = {
         acquisition_cost: acquisitionCost,
         in_service_date: row.in_service_date,
@@ -205,7 +275,7 @@ export async function POST(request: NextRequest) {
 
       if (schedule.length > 0) {
         const deprEntries = schedule.map((entry) => ({
-          fixed_asset_id: asset.id,
+          fixed_asset_id: assetId,
           period_year: entry.period_year,
           period_month: entry.period_month,
           book_depreciation: entry.book_depreciation,
@@ -225,11 +295,9 @@ export async function POST(request: NextRequest) {
             book_accumulated_depreciation: lastEntry.book_accumulated,
             tax_accumulated_depreciation: lastEntry.tax_accumulated,
           })
-          .eq("id", asset.id);
+          .eq("id", assetId);
       }
     }
-
-    results.imported++;
   }
 
   return NextResponse.json(results);

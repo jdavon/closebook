@@ -114,6 +114,7 @@ interface ColumnDef {
 
 interface ImportResults {
   imported: number;
+  updated: number;
   skipped: number;
   errors: string[];
 }
@@ -1176,13 +1177,21 @@ export default function AssetImportWizardPage() {
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
+              <div className={`grid gap-4 ${results.updated > 0 ? "grid-cols-3" : "grid-cols-2"}`}>
                 <div className="text-center p-4 bg-green-50 dark:bg-green-950 rounded-lg">
                   <p className="text-2xl font-bold text-green-700 dark:text-green-300">
                     {results.imported}
                   </p>
-                  <p className="text-sm text-green-600 dark:text-green-400">Imported</p>
+                  <p className="text-sm text-green-600 dark:text-green-400">Created</p>
                 </div>
+                {results.updated > 0 && (
+                  <div className="text-center p-4 bg-blue-50 dark:bg-blue-950 rounded-lg">
+                    <p className="text-2xl font-bold text-blue-700 dark:text-blue-300">
+                      {results.updated}
+                    </p>
+                    <p className="text-sm text-blue-600 dark:text-blue-400">Updated</p>
+                  </div>
+                )}
                 <div className="text-center p-4 bg-amber-50 dark:bg-amber-950 rounded-lg">
                   <p className="text-2xl font-bold text-amber-700 dark:text-amber-300">
                     {results.skipped}
