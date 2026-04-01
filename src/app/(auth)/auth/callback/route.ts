@@ -20,7 +20,12 @@ export async function GET(request: Request) {
         }, { onConflict: "id" });
 
         // Process pending organization invites
-        await processPendingInvites(user.id, user.email ?? "");
+        const hadPendingInvites = await processPendingInvites(user.id, user.email ?? "");
+
+        // Redirect invited users who haven't completed onboarding to welcome page
+        if (hadPendingInvites && !user.user_metadata?.onboarding_complete) {
+          return NextResponse.redirect(`${origin}/welcome`);
+        }
       }
       return NextResponse.redirect(`${origin}${next}`);
     }
@@ -30,8 +35,8 @@ export async function GET(request: Request) {
   return NextResponse.redirect(`${origin}/login?error=auth_callback_error`);
 }
 
-async function processPendingInvites(userId: string, email: string) {
-  if (!email) return;
+async function processPendingInvites(userId: string, email: string): Promise<boolean> {
+  if (!email) return false;
 
   try {
     const admin = createAdminClient();
@@ -43,7 +48,7 @@ async function processPendingInvites(userId: string, email: string) {
       .eq("status", "pending")
       .gt("expires_at", new Date().toISOString());
 
-    if (!pendingInvites || pendingInvites.length === 0) return;
+    if (!pendingInvites || pendingInvites.length === 0) return false;
 
     for (const invite of pendingInvites) {
       // Check if user is already a member of this org
@@ -71,7 +76,10 @@ async function processPendingInvites(userId: string, email: string) {
         })
         .eq("id", invite.id);
     }
+
+    return true;
   } catch (err) {
     console.error("[auth/callback] Error processing invites:", err);
+    return false;
   }
 }
