@@ -80,17 +80,30 @@ export async function POST(request: NextRequest) {
                 periodYear
               );
 
-              const sorted = [...payStatements].sort(
-                (a, b) => new Date(b.checkDate).getTime() - new Date(a.checkDate).getTime()
-              );
-
               const periodEndDate = new Date(periodYear, periodMonth, 0);
-              const relevantStatements = sorted.filter(
-                (ps) => new Date(ps.checkDate) <= periodEndDate
-              );
 
-              const lastCheckDate = relevantStatements[0]?.checkDate ?? null;
-              const ytdGrossWages = relevantStatements.reduce(
+              // Filter to pay statements whose PAY PERIOD ends on or before the
+              // period end. We use endDate (pay period end), NOT checkDate, because
+              // on a delayed payment schedule the check may be issued days/weeks
+              // after the pay period closes. Using checkDate would incorrectly
+              // assume wages are covered through the check date when they're only
+              // covered through the pay period end.
+              const relevantStatements = payStatements
+                .filter((ps) => new Date(ps.endDate) <= periodEndDate)
+                .sort(
+                  (a, b) =>
+                    new Date(b.endDate).getTime() - new Date(a.endDate).getTime()
+                );
+
+              // The last pay period end date is our accrual boundary —
+              // wages are earned but unpaid from the day after this through month-end
+              const lastPaidThrough = relevantStatements[0]?.endDate ?? null;
+
+              // YTD gross wages for tax cap calculations — use all checks
+              // with check dates in the period for accurate cap tracking
+              const ytdStatements = payStatements
+                .filter((ps) => new Date(ps.checkDate) <= periodEndDate);
+              const ytdGrossWages = ytdStatements.reduce(
                 (sum, ps) => sum + (ps.grossPay || 0),
                 0
               );
@@ -98,7 +111,7 @@ export async function POST(request: NextRequest) {
               return {
                 employee: emp,
                 ytdGrossWages,
-                lastCheckDate,
+                lastCheckDate: lastPaidThrough,
                 lastPayStatement: relevantStatements[0],
               } satisfies EmployeeAccrualInput;
             } catch {

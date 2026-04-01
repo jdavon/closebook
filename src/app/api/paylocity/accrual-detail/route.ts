@@ -133,12 +133,24 @@ export async function GET(request: NextRequest) {
                 client.getPayStatementDetails(emp.id, periodYear),
               ]);
 
-              const sorted = [...payStatements].sort(
-                (a, b) => new Date(b.checkDate).getTime() - new Date(a.checkDate).getTime()
-              );
-
               const periodEndDate = new Date(periodYear, periodMonth, 0);
-              const relevantStatements = sorted.filter(
+
+              // Use pay period END DATE (not check date) to determine accrual
+              // boundary. On a delayed payment schedule, the check is issued
+              // after the pay period closes — using checkDate would incorrectly
+              // assume wages are covered through the check date.
+              const relevantStatements = payStatements
+                .filter((ps) => new Date(ps.endDate) <= periodEndDate)
+                .sort(
+                  (a, b) =>
+                    new Date(b.endDate).getTime() - new Date(a.endDate).getTime()
+                );
+
+              // Last pay period end = wages are paid through this date
+              const lastPaidThrough = relevantStatements[0]?.endDate ?? null;
+
+              // YTD gross for tax cap calc — use check dates for accurate cap tracking
+              const ytdStatements = payStatements.filter(
                 (ps) => new Date(ps.checkDate) <= periodEndDate
               );
 
@@ -152,8 +164,8 @@ export async function GET(request: NextRequest) {
 
               return {
                 employee: emp,
-                ytdGrossWages: relevantStatements.reduce((sum, ps) => sum + (ps.grossPay || 0), 0),
-                lastCheckDate: relevantStatements[0]?.checkDate ?? null,
+                ytdGrossWages: ytdStatements.reduce((sum, ps) => sum + (ps.grossPay || 0), 0),
+                lastCheckDate: lastPaidThrough,
                 lastPayStatement: relevantStatements[0],
                 annualBenefitCost,
                 benefitBreakdown: annualizedBreakdown,
