@@ -49,7 +49,13 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Plus, ArrowRight, Car, Search, Upload, Trash2, DollarSign, ChevronsUpDown, Check, Settings, Calculator, Download } from "lucide-react";
+import { Plus, ArrowRight, Car, Search, Upload, Trash2, DollarSign, ChevronsUpDown, Check, Settings, Calculator, Download, ChevronDown as ChevronDownIcon } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { formatCurrency } from "@/lib/utils/dates";
@@ -348,7 +354,7 @@ export default function AssetsPage() {
   const totalBookNbv = filteredAssets.reduce((s, a) => s + a.book_net_value, 0);
   const totalTaxNbv = filteredAssets.reduce((s, a) => s + a.tax_net_value, 0);
 
-  function handleDownloadCSV() {
+  function downloadCSV(assetList: FixedAsset[], suffix: string) {
     const headers = [
       "Asset Tag",
       "Asset Name",
@@ -366,7 +372,7 @@ export default function AssetsPage() {
       "Status",
     ];
 
-    const rows = filteredAssets.map((asset) => {
+    const rows = assetList.map((asset) => {
       const classification = getVehicleClassification(asset.vehicle_class, customClasses);
       return [
         asset.asset_tag ?? "",
@@ -402,9 +408,21 @@ export default function AssetsPage() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `rental-assets-${entityId.slice(0, 8)}.csv`;
+    link.download = `rental-assets-${suffix}-${entityId.slice(0, 8)}.csv`;
     link.click();
     URL.revokeObjectURL(url);
+  }
+
+  async function handleExportAll() {
+    const { data } = await supabase
+      .from("fixed_assets")
+      .select(
+        "id, asset_name, asset_tag, vehicle_year, vehicle_make, vehicle_model, vehicle_class, vin, in_service_date, acquisition_cost, book_net_value, tax_net_value, status"
+      )
+      .eq("entity_id", entityId)
+      .order("asset_name")
+      .range(0, 2999);
+    downloadCSV((data as unknown as FixedAsset[]) ?? [], "all");
   }
 
   return (
@@ -426,10 +444,23 @@ export default function AssetsPage() {
               Delete ({selectedIds.size})
             </Button>
           )}
-          <Button variant="outline" onClick={handleDownloadCSV} disabled={filteredAssets.length === 0}>
-            <Download className="mr-2 h-4 w-4" />
-            Export CSV
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline">
+                <Download className="mr-2 h-4 w-4" />
+                Export CSV
+                <ChevronDownIcon className="ml-2 h-3.5 w-3.5 opacity-50" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => downloadCSV(filteredAssets, "filtered")}>
+                Current View ({filteredAssets.length} assets)
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={handleExportAll}>
+                All Statuses (incl. Sold)
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           <Button variant="outline" onClick={() => setDeprRulesOpen(true)}>
             <Calculator className="mr-2 h-4 w-4" />
             Depr Rules
