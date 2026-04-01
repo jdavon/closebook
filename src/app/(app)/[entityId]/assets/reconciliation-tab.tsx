@@ -39,10 +39,10 @@ import { formatCurrency } from "@/lib/utils/dates";
 import {
   RECON_GROUPS,
   UNALLOCATED_KEY,
-  getAssetGLGroup,
   type ReconGroup,
 } from "@/lib/utils/asset-gl-groups";
 import {
+  getMasterType,
   customRowsToClassifications,
   type VehicleClassification,
   type CustomVehicleClassRow,
@@ -262,16 +262,26 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
         ? accountToReconGroup[asset.accum_depr_account_id]
         : null;
 
-      // Determine cost group: override → vehicle class fallback
+      // Determine cost group: override → vehicle class master type fallback
       let costKey: string | null = costOverrideGroup ?? null;
       let accumKey: string | null = accumOverrideGroup ?? null;
 
       if (!costKey || !accumKey) {
-        // Fall back to vehicle class → master type
-        const glGroup = getAssetGLGroup(asset.vehicle_class, cc);
-        if (glGroup) {
-          if (!costKey) costKey = `${glGroup}_cost`;
-          if (!accumKey) accumKey = `${glGroup}_accum_depr`;
+        // Fall back to vehicle class → master type → matching RECON_GROUP
+        const mt = getMasterType(asset.vehicle_class, cc);
+        if (mt) {
+          if (!costKey) {
+            const cg = RECON_GROUPS.find(
+              (g) => g.masterType === mt && g.lineType === "cost"
+            );
+            if (cg) costKey = cg.key;
+          }
+          if (!accumKey) {
+            const ag = RECON_GROUPS.find(
+              (g) => g.masterType === mt && g.lineType === "accum_depr"
+            );
+            if (ag) accumKey = ag.key;
+          }
         }
       }
 
