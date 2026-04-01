@@ -219,9 +219,12 @@ export function getMonthEndDate(year: number, month: number): Date {
 
 /**
  * Parse an ISO date string to a Date at midnight local time.
+ * Handles both "2026-03-22" and "2026-03-22T00:00:00" formats
+ * (Paylocity returns the latter).
  */
 function parseDate(dateStr: string): Date {
-  const [y, m, d] = dateStr.split("-").map(Number);
+  const datePart = dateStr.includes("T") ? dateStr.split("T")[0] : dateStr;
+  const [y, m, d] = datePart.split("-").map(Number);
   return new Date(y, m - 1, d);
 }
 
