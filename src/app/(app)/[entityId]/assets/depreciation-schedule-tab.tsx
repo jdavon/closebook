@@ -441,6 +441,34 @@ export function DepreciationScheduleTab({
     return "---";
   }
 
+  function getInServiceLabel(asset: AssetRow): string {
+    if (!asset.in_service_date) return "---";
+    const isd = parseISODate(asset.in_service_date);
+    return getPeriodShortLabel(isd.year, isd.month);
+  }
+
+  function getEndServiceLabel(asset: AssetRow): string {
+    if (!asset.in_service_date) return "---";
+    const isd = parseISODate(asset.in_service_date);
+    const group = getReportingGroup(asset.vehicle_class, customClasses);
+    const rulesMap = new Map<string, DepreciationRule>();
+    for (const r of rules) rulesMap.set(r.reporting_group, r);
+    const rule = group ? rulesMap.get(group) : undefined;
+
+    let usefulLife = asset.book_useful_life_months;
+    if (rule && (!usefulLife || usefulLife <= 0)) {
+      usefulLife = rule.book_useful_life_months ?? 0;
+    }
+    if (!usefulLife || usefulLife <= 0) return "---";
+
+    // End date = in-service month + useful life - 1 (last month of depreciation)
+    let endMonth = isd.month + usefulLife - 1;
+    let endYear = isd.year;
+    endYear += Math.floor((endMonth - 1) / 12);
+    endMonth = ((endMonth - 1) % 12) + 1;
+    return getPeriodShortLabel(endYear, endMonth);
+  }
+
   function getEffectiveSalvage(asset: AssetRow): string {
     if (asset.book_salvage_value > 0) {
       return formatCurrency(asset.book_salvage_value);
@@ -601,6 +629,12 @@ export function DepreciationScheduleTab({
                       <th className="text-center py-2 px-2 min-w-[70px] font-medium whitespace-nowrap">
                         UL
                       </th>
+                      <th className="text-center py-2 px-2 min-w-[90px] font-medium whitespace-nowrap">
+                        In Service
+                      </th>
+                      <th className="text-center py-2 px-2 min-w-[90px] font-medium whitespace-nowrap">
+                        End Date
+                      </th>
                       {months.map(({ year, month }) => (
                         <th
                           key={monthKey(year, month)}
@@ -630,6 +664,12 @@ export function DepreciationScheduleTab({
                         </td>
                         <td className="text-center py-2 px-2 tabular-nums whitespace-nowrap text-muted-foreground">
                           {getEffectiveUL(asset)}
+                        </td>
+                        <td className="text-center py-2 px-2 whitespace-nowrap text-muted-foreground">
+                          {getInServiceLabel(asset)}
+                        </td>
+                        <td className="text-center py-2 px-2 whitespace-nowrap text-muted-foreground">
+                          {getEndServiceLabel(asset)}
                         </td>
                         {months.map(({ year, month }) => (
                           <td
@@ -661,6 +701,8 @@ export function DepreciationScheduleTab({
                             )
                           )}
                       </td>
+                      <td className="py-2 px-2"></td>
+                      <td className="py-2 px-2"></td>
                       <td className="py-2 px-2"></td>
                       <td className="py-2 px-2"></td>
                       {months.map(({ year, month }) => (
@@ -702,6 +744,8 @@ export function DepreciationScheduleTab({
                     </th>
                     <th className="py-2 px-2 min-w-[90px]"></th>
                     <th className="py-2 px-2 min-w-[70px]"></th>
+                    <th className="py-2 px-2 min-w-[90px]"></th>
+                    <th className="py-2 px-2 min-w-[90px]"></th>
                     {months.map(({ year, month }) => {
                       let total = 0;
                       for (const asset of assets) {
