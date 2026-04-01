@@ -121,6 +121,7 @@ export async function GET(request: NextRequest) {
     const inputs: EmployeeAccrualInput[] = [];
     const allEmployees: { emp: Employee; companyId: string; cc: ReturnType<typeof getOperatingEntityForCostCenter> }[] = [];
     const batchSize = 5;
+    const companyMaxEndDate: Record<string, string> = {};
 
     for (const { companyId, client, employees } of companyResults) {
       for (let i = 0; i < employees.length; i += batchSize) {
@@ -142,10 +143,6 @@ export async function GET(request: NextRequest) {
 
               const periodEndDate = new Date(periodYear, periodMonth, 0);
 
-              // Use pay period END DATE (not check date) to determine accrual
-              // boundary. On a delayed payment schedule, the check is issued
-              // after the pay period closes — using checkDate would incorrectly
-              // assume wages are covered through the check date.
               const relevantStatements = payStatements
                 .filter((ps) => new Date(ps.endDate) <= periodEndDate)
                 .sort(
@@ -153,10 +150,44 @@ export async function GET(request: NextRequest) {
                     new Date(b.endDate).getTime() - new Date(a.endDate).getTime()
                 );
 
-              // Last pay period end = wages are paid through this date
               const lastPaidThrough = relevantStatements[0]?.endDate ?? null;
 
-              // YTD gross for tax cap calc — use check dates for accurate cap tracking
+              // Track company-wide latest pay period end
+              if (lastPaidThrough) {
+                if (!companyMaxEndDate[companyId] || lastPaidThrough > companyMaxEndDate[companyId]) {
+                  companyMaxEndDate[companyId] = lastPaidThrough;
+                }
+              }
+
+              // Compute actual daily rate from recent paychecks (last 2-3)
+              let recentDailyRate: number | null = null;
+              const recentChecks = relevantStatements.slice(0, 3);
+              if (recentChecks.length > 0) {
+                let totalGross = 0;
+                let totalWorkingDays = 0;
+                for (const ps of recentChecks) {
+                  totalGross += ps.grossPay || 0;
+                  const begin = new Date(
+                    ps.beginDate.includes("T") ? ps.beginDate.split("T")[0] : ps.beginDate
+                  );
+                  const end = new Date(
+                    ps.endDate.includes("T") ? ps.endDate.split("T")[0] : ps.endDate
+                  );
+                  let days = 0;
+                  const cur = new Date(begin);
+                  while (cur <= end) {
+                    const dow = cur.getDay();
+                    if (dow !== 0 && dow !== 6) days++;
+                    cur.setDate(cur.getDate() + 1);
+                  }
+                  totalWorkingDays += days;
+                }
+                if (totalWorkingDays > 0 && totalGross > 0) {
+                  recentDailyRate = Math.round((totalGross / totalWorkingDays) * 100) / 100;
+                }
+              }
+
+              // YTD gross for tax cap calc
               const ytdStatements = payStatements.filter(
                 (ps) => new Date(ps.checkDate) <= periodEndDate
               );
@@ -176,6 +207,7 @@ export async function GET(request: NextRequest) {
                 lastPayStatement: relevantStatements[0],
                 annualBenefitCost,
                 benefitBreakdown: annualizedBreakdown,
+                recentDailyRate,
               } satisfies EmployeeAccrualInput;
             } catch {
               return {
@@ -187,6 +219,14 @@ export async function GET(request: NextRequest) {
           })
         );
         inputs.push(...results);
+      }
+    }
+
+    // Set company-wide last pay period end on all inputs
+    for (const input of inputs) {
+      const cid = (input.employee as Employee & { _companyId?: string })._companyId;
+      if (cid && companyMaxEndDate[cid]) {
+        input.companyLastPayPeriodEnd = companyMaxEndDate[cid];
       }
     }
 

@@ -126,7 +126,7 @@ export interface EmployeeAccrualInput {
   employee: Employee;
   /** YTD gross wages from pay statements (for tax cap calculations) */
   ytdGrossWages: number;
-  /** Last check date (ISO string) — accrual period starts day after this */
+  /** Last pay period end date (ISO string) — accrual starts day after this */
   lastCheckDate: string | null;
   /** Most recent pay statement for reference */
   lastPayStatement?: PayStatementSummary;
@@ -134,6 +134,18 @@ export interface EmployeeAccrualInput {
   annualBenefitCost?: number;
   /** Breakdown of employer benefits by code */
   benefitBreakdown?: Record<string, number>;
+  /**
+   * Company-wide last pay period end date. Used as fallback when the
+   * employee has no individual pay statements — accrues from this date
+   * instead of the start of the month.
+   */
+  companyLastPayPeriodEnd?: string | null;
+  /**
+   * Actual daily rate computed from recent paychecks. For hourly/variable
+   * employees, this reflects real hours worked rather than theoretical
+   * full-time annual salary. Preferred over annualComp/260 when available.
+   */
+  recentDailyRate?: number | null;
 }
 
 export interface AccrualLineItem {
@@ -329,23 +341,30 @@ export function calculateAccruals(
     const empName = employee.displayName
       ?? ([employee.info?.firstName, employee.info?.lastName].filter(Boolean).join(" ") || `Employee ${employee.id}`);
 
-    // Skip employees with no pay data
+    // Determine daily rate: prefer actual recent rate over annualized salary
     const annualComp = getAnnualComp(employee);
-    if (annualComp <= 0) {
+    const recentRate = input.recentDailyRate;
+    const dailyRate = (recentRate && recentRate > 0)
+      ? recentRate
+      : (annualComp > 0 ? annualComp / WORKING_DAYS_PER_YEAR : 0);
+
+    if (dailyRate <= 0) {
       warnings.push(`${empName} (${employee.id}): no compensation data, skipped`);
       continue;
     }
 
-    // Daily rate based on working days
-    const dailyRate = annualComp / WORKING_DAYS_PER_YEAR;
-
-    // Determine accrual start date (day after last check date, or period start)
+    // Determine accrual start date:
+    // 1. Day after employee's last pay period end (if they have pay statements)
+    // 2. Day after company's last payroll date (if employee has none but company does)
+    // 3. Start of month (last resort)
     let accrualStart: Date;
     if (lastCheckDate) {
       accrualStart = parseDate(lastCheckDate);
       accrualStart.setDate(accrualStart.getDate() + 1);
+    } else if (input.companyLastPayPeriodEnd) {
+      accrualStart = parseDate(input.companyLastPayPeriodEnd);
+      accrualStart.setDate(accrualStart.getDate() + 1);
     } else {
-      // No pay statement found — accrue from start of month
       accrualStart = new Date(periodYear, periodMonth - 1, 1);
     }
 

@@ -69,10 +69,13 @@ export async function POST(request: NextRequest) {
     );
 
     // 2. Batch-fetch pay statements for the target year to get:
-    //    - Last check date (for accrual start)
+    //    - Last pay period end date (for accrual start)
     //    - YTD gross wages (for tax cap calculations)
+    //    - Recent daily rate (actual earnings for hourly/variable employees)
     const inputs: EmployeeAccrualInput[] = [];
     const batchSize = 5;
+    // Track per-company latest pay period end date
+    const companyMaxEndDate: Record<string, string> = {};
 
     for (const { companyId, client, employees } of companyResults) {
       for (let i = 0; i < employees.length; i += batchSize) {
@@ -93,9 +96,7 @@ export async function POST(request: NextRequest) {
               // Filter to pay statements whose PAY PERIOD ends on or before the
               // period end. We use endDate (pay period end), NOT checkDate, because
               // on a delayed payment schedule the check may be issued days/weeks
-              // after the pay period closes. Using checkDate would incorrectly
-              // assume wages are covered through the check date when they're only
-              // covered through the pay period end.
+              // after the pay period closes.
               const relevantStatements = payStatements
                 .filter((ps) => new Date(ps.endDate) <= periodEndDate)
                 .sort(
@@ -103,12 +104,48 @@ export async function POST(request: NextRequest) {
                     new Date(b.endDate).getTime() - new Date(a.endDate).getTime()
                 );
 
-              // The last pay period end date is our accrual boundary —
-              // wages are earned but unpaid from the day after this through month-end
+              // The last pay period end date is our accrual boundary
               const lastPaidThrough = relevantStatements[0]?.endDate ?? null;
 
-              // YTD gross wages for tax cap calculations — use all checks
-              // with check dates in the period for accurate cap tracking
+              // Track company-wide latest pay period end
+              if (lastPaidThrough) {
+                if (!companyMaxEndDate[companyId] || lastPaidThrough > companyMaxEndDate[companyId]) {
+                  companyMaxEndDate[companyId] = lastPaidThrough;
+                }
+              }
+
+              // Compute actual daily rate from recent paychecks (last 2-3)
+              // This captures real hours worked for hourly/variable employees
+              // instead of assuming full-time at their base rate
+              let recentDailyRate: number | null = null;
+              const recentChecks = relevantStatements.slice(0, 3);
+              if (recentChecks.length > 0) {
+                let totalGross = 0;
+                let totalWorkingDays = 0;
+                for (const ps of recentChecks) {
+                  totalGross += ps.grossPay || 0;
+                  const begin = new Date(
+                    ps.beginDate.includes("T") ? ps.beginDate.split("T")[0] : ps.beginDate
+                  );
+                  const end = new Date(
+                    ps.endDate.includes("T") ? ps.endDate.split("T")[0] : ps.endDate
+                  );
+                  // Count working days in this pay period
+                  let days = 0;
+                  const cur = new Date(begin);
+                  while (cur <= end) {
+                    const dow = cur.getDay();
+                    if (dow !== 0 && dow !== 6) days++;
+                    cur.setDate(cur.getDate() + 1);
+                  }
+                  totalWorkingDays += days;
+                }
+                if (totalWorkingDays > 0 && totalGross > 0) {
+                  recentDailyRate = Math.round((totalGross / totalWorkingDays) * 100) / 100;
+                }
+              }
+
+              // YTD gross wages for tax cap calculations
               const ytdStatements = payStatements
                 .filter((ps) => new Date(ps.checkDate) <= periodEndDate);
               const ytdGrossWages = ytdStatements.reduce(
@@ -121,6 +158,7 @@ export async function POST(request: NextRequest) {
                 ytdGrossWages,
                 lastCheckDate: lastPaidThrough,
                 lastPayStatement: relevantStatements[0],
+                recentDailyRate,
               } satisfies EmployeeAccrualInput;
             } catch {
               return {
@@ -132,6 +170,14 @@ export async function POST(request: NextRequest) {
           })
         );
         inputs.push(...results);
+      }
+    }
+
+    // Set company-wide last pay period end on employees who have no individual data
+    for (const input of inputs) {
+      const cid = (input.employee as Employee & { _companyId?: string })._companyId;
+      if (cid && companyMaxEndDate[cid]) {
+        input.companyLastPayPeriodEnd = companyMaxEndDate[cid];
       }
     }
 
