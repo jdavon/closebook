@@ -1,9 +1,8 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import Link from "next/link";
-import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -17,65 +16,41 @@ import { BookOpen, CheckCircle2, XCircle } from "lucide-react";
 
 export default function InviteAcceptPage() {
   const { token } = useParams<{ token: string }>();
-  const router = useRouter();
-  const supabase = createClient();
   const [status, setStatus] = useState<"loading" | "success" | "error" | "expired">("loading");
   const [orgName, setOrgName] = useState("");
   const [roleName, setRoleName] = useState("");
 
   useEffect(() => {
     async function acceptInvite() {
-      // Look up the invite
-      const { data: invite, error } = await supabase
-        .from("organization_invites")
-        .select("id, organization_id, role, status, expires_at, organizations(name)")
-        .eq("token", token)
-        .single();
+      try {
+        const res = await fetch("/api/members/invite/accept", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token }),
+        });
 
-      if (error || !invite) {
-        setStatus("error");
-        return;
-      }
+        const data = await res.json();
 
-      const org = invite.organizations as unknown as { name: string } | null;
-      setOrgName(org?.name ?? "the organization");
-      setRoleName(invite.role);
+        if (res.status === 410) {
+          setStatus("expired");
+          return;
+        }
 
-      if (invite.status === "accepted") {
+        if (!res.ok) {
+          setStatus("error");
+          return;
+        }
+
+        setOrgName(data.orgName);
+        setRoleName(data.role);
         setStatus("success");
-        return;
-      }
-
-      if (invite.status !== "pending") {
-        setStatus("expired");
-        return;
-      }
-
-      const expiresAt = new Date(invite.expires_at);
-      if (expiresAt < new Date()) {
-        setStatus("expired");
-        return;
-      }
-
-      // Mark invite as accepted
-      const { error: updateError } = await supabase
-        .from("organization_invites")
-        .update({
-          status: "accepted",
-          accepted_at: new Date().toISOString(),
-        })
-        .eq("id", invite.id);
-
-      if (updateError) {
+      } catch {
         setStatus("error");
-        return;
       }
-
-      setStatus("success");
     }
 
     acceptInvite();
-  }, [token, supabase]);
+  }, [token]);
 
   if (status === "loading") {
     return (
