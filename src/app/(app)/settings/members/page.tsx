@@ -54,7 +54,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { toast } from "sonner";
-import { UserPlus, MoreHorizontal, Clock, X } from "lucide-react";
+import { UserPlus, MoreHorizontal, Clock, X, Copy, Check } from "lucide-react";
 import type { UserRole } from "@/lib/types/database";
 import { getRoleLabel } from "@/lib/utils/permissions";
 import { EntityAccessSection } from "./entity-access";
@@ -90,8 +90,13 @@ export default function MembersPage() {
 
   // Invite form
   const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteFirstName, setInviteFirstName] = useState("");
+  const [inviteLastName, setInviteLastName] = useState("");
+  const [invitePassword, setInvitePassword] = useState("");
   const [inviteRole, setInviteRole] = useState<UserRole>("preparer");
   const [inviting, setInviting] = useState(false);
+  const [inviteLink, setInviteLink] = useState("");
+  const [linkCopied, setLinkCopied] = useState(false);
 
   // Role change dialog
   const [roleDialogOpen, setRoleDialogOpen] = useState(false);
@@ -161,26 +166,32 @@ export default function MembersPage() {
       const res = await fetch("/api/members/invite", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: inviteEmail, role: inviteRole }),
+        body: JSON.stringify({
+          email: inviteEmail,
+          firstName: inviteFirstName,
+          lastName: inviteLastName,
+          password: invitePassword,
+          role: inviteRole,
+        }),
       });
 
       const data = await res.json();
 
       if (!res.ok) {
-        toast.error(data.error || "Failed to send invite");
+        toast.error(data.error || "Failed to create user");
         return;
       }
 
-      if (data.memberAdded) {
-        toast.success(data.message || "User added to organization");
-      } else {
-        toast.success(`Invite sent to ${inviteEmail}`);
-      }
+      setInviteLink(data.inviteLink);
+      toast.success("Account created! Copy the invite link to share.");
 
       setInviteEmail("");
+      setInviteFirstName("");
+      setInviteLastName("");
+      setInvitePassword("");
       loadData();
     } catch {
-      toast.error("Failed to send invite");
+      toast.error("Failed to create user");
     } finally {
       setInviting(false);
     }
@@ -292,19 +303,43 @@ export default function MembersPage() {
         </p>
       </div>
 
-      {/* Invite Form */}
+      {/* Create User Form */}
       {isAdmin && (
         <Card>
           <CardHeader>
-            <CardTitle>Invite Member</CardTitle>
+            <CardTitle>Add Team Member</CardTitle>
             <CardDescription>
-              Send an invite to add a new team member
+              Create an account and generate an invite link to share
             </CardDescription>
           </CardHeader>
           <form onSubmit={handleInvite}>
-            <CardContent>
-              <div className="flex gap-4 items-end">
-                <div className="flex-1 space-y-2">
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="inviteFirstName">First Name</Label>
+                  <Input
+                    id="inviteFirstName"
+                    type="text"
+                    placeholder="John"
+                    value={inviteFirstName}
+                    onChange={(e) => setInviteFirstName(e.target.value)}
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="inviteLastName">Last Name</Label>
+                  <Input
+                    id="inviteLastName"
+                    type="text"
+                    placeholder="Smith"
+                    value={inviteLastName}
+                    onChange={(e) => setInviteLastName(e.target.value)}
+                    required
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
                   <Label htmlFor="inviteEmail">Email Address</Label>
                   <Input
                     id="inviteEmail"
@@ -315,6 +350,20 @@ export default function MembersPage() {
                     required
                   />
                 </div>
+                <div className="space-y-2">
+                  <Label htmlFor="invitePassword">Password</Label>
+                  <Input
+                    id="invitePassword"
+                    type="text"
+                    placeholder="Min. 8 characters"
+                    value={invitePassword}
+                    onChange={(e) => setInvitePassword(e.target.value)}
+                    required
+                    minLength={8}
+                  />
+                </div>
+              </div>
+              <div className="flex gap-4 items-end">
                 <div className="w-40 space-y-2">
                   <Label htmlFor="inviteRole">Role</Label>
                   <Select
@@ -335,9 +384,40 @@ export default function MembersPage() {
                 </div>
                 <Button type="submit" disabled={inviting}>
                   <UserPlus className="mr-2 h-4 w-4" />
-                  {inviting ? "Sending..." : "Invite"}
+                  {inviting ? "Creating..." : "Create Account"}
                 </Button>
               </div>
+              {inviteLink && (
+                <div className="rounded-md border bg-muted/50 p-3 space-y-2">
+                  <p className="text-sm font-medium">Invite Link</p>
+                  <div className="flex gap-2">
+                    <Input
+                      value={inviteLink}
+                      readOnly
+                      className="bg-background text-sm"
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      onClick={() => {
+                        navigator.clipboard.writeText(inviteLink);
+                        setLinkCopied(true);
+                        setTimeout(() => setLinkCopied(false), 2000);
+                      }}
+                    >
+                      {linkCopied ? (
+                        <Check className="h-4 w-4 text-green-500" />
+                      ) : (
+                        <Copy className="h-4 w-4" />
+                      )}
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Share this link with the user. They&apos;ll use it to confirm and sign in.
+                  </p>
+                </div>
+              )}
             </CardContent>
           </form>
         </Card>

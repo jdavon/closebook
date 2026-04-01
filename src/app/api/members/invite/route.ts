@@ -26,11 +26,24 @@ export async function POST(request: Request) {
   }
 
   const body = await request.json();
-  const { email, role } = body as { email: string; role: UserRole };
+  const { email, firstName, lastName, password, role } = body as {
+    email: string;
+    firstName: string;
+    lastName: string;
+    password: string;
+    role: UserRole;
+  };
 
-  if (!email || !role) {
+  if (!email || !firstName || !lastName || !password || !role) {
     return NextResponse.json(
-      { error: "email and role are required" },
+      { error: "All fields are required" },
+      { status: 400 }
+    );
+  }
+
+  if (password.length < 8) {
+    return NextResponse.json(
+      { error: "Password must be at least 8 characters" },
       { status: 400 }
     );
   }
@@ -42,26 +55,15 @@ export async function POST(request: Request) {
 
   const admin = createAdminClient();
   const orgId = membership.organization_id;
+  const fullName = `${firstName} ${lastName}`;
 
   // Check if email is already a member
-  const { data: existingMembers } = await admin
-    .from("organization_members")
-    .select("id, profiles(full_name)")
-    .eq("organization_id", orgId);
-
-  // Look up all auth users to check if the email is already a member
   const { data: authUsers } = await admin.auth.admin.listUsers();
   const existingAuthUser = authUsers?.users?.find(
     (u) => u.email?.toLowerCase() === email.toLowerCase()
   );
 
-  if (existingAuthUser && existingMembers) {
-    const alreadyMember = existingMembers.find(
-      (m: { id: string }) =>
-        // Check via organization_members join
-        false // We need to check user_id match
-    );
-    // Direct check
+  if (existingAuthUser) {
     const { data: directCheck } = await admin
       .from("organization_members")
       .select("id")
@@ -93,51 +95,69 @@ export async function POST(request: Request) {
     );
   }
 
-  // If user already exists and is confirmed, add them directly
-  if (existingAuthUser && existingAuthUser.email_confirmed_at) {
-    // Add to organization directly
-    const { error: memberError } = await admin
-      .from("organization_members")
-      .insert({
-        organization_id: orgId,
-        user_id: existingAuthUser.id,
-        role,
-      });
+  let userId: string;
 
-    if (memberError) {
+  if (existingAuthUser) {
+    // User exists — update their password and name
+    await admin.auth.admin.updateUserById(existingAuthUser.id, {
+      password,
+      user_metadata: { full_name: fullName },
+      email_confirm: true,
+    });
+    userId = existingAuthUser.id;
+
+    // Update profile
+    await admin.from("profiles").upsert({
+      id: userId,
+      full_name: fullName,
+    }, { onConflict: "id" });
+  } else {
+    // Create new auth user with password
+    const { data: newUser, error: createError } = await admin.auth.admin.createUser({
+      email: email.toLowerCase(),
+      password,
+      email_confirm: true,
+      user_metadata: {
+        full_name: fullName,
+        invited_org_id: orgId,
+        invited_role: role,
+        onboarding_complete: true,
+      },
+    });
+
+    if (createError || !newUser.user) {
       return NextResponse.json(
-        { error: memberError.message },
+        { error: createError?.message || "Failed to create user" },
         { status: 500 }
       );
     }
 
-    // Create invite record marked as accepted
-    await admin.from("organization_invites").insert({
-      organization_id: orgId,
-      email: email.toLowerCase(),
-      role,
-      invited_by: user.id,
-      status: "accepted",
-      accepted_at: new Date().toISOString(),
-    });
+    userId = newUser.user.id;
 
-    logAuditEvent({
-      organizationId: orgId,
-      userId: user.id,
-      action: "create",
-      resourceType: "organization_member",
-      newValues: { email, role, method: "direct_add" },
-      request,
-    });
-
-    return NextResponse.json({
-      invite: null,
-      memberAdded: true,
-      message: "User already has an account and was added directly.",
-    });
+    // Create profile
+    await admin.from("profiles").upsert({
+      id: userId,
+      full_name: fullName,
+    }, { onConflict: "id" });
   }
 
-  // Create pending invite record
+  // Add to organization
+  const { error: memberError } = await admin
+    .from("organization_members")
+    .insert({
+      organization_id: orgId,
+      user_id: userId,
+      role,
+    });
+
+  if (memberError) {
+    return NextResponse.json(
+      { error: memberError.message },
+      { status: 500 }
+    );
+  }
+
+  // Create invite record marked as pending (accepted when user clicks link)
   const { data: invite, error: inviteError } = await admin
     .from("organization_invites")
     .insert({
@@ -157,30 +177,17 @@ export async function POST(request: Request) {
     );
   }
 
-  // Send invite via Supabase Auth
-  const origin = request.headers.get("origin") || "https://closebook.vercel.app";
-  try {
-    await admin.auth.admin.inviteUserByEmail(email, {
-      redirectTo: `${origin}/auth/callback?next=/dashboard`,
-      data: {
-        invited_org_id: orgId,
-        invited_role: role,
-      },
-    });
-  } catch (err) {
-    // inviteUserByEmail may fail if user exists but unconfirmed — that's ok,
-    // the invite record is still created and will be processed on auth callback
-    console.warn("[invite] inviteUserByEmail warning:", err);
-  }
-
   logAuditEvent({
     organizationId: orgId,
     userId: user.id,
     action: "create",
     resourceType: "organization_member",
-    newValues: { email, role, method: "invite" },
+    newValues: { email, role, fullName, method: "direct_create" },
     request,
   });
 
-  return NextResponse.json({ invite, memberAdded: false });
+  const origin = request.headers.get("origin") || "https://closebook.vercel.app";
+  const inviteLink = `${origin}/invite/${invite.token}`;
+
+  return NextResponse.json({ invite, inviteLink });
 }

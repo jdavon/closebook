@@ -38,7 +38,8 @@ export async function updateSession(request: NextRequest) {
     request.nextUrl.pathname.startsWith("/signup") ||
     request.nextUrl.pathname.startsWith("/forgot-password") ||
     request.nextUrl.pathname.startsWith("/reset-password") ||
-    request.nextUrl.pathname.startsWith("/auth");
+    request.nextUrl.pathname.startsWith("/auth") ||
+    request.nextUrl.pathname.startsWith("/invite");
 
   const isApiRoute = request.nextUrl.pathname.startsWith("/api");
 
@@ -51,7 +52,8 @@ export async function updateSession(request: NextRequest) {
 
   // Redirect authenticated users away from auth pages (except /welcome onboarding)
   const isWelcomePage = request.nextUrl.pathname.startsWith("/welcome");
-  if (user && isAuthRoute && !isWelcomePage) {
+  const isInvitePage = request.nextUrl.pathname.startsWith("/invite");
+  if (user && isAuthRoute && !isWelcomePage && !isInvitePage) {
     const url = request.nextUrl.clone();
     url.pathname = "/dashboard";
     return NextResponse.redirect(url);
