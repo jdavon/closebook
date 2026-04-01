@@ -163,6 +163,14 @@ export default function AssetDetailPage() {
   const [accumDeprAccountId, setAccumDeprAccountId] = useState("");
   const [deprExpenseAccountId, setDeprExpenseAccountId] = useState("");
 
+  // Book basis fields
+  const [acquisitionDate, setAcquisitionDate] = useState("");
+  const [acquisitionCost, setAcquisitionCost] = useState("");
+  const [inServiceDate, setInServiceDate] = useState("");
+  const [bookMethod, setBookMethod] = useState("");
+  const [bookUsefulLife, setBookUsefulLife] = useState("");
+  const [bookSalvage, setBookSalvage] = useState("");
+
   // Disposition
   const [disposeOpen, setDisposeOpen] = useState(false);
   const [disposedDate, setDisposedDate] = useState("");
@@ -207,6 +215,12 @@ export default function AssetDetailPage() {
       setCostAccountId(a.cost_account_id ?? "");
       setAccumDeprAccountId(a.accum_depr_account_id ?? "");
       setDeprExpenseAccountId(a.depr_expense_account_id ?? "");
+      setAcquisitionDate(a.acquisition_date ?? "");
+      setAcquisitionCost(a.acquisition_cost?.toString() ?? "0");
+      setInServiceDate(a.in_service_date ?? "");
+      setBookMethod(a.book_depreciation_method ?? "straight_line");
+      setBookUsefulLife(a.book_useful_life_months?.toString() ?? "0");
+      setBookSalvage(a.book_salvage_value?.toString() ?? "0");
     }
 
     setAccounts((accountsResult.data as Account[]) ?? []);
@@ -246,6 +260,12 @@ export default function AssetDetailPage() {
         title_number: titleNumber || null,
         registration_expiry: registrationExpiry || null,
         vehicle_notes: vehicleNotes || null,
+        acquisition_date: acquisitionDate,
+        acquisition_cost: parseFloat(acquisitionCost) || 0,
+        in_service_date: inServiceDate,
+        book_depreciation_method: bookMethod || "straight_line",
+        book_useful_life_months: parseInt(bookUsefulLife) || 0,
+        book_salvage_value: parseFloat(bookSalvage) || 0,
         cost_account_id: costAccountId || null,
         accum_depr_account_id: accumDeprAccountId || null,
         depr_expense_account_id: deprExpenseAccountId || null,
@@ -811,46 +831,105 @@ export default function AssetDetailPage() {
             <CardHeader>
               <CardTitle>Book Basis</CardTitle>
               <CardDescription>
-                Book depreciation parameters (set at creation)
+                Book depreciation parameters
               </CardDescription>
             </CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-2 gap-4 text-sm">
-                <div>
-                  <span className="text-muted-foreground">Acquisition Date</span>
-                  <p className="font-medium">
-                    {new Date(asset.acquisition_date).toLocaleDateString()}
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="acquisitionDate">Acquisition Date</Label>
+                  <Input
+                    id="acquisitionDate"
+                    type="date"
+                    value={acquisitionDate}
+                    onChange={(e) => setAcquisitionDate(e.target.value)}
+                    disabled={isDisposed}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="acquisitionCost">Acquisition Cost</Label>
+                  <Input
+                    id="acquisitionCost"
+                    type="number"
+                    step="0.01"
+                    value={acquisitionCost}
+                    onChange={(e) => setAcquisitionCost(e.target.value)}
+                    disabled={isDisposed}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="inServiceDate">In-Service Date</Label>
+                  <Input
+                    id="inServiceDate"
+                    type="date"
+                    value={inServiceDate}
+                    onChange={(e) => setInServiceDate(e.target.value)}
+                    disabled={isDisposed}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="bookMethod">Depreciation Method</Label>
+                  <Select
+                    value={bookMethod}
+                    onValueChange={setBookMethod}
+                    disabled={isDisposed}
+                  >
+                    <SelectTrigger id="bookMethod">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="straight_line">Straight Line</SelectItem>
+                      <SelectItem value="declining_balance">Declining Balance</SelectItem>
+                      <SelectItem value="none">None</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="bookUsefulLife">Useful Life (months)</Label>
+                  <Input
+                    id="bookUsefulLife"
+                    type="number"
+                    value={bookUsefulLife}
+                    onChange={(e) => setBookUsefulLife(e.target.value)}
+                    disabled={isDisposed}
+                  />
+                  {parseInt(bookUsefulLife) > 0 && (
+                    <p className="text-xs text-muted-foreground">
+                      {(parseInt(bookUsefulLife) / 12).toFixed(1)} years
+                    </p>
+                  )}
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="bookSalvage">Salvage Value</Label>
+                  <Input
+                    id="bookSalvage"
+                    type="number"
+                    step="0.01"
+                    value={bookSalvage}
+                    onChange={(e) => setBookSalvage(e.target.value)}
+                    disabled={isDisposed}
+                  />
+                </div>
+              </div>
+              {!isDisposed && (
+                <div className="rounded-lg border bg-muted/40 p-3">
+                  <p className="text-xs text-muted-foreground">
+                    After changing book basis fields, regenerate the depreciation
+                    schedule from the Depreciation tab to recalculate.
                   </p>
                 </div>
+              )}
+              <div className="grid grid-cols-2 gap-4 pt-2 border-t text-sm">
                 <div>
-                  <span className="text-muted-foreground">Acquisition Cost</span>
+                  <span className="text-muted-foreground">Accumulated Depreciation</span>
                   <p className="font-medium tabular-nums">
-                    {formatCurrency(asset.acquisition_cost)}
+                    {formatCurrency(asset.book_accumulated_depreciation)}
                   </p>
                 </div>
                 <div>
-                  <span className="text-muted-foreground">In-Service Date</span>
-                  <p className="font-medium">
-                    {new Date(asset.in_service_date).toLocaleDateString()}
-                  </p>
-                </div>
-                <div>
-                  <span className="text-muted-foreground">Depreciation Method</span>
-                  <p className="font-medium capitalize">
-                    {asset.book_depreciation_method.replace("_", " ")}
-                  </p>
-                </div>
-                <div>
-                  <span className="text-muted-foreground">Useful Life</span>
-                  <p className="font-medium">
-                    {asset.book_useful_life_months} months (
-                    {(asset.book_useful_life_months / 12).toFixed(1)} years)
-                  </p>
-                </div>
-                <div>
-                  <span className="text-muted-foreground">Salvage Value</span>
+                  <span className="text-muted-foreground">Net Book Value</span>
                   <p className="font-medium tabular-nums">
-                    {formatCurrency(asset.book_salvage_value)}
+                    {formatCurrency(asset.book_net_value)}
                   </p>
                 </div>
               </div>
