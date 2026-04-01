@@ -52,9 +52,17 @@ export async function POST(request: NextRequest) {
     const clients = getAllCompanyClients();
     const companyResults = await Promise.all(
       clients.map(async (client) => {
-        const employees = await client.getEmployees({
+        const raw = await client.getEmployees({
           activeOnly: true,
           include: ["info", "position", "payrate"],
+        });
+        // Filter out system accounts, test records, and removed employees
+        // that Paylocity returns despite activeOnly=true
+        const employees = raw.filter((emp) => {
+          if (emp.status === "Removed") return false;
+          if (!emp.info?.firstName && !emp.info?.lastName) return false;
+          if (typeof emp.id === "string" && /^(P\d|coRpt)/i.test(emp.id)) return false;
+          return true;
         });
         return { companyId: client.companyId, client, employees };
       })
