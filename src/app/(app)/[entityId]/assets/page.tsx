@@ -169,13 +169,15 @@ export default function AssetsPage() {
   const [vehiclePickerOpen, setVehiclePickerOpen] = useState(false);
 
   const loadAssets = useCallback(async () => {
+    setLoading(true);
     let query = supabase
       .from("fixed_assets")
       .select(
         "id, asset_name, asset_tag, vehicle_year, vehicle_make, vehicle_model, vehicle_class, vin, in_service_date, acquisition_cost, book_net_value, tax_net_value, status"
       )
       .eq("entity_id", entityId)
-      .order("asset_name");
+      .order("asset_name")
+      .range(0, 2999);
 
     if (statusFilter && statusFilter !== "all") {
       query = query.eq("status", statusFilter);
