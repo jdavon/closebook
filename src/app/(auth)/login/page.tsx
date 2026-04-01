@@ -40,6 +40,9 @@ export default function LoginPage() {
       return;
     }
 
+    // Process any pending organization invites for this user
+    await fetch("/api/auth/process-invites", { method: "POST" });
+
     toast.success("Signed in successfully");
     router.push("/dashboard");
     router.refresh();
