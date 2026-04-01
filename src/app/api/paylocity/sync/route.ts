@@ -114,6 +114,12 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Track per-company employee counts for diagnostics
+    const companyCounts: Record<string, number> = {};
+    for (const { companyId, employees } of companyResults) {
+      companyCounts[companyId] = employees.length;
+    }
+
     // 3. Run accrual calculation engine
     const accrualResult = calculateAccruals(inputs, periodYear, periodMonth);
 
@@ -193,13 +199,30 @@ export async function POST(request: NextRequest) {
         .eq("id", syncLogId);
     }
 
+    // Build per-entity breakdown for diagnostics
+    const entityBreakdown: Record<string, { wages: number; tax: number; benefits: number; employees: number }> = {};
+    for (const detail of accrualResult.employeeDetails) {
+      const eid = detail.costCenterEntry.operatingEntityName;
+      if (!entityBreakdown[eid]) {
+        entityBreakdown[eid] = { wages: 0, tax: 0, benefits: 0, employees: 0 };
+      }
+      entityBreakdown[eid].wages += detail.wageAccrual;
+      entityBreakdown[eid].tax += detail.taxAccrual;
+      entityBreakdown[eid].benefits += detail.benefitAccrual;
+      entityBreakdown[eid].employees += 1;
+    }
+
     return NextResponse.json({
       success: true,
       periodYear,
       periodMonth,
-      employeeCount: accrualResult.employeeCount,
+      employeesFetched: inputs.length,
+      employeesWithAccruals: accrualResult.employeeCount,
+      companyCounts,
+      entityBreakdown,
       totalWageAccrual: accrualResult.totalWageAccrual,
       totalTaxAccrual: accrualResult.totalTaxAccrual,
+      totalBenefitAccrual: accrualResult.totalBenefitAccrual,
       totalAccrual: accrualResult.totalAccrual,
       lineItems: accrualResult.lineItems.length,
       warnings: accrualResult.warnings,

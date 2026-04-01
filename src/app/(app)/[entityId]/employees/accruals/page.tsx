@@ -238,9 +238,23 @@ export default function PayrollAccrualsPage() {
       if (!res.ok) {
         toast.error(json.error || "Sync failed");
       } else {
+        const fetched = json.employeesFetched ?? 0;
+        const withAccruals = json.employeesWithAccruals ?? 0;
+        const skipped = fetched - withAccruals;
         toast.success(
-          `Synced ${json.employeeCount} employees — wages: ${formatCurrency(json.totalWageAccrual)}, tax: ${formatCurrency(json.totalTaxAccrual)}`
+          `Fetched ${fetched} employees, ${withAccruals} with accrual days — wages: ${formatCurrency(json.totalWageAccrual)}, tax: ${formatCurrency(json.totalTaxAccrual)}`
         );
+        if (skipped > 0 && json.warnings?.length > 0) {
+          toast.warning(
+            `${skipped} employees skipped (0 accrual days or no comp data). Check browser console for details.`,
+            { duration: 8000 }
+          );
+        }
+        if (json.warnings?.length > 0 || json.companyCounts || json.entityBreakdown) {
+          console.log("[Payroll Sync] Warnings:", json.warnings);
+          console.log("[Payroll Sync] Company counts:", json.companyCounts);
+          console.log("[Payroll Sync] Entity breakdown:", json.entityBreakdown);
+        }
         loadAccruals();
       }
     } catch {
