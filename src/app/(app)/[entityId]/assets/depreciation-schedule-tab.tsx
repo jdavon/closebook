@@ -88,6 +88,12 @@ function monthsBetween(
   return (endYear - startYear) * 12 + (endMonth - startMonth);
 }
 
+/** Parse ISO date string without timezone shift (avoids new Date() UTC issue) */
+function parseISODate(dateStr: string): { year: number; month: number } {
+  const parts = dateStr.split("T")[0].split("-");
+  return { year: parseInt(parts[0], 10), month: parseInt(parts[1], 10) };
+}
+
 /** Apply group rules as fallback when asset lacks depreciation params */
 function resolveAssetForCalc(
   asset: AssetRow,
@@ -354,9 +360,7 @@ export function DepreciationScheduleTab({
 
     // remaining_life
     if (!asset.in_service_date) return "---";
-    const isd = new Date(asset.in_service_date);
-    const isdYear = isd.getFullYear();
-    const isdMonth = isd.getMonth() + 1;
+    const isd = parseISODate(asset.in_service_date);
 
     // Resolve effective useful life
     const group = getReportingGroup(asset.vehicle_class, customClasses);
@@ -371,7 +375,8 @@ export function DepreciationScheduleTab({
 
     if (!usefulLife || usefulLife <= 0) return "---";
 
-    const elapsed = monthsBetween(isdYear, isdMonth, year, month);
+    const elapsed = monthsBetween(isd.year, isd.month, year, month);
+    if (elapsed < 0) return `${usefulLife} mo`;
     const remaining = Math.max(0, usefulLife - elapsed);
     return `${remaining} mo`;
   }
@@ -390,14 +395,9 @@ export function DepreciationScheduleTab({
       if (rule && (!usefulLife || usefulLife <= 0)) {
         usefulLife = rule.book_useful_life_months ?? 0;
       }
-      if (usefulLife > 0) {
-        const isd = new Date(asset.in_service_date);
-        const elapsed = monthsBetween(
-          isd.getFullYear(),
-          isd.getMonth() + 1,
-          year,
-          month
-        );
+      if (usefulLife > 0 && asset.in_service_date) {
+        const isd = parseISODate(asset.in_service_date);
+        const elapsed = monthsBetween(isd.year, isd.month, year, month);
         const remaining = Math.max(0, usefulLife - elapsed);
         if (remaining === 0) return "text-red-600 font-medium";
         if (remaining <= 6) return "text-amber-600";

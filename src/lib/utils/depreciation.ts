@@ -33,8 +33,11 @@ const MACRS_TABLES: Record<string, number[]> = {
 };
 
 function parseDate(dateStr: string): { year: number; month: number } {
-  const d = new Date(dateStr);
-  return { year: d.getFullYear(), month: d.getMonth() + 1 };
+  // Split the ISO date string directly to avoid timezone shift issues.
+  // new Date("2023-06-01") parses as UTC midnight, which in US timezones
+  // shifts to the previous day — potentially the wrong month/year.
+  const parts = dateStr.split("T")[0].split("-");
+  return { year: parseInt(parts[0], 10), month: parseInt(parts[1], 10) };
 }
 
 function monthsBetween(

@@ -85,6 +85,11 @@ function generateMonthRange(
   return months;
 }
 
+function parseISODate(dateStr: string): { year: number; month: number } {
+  const parts = dateStr.split("T")[0].split("-");
+  return { year: parseInt(parts[0], 10), month: parseInt(parts[1], 10) };
+}
+
 function computeRollForward(
   group: GLAccountGroup,
   assets: AssetRecord[],
@@ -128,8 +133,8 @@ function computeRollForward(
     let additions = 0;
     for (const asset of groupAssets) {
       if (!asset.in_service_date) continue;
-      const isd = new Date(asset.in_service_date);
-      if (isd.getFullYear() === year && isd.getMonth() + 1 === month) {
+      const isd = parseISODate(asset.in_service_date);
+      if (isd.year === year && isd.month === month) {
         additions += asset.acquisition_cost;
       }
     }
@@ -138,8 +143,8 @@ function computeRollForward(
     let disposals = 0;
     for (const asset of groupAssets) {
       if (!asset.disposed_date || asset.status !== "disposed") continue;
-      const dd = new Date(asset.disposed_date);
-      if (dd.getFullYear() === year && dd.getMonth() + 1 === month) {
+      const dd = parseISODate(asset.disposed_date);
+      if (dd.year === year && dd.month === month) {
         // Use the prior month's NBV or the depreciation entry
         const prevMonth = month === 1 ? 12 : month - 1;
         const prevYear = month === 1 ? year - 1 : year;
