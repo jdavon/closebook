@@ -159,12 +159,12 @@ export async function GET(request: NextRequest) {
                 }
               }
 
-              // Compute actual daily rate from recent paychecks (last 2-3)
-              let recentDailyRate: number | null = null;
+              // Compute average weekly gross from recent paychecks (last 2-3)
+              let recentWeeklyRate: number | null = null;
               const recentChecks = relevantStatements.slice(0, 3);
               if (recentChecks.length > 0) {
                 let totalGross = 0;
-                let totalWorkingDays = 0;
+                let totalCalendarDays = 0;
                 for (const ps of recentChecks) {
                   totalGross += ps.grossPay || 0;
                   const begin = new Date(
@@ -173,17 +173,11 @@ export async function GET(request: NextRequest) {
                   const end = new Date(
                     ps.endDate.includes("T") ? ps.endDate.split("T")[0] : ps.endDate
                   );
-                  let days = 0;
-                  const cur = new Date(begin);
-                  while (cur <= end) {
-                    const dow = cur.getDay();
-                    if (dow !== 0 && dow !== 6) days++;
-                    cur.setDate(cur.getDate() + 1);
-                  }
-                  totalWorkingDays += days;
+                  const days = Math.floor((end.getTime() - begin.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+                  totalCalendarDays += days;
                 }
-                if (totalWorkingDays > 0 && totalGross > 0) {
-                  recentDailyRate = Math.round((totalGross / totalWorkingDays) * 100) / 100;
+                if (totalCalendarDays > 0 && totalGross > 0) {
+                  recentWeeklyRate = Math.round((totalGross / totalCalendarDays) * 7 * 100) / 100;
                 }
               }
 
@@ -207,7 +201,7 @@ export async function GET(request: NextRequest) {
                 lastPayStatement: relevantStatements[0],
                 annualBenefitCost,
                 benefitBreakdown: annualizedBreakdown,
-                recentDailyRate,
+                recentWeeklyRate,
               } satisfies EmployeeAccrualInput;
             } catch {
               return {

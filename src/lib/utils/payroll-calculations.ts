@@ -141,11 +141,11 @@ export interface EmployeeAccrualInput {
    */
   companyLastPayPeriodEnd?: string | null;
   /**
-   * Actual daily rate computed from recent paychecks. For hourly/variable
-   * employees, this reflects real hours worked rather than theoretical
-   * full-time annual salary. Preferred over annualComp/260 when available.
+   * Average weekly gross pay from recent paychecks. Used with calendar-day
+   * pro-rata for the accrual period, which is schedule-agnostic (works for
+   * both Mon-Fri and Mon-Sat work weeks). Preferred over annualComp/260.
    */
-  recentDailyRate?: number | null;
+  recentWeeklyRate?: number | null;
 }
 
 export interface AccrualLineItem {
@@ -341,14 +341,12 @@ export function calculateAccruals(
     const empName = employee.displayName
       ?? ([employee.info?.firstName, employee.info?.lastName].filter(Boolean).join(" ") || `Employee ${employee.id}`);
 
-    // Determine daily rate: prefer actual recent rate over annualized salary
+    // Determine compensation basis
     const annualComp = getAnnualComp(employee);
-    const recentRate = input.recentDailyRate;
-    const dailyRate = (recentRate && recentRate > 0)
-      ? recentRate
-      : (annualComp > 0 ? annualComp / WORKING_DAYS_PER_YEAR : 0);
+    const weeklyRate = input.recentWeeklyRate;
+    const useWeeklyRate = weeklyRate != null && weeklyRate > 0;
 
-    if (dailyRate <= 0) {
+    if (!useWeeklyRate && annualComp <= 0) {
       warnings.push(`${empName} (${employee.id}): no compensation data, skipped`);
       continue;
     }
@@ -368,12 +366,30 @@ export function calculateAccruals(
       accrualStart = new Date(periodYear, periodMonth - 1, 1);
     }
 
-    // Count working days in accrual window
-    const accrualDays = countWorkingDays(accrualStart, periodEnd);
-    if (accrualDays <= 0) continue;
+    // Calculate wage accrual using the appropriate method:
+    // - Weekly rate + calendar-day pro-rata: schedule-agnostic, works for
+    //   both Mon-Fri (biweekly) and Mon-Sat (weekly) pay schedules
+    // - Annual comp / working days: fallback for salaried employees
+    //   without recent pay data
+    let wageAccrual: number;
+    let accrualDays: number;
+    const dailyRate = annualComp > 0 ? annualComp / WORKING_DAYS_PER_YEAR : 0;
 
-    // Calculate wage accrual
-    const wageAccrual = round(dailyRate * accrualDays);
+    if (useWeeklyRate) {
+      // Calendar-day pro-rata: total calendar days / 7 = weeks
+      const calendarDays = Math.floor(
+        (periodEnd.getTime() - accrualStart.getTime()) / (1000 * 60 * 60 * 24)
+      ) + 1;
+      if (calendarDays <= 0) continue;
+      const accrualWeeks = calendarDays / 7;
+      wageAccrual = round(weeklyRate * accrualWeeks);
+      // For display purposes, show Mon-Fri working days
+      accrualDays = countWorkingDays(accrualStart, periodEnd);
+    } else {
+      accrualDays = countWorkingDays(accrualStart, periodEnd);
+      if (accrualDays <= 0) continue;
+      wageAccrual = round(dailyRate * accrualDays);
+    }
 
     // Calculate employer payroll taxes
     const { total: taxAccrual, breakdown: taxBreakdown } = calculateEmployerTaxes(
