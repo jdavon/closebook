@@ -198,11 +198,25 @@ function calculateMacrsMonthly(
   return Math.round((annualDepr / monthsInYear) * 100) / 100;
 }
 
+/**
+ * Options for generating a depreciation schedule with an opening balance.
+ * When provided, entries are only emitted from `fromYear/fromMonth` onward,
+ * and accumulated depreciation starts from the opening values (e.g. imported
+ * balances as of Dec 2025) rather than recalculating from the in-service date.
+ */
+export interface ScheduleOpeningBalance {
+  fromYear: number;
+  fromMonth: number;
+  openingBookAccum: number;
+  openingTaxAccum: number;
+}
+
 // Generate full depreciation schedule from in-service date through target period
 export function generateDepreciationSchedule(
   asset: AssetForDepreciation,
   throughYear: number,
-  throughMonth: number
+  throughMonth: number,
+  opening?: ScheduleOpeningBalance
 ): DepreciationEntry[] {
   const entries: DepreciationEntry[] = [];
   const inService = parseDate(asset.in_service_date);
@@ -213,27 +227,47 @@ export function generateDepreciationSchedule(
   let cy = inService.year;
   let cm = inService.month;
 
+  // If we have an opening balance, we still iterate from in-service (so
+  // calculateMonthly* sees correct monthsElapsed), but we only emit entries
+  // from the opening period onward and reset accumulated to the opening values.
+  let emitting = !opening;
+  let openingApplied = false;
+
   while (cy < throughYear || (cy === throughYear && cm <= throughMonth)) {
     const bookDepr = calculateMonthlyBookDepreciation(asset, cy, cm);
     const taxDepr = calculateMonthlyTaxDepreciation(asset, cy, cm);
 
-    bookAccum += bookDepr;
-    taxAccum += taxDepr;
+    if (opening && !openingApplied) {
+      // Check if we've reached the opening period
+      if (cy > opening.fromYear || (cy === opening.fromYear && cm >= opening.fromMonth)) {
+        // Reset accumulated to the imported opening balance, then add this month
+        bookAccum = opening.openingBookAccum + bookDepr;
+        taxAccum = opening.openingTaxAccum + taxDepr;
+        openingApplied = true;
+        emitting = true;
+      }
+      // Before opening period — skip, don't accumulate
+    } else {
+      bookAccum += bookDepr;
+      taxAccum += taxDepr;
+    }
 
-    // Cap accumulated to not exceed basis
-    bookAccum = Math.min(bookAccum, asset.acquisition_cost - asset.book_salvage_value);
-    taxAccum = Math.min(taxAccum, taxBasis);
+    if (emitting) {
+      // Cap accumulated to not exceed basis
+      bookAccum = Math.min(bookAccum, asset.acquisition_cost - asset.book_salvage_value);
+      taxAccum = Math.min(taxAccum, taxBasis);
 
-    entries.push({
-      period_year: cy,
-      period_month: cm,
-      book_depreciation: Math.round(bookDepr * 100) / 100,
-      book_accumulated: Math.round(bookAccum * 100) / 100,
-      book_net_value: Math.round((asset.acquisition_cost - bookAccum) * 100) / 100,
-      tax_depreciation: Math.round(taxDepr * 100) / 100,
-      tax_accumulated: Math.round(taxAccum * 100) / 100,
-      tax_net_value: Math.round((taxBasis - taxAccum) * 100) / 100,
-    });
+      entries.push({
+        period_year: cy,
+        period_month: cm,
+        book_depreciation: Math.round(bookDepr * 100) / 100,
+        book_accumulated: Math.round(bookAccum * 100) / 100,
+        book_net_value: Math.round((asset.acquisition_cost - bookAccum) * 100) / 100,
+        tax_depreciation: Math.round(taxDepr * 100) / 100,
+        tax_accumulated: Math.round(taxAccum * 100) / 100,
+        tax_net_value: Math.round((taxBasis - taxAccum) * 100) / 100,
+      });
+    }
 
     cm++;
     if (cm > 12) { cm = 1; cy++; }

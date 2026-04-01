@@ -19,6 +19,7 @@ import {
   generateDepreciationSchedule,
   type AssetForDepreciation,
   type DepreciationEntry,
+  type ScheduleOpeningBalance,
 } from "@/lib/utils/depreciation";
 import {
   getReportingGroup,
@@ -42,14 +43,21 @@ interface AssetRow {
   book_useful_life_months: number;
   book_salvage_value: number;
   book_depreciation_method: string;
+  book_accumulated_depreciation: number;
   book_net_value: number;
   tax_cost_basis: number | null;
   tax_depreciation_method: string;
   tax_useful_life_months: number | null;
+  tax_accumulated_depreciation: number;
   section_179_amount: number;
   bonus_depreciation_amount: number;
   status: string;
 }
+
+// Opening balance cutoff: Dec 2025 is the import/opening period.
+// Depreciation entries are only generated from Jan 2026 onward.
+const OPENING_YEAR = 2025;
+const OPENING_MONTH = 12;
 
 type ViewMode = "depreciation" | "remaining_life" | "net_book_value";
 
@@ -172,7 +180,7 @@ export function DepreciationScheduleTab({
     const { data } = await supabase
       .from("fixed_assets")
       .select(
-        "id, asset_name, asset_tag, vehicle_class, acquisition_cost, in_service_date, book_useful_life_months, book_salvage_value, book_depreciation_method, book_net_value, tax_cost_basis, tax_depreciation_method, tax_useful_life_months, section_179_amount, bonus_depreciation_amount, status"
+        "id, asset_name, asset_tag, vehicle_class, acquisition_cost, in_service_date, book_useful_life_months, book_salvage_value, book_depreciation_method, book_accumulated_depreciation, book_net_value, tax_cost_basis, tax_depreciation_method, tax_useful_life_months, tax_accumulated_depreciation, section_179_amount, bonus_depreciation_amount, status"
       )
       .eq("entity_id", entityId)
       .in("status", ["active", "fully_depreciated"])
@@ -199,10 +207,19 @@ export function DepreciationScheduleTab({
       const rule = group ? rulesMap.get(group) : undefined;
       const assetForCalc = resolveAssetForCalc(asset, rule);
 
+      // Generate from Jan 2026 using the imported opening balance (Dec 2025)
+      const opening: ScheduleOpeningBalance = {
+        fromYear: OPENING_YEAR,
+        fromMonth: OPENING_MONTH + 1, // Jan 2026
+        openingBookAccum: asset.book_accumulated_depreciation,
+        openingTaxAccum: asset.tax_accumulated_depreciation,
+      };
+
       const schedule = generateDepreciationSchedule(
         assetForCalc,
         lastMonth.year,
-        lastMonth.month
+        lastMonth.month,
+        opening
       );
 
       const entryMap: Record<string, DepreciationEntry> = {};
@@ -269,13 +286,22 @@ export function DepreciationScheduleTab({
       const rule = group ? rulesMap.get(group) : undefined;
       const assetForCalc = resolveAssetForCalc(asset, rule);
 
+      // Generate from Jan 2026 using the imported opening balance
+      const opening: ScheduleOpeningBalance = {
+        fromYear: OPENING_YEAR,
+        fromMonth: OPENING_MONTH + 1,
+        openingBookAccum: asset.book_accumulated_depreciation,
+        openingTaxAccum: asset.tax_accumulated_depreciation,
+      };
+
       const schedule = generateDepreciationSchedule(
         assetForCalc,
         currentPeriod.year,
-        currentPeriod.month
+        currentPeriod.month,
+        opening
       );
 
-      // Delete non-manual entries
+      // Delete non-manual entries (only post-opening)
       await supabase
         .from("fixed_asset_depreciation")
         .delete()

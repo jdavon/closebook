@@ -25,6 +25,7 @@ import { formatCurrency, getPeriodShortLabel, getCurrentPeriod } from "@/lib/uti
 import {
   generateDepreciationSchedule,
   type AssetForDepreciation,
+  type ScheduleOpeningBalance,
 } from "@/lib/utils/depreciation";
 
 interface DepreciationRow {
@@ -41,6 +42,10 @@ interface DepreciationRow {
   notes: string | null;
 }
 
+// Opening balance cutoff
+const OPENING_YEAR = 2025;
+const OPENING_MONTH = 12;
+
 interface AssetSummary {
   id: string;
   asset_name: string;
@@ -49,9 +54,11 @@ interface AssetSummary {
   book_useful_life_months: number;
   book_salvage_value: number;
   book_depreciation_method: string;
+  book_accumulated_depreciation: number;
   tax_cost_basis: number | null;
   tax_depreciation_method: string;
   tax_useful_life_months: number | null;
+  tax_accumulated_depreciation: number;
   section_179_amount: number;
   bonus_depreciation_amount: number;
   status: string;
@@ -74,7 +81,7 @@ export default function DepreciationSchedulePage() {
       supabase
         .from("fixed_assets")
         .select(
-          "id, asset_name, acquisition_cost, in_service_date, book_useful_life_months, book_salvage_value, book_depreciation_method, tax_cost_basis, tax_depreciation_method, tax_useful_life_months, section_179_amount, bonus_depreciation_amount, status"
+          "id, asset_name, acquisition_cost, in_service_date, book_useful_life_months, book_salvage_value, book_depreciation_method, book_accumulated_depreciation, tax_cost_basis, tax_depreciation_method, tax_useful_life_months, tax_accumulated_depreciation, section_179_amount, bonus_depreciation_amount, status"
         )
         .eq("id", assetId)
         .single(),
@@ -114,10 +121,19 @@ export default function DepreciationSchedulePage() {
       bonus_depreciation_amount: asset.bonus_depreciation_amount,
     };
 
+    // Generate from Jan 2026 using the imported opening balance
+    const opening: ScheduleOpeningBalance = {
+      fromYear: OPENING_YEAR,
+      fromMonth: OPENING_MONTH + 1,
+      openingBookAccum: asset.book_accumulated_depreciation,
+      openingTaxAccum: asset.tax_accumulated_depreciation,
+    };
+
     const schedule = generateDepreciationSchedule(
       assetForCalc,
       currentPeriod.year,
-      currentPeriod.month
+      currentPeriod.month,
+      opening
     );
 
     // Find which periods don't already have non-manual entries
