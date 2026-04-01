@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
@@ -24,6 +24,9 @@ import { toast } from "sonner";
 import {
   VEHICLE_CLASSIFICATIONS,
   getAllClasses,
+  customRowsToClassifications,
+  type VehicleClassification,
+  type CustomVehicleClassRow,
 } from "@/lib/utils/vehicle-classification";
 import type { VehicleClass } from "@/lib/types/database";
 
@@ -151,19 +154,15 @@ const STATUS_OPTIONS = [
   { value: "inactive", label: "Inactive" },
 ];
 
-const VEHICLE_CLASS_OPTIONS = getAllClasses().map((c) => ({
-  value: c.class,
-  label: `${c.class}: ${c.className}`,
-}));
-
 const STATE_OPTIONS = US_STATES.map((s) => ({ value: s, label: s }));
 
-const COLUMNS: ColumnDef[] = [
+function buildColumns(classOptions: { value: string; label: string }[]): ColumnDef[] {
+  return [
   // Identification
   { key: "asset_tag", label: "Asset Tag", group: "id", type: "text", width: 100, placeholder: "VEH-001" },
   { key: "asset_name", label: "Asset Name", group: "id", type: "text", width: 160, placeholder: "Auto from Year/Make/Model" },
   // Vehicle
-  { key: "vehicle_class", label: "Vehicle Class", shortLabel: "Class", group: "vehicle", type: "select", width: 170, options: VEHICLE_CLASS_OPTIONS },
+  { key: "vehicle_class", label: "Vehicle Class", shortLabel: "Class", group: "vehicle", type: "select", width: 170, options: classOptions },
   { key: "vehicle_year", label: "Year", group: "vehicle", type: "number", width: 70, placeholder: "2024" },
   { key: "vehicle_make", label: "Make", group: "vehicle", type: "text", width: 100, placeholder: "Ford" },
   { key: "vehicle_model", label: "Model", group: "vehicle", type: "text", width: 100, placeholder: "F-150" },
@@ -192,7 +191,8 @@ const COLUMNS: ColumnDef[] = [
   { key: "tax_accumulated_depreciation", label: "Tax Accum Depr", shortLabel: "Tax Accum", group: "tax", type: "number", width: 130, placeholder: "Auto-calc" },
   // Status
   { key: "status", label: "Status", group: "status", type: "select", width: 120, options: STATUS_OPTIONS },
-];
+  ];
+}
 
 const GROUP_COLORS: Record<string, { bg: string; text: string; border: string }> = {
   id:      { bg: "bg-slate-100 dark:bg-slate-800",   text: "text-slate-700 dark:text-slate-300",   border: "border-slate-200 dark:border-slate-700" },
@@ -211,10 +211,10 @@ const GROUP_LABELS: Record<string, string> = {
 };
 
 // Column groups for the spanning header
-function getColumnGroups(): { group: string; span: number }[] {
+function getColumnGroups(columns: ColumnDef[]): { group: string; span: number }[] {
   const groups: { group: string; span: number }[] = [];
   let current = "";
-  for (const col of COLUMNS) {
+  for (const col of columns) {
     if (col.group !== current) {
       groups.push({ group: col.group, span: 1 });
       current = col.group;
@@ -357,19 +357,33 @@ function resolveTaxMethod(value: unknown): string {
   return "macrs_5";
 }
 
-function resolveVehicleClass(value: unknown): string {
+function resolveVehicleClass(value: unknown, customClasses?: VehicleClassification[]): string {
   if (!value) return "";
   const str = String(value).trim();
+  // Check built-in
   if (str in VEHICLE_CLASSIFICATIONS) return str;
+  // Check custom exact match
+  if (customClasses) {
+    const exact = customClasses.find((c) => c.class === str);
+    if (exact) return exact.class;
+  }
   const upper = str.toUpperCase();
   for (const code of Object.keys(VEHICLE_CLASSIFICATIONS)) {
     if (code.toUpperCase() === upper) return code;
   }
+  if (customClasses) {
+    const ci = customClasses.find((c) => c.class.toUpperCase() === upper);
+    if (ci) return ci.class;
+  }
   const lower = str.toLowerCase();
-  for (const [code, cls] of Object.entries(VEHICLE_CLASSIFICATIONS)) {
+  const allEntries: [string, { className: string }][] = [
+    ...Object.entries(VEHICLE_CLASSIFICATIONS),
+    ...(customClasses?.map((c) => [c.class, { className: c.className }] as [string, { className: string }]) ?? []),
+  ];
+  for (const [code, cls] of allEntries) {
     if (cls.className.toLowerCase() === lower) return code;
   }
-  for (const [code, cls] of Object.entries(VEHICLE_CLASSIFICATIONS)) {
+  for (const [code, cls] of allEntries) {
     if (cls.className.toLowerCase().includes(lower)) return code;
   }
   return "";
@@ -436,6 +450,28 @@ export default function AssetImportWizardPage() {
   const [importProgress, setImportProgress] = useState(0);
   const [results, setResults] = useState<ImportResults | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
+  const [customClasses, setCustomClasses] = useState<VehicleClassification[]>([]);
+
+  // Fetch custom vehicle classes for this entity
+  useEffect(() => {
+    fetch(`/api/assets/classes?entityId=${entityId}`)
+      .then((r) => r.json())
+      .then((data: CustomVehicleClassRow[]) => {
+        if (Array.isArray(data)) {
+          setCustomClasses(customRowsToClassifications(data));
+        }
+      })
+      .catch(() => {});
+  }, [entityId]);
+
+  // Build columns with merged class options
+  const COLUMNS = useMemo(() => {
+    const classOptions = getAllClasses(customClasses).map((c) => ({
+      value: c.class,
+      label: `${c.class}: ${c.className}`,
+    }));
+    return buildColumns(classOptions);
+  }, [customClasses]);
 
   // Auto-update asset_name when year/make/model changes
   const updateAssetName = useCallback((row: AssetRow): AssetRow => {
@@ -476,7 +512,7 @@ export default function AssetImportWizardPage() {
         // Map fields
         if (hm.asset_tag) row.asset_tag = String(raw[hm.asset_tag] ?? "").trim();
         if (hm.asset_name) row.asset_name = String(raw[hm.asset_name] ?? "").trim();
-        if (hm.vehicle_class) row.vehicle_class = resolveVehicleClass(raw[hm.vehicle_class]);
+        if (hm.vehicle_class) row.vehicle_class = resolveVehicleClass(raw[hm.vehicle_class], customClasses);
         if (hm.vehicle_year) {
           const y = raw[hm.vehicle_year];
           row.vehicle_year = typeof y === "number" ? String(Math.round(y)) : String(y ?? "").trim();
@@ -853,7 +889,7 @@ export default function AssetImportWizardPage() {
 
   // ---- Render ----
 
-  const colGroups = getColumnGroups();
+  const colGroups = getColumnGroups(COLUMNS);
   const totalErrors = rows.reduce(
     (sum, row) => sum + Object.keys(row._errors).length,
     0
