@@ -319,16 +319,20 @@ export function calculateAccruals(
   const warnings: string[] = [];
   const employeeDetails: EmployeeAccrualResult[] = [];
 
-  // Aggregate by operating entity
-  const entityWages: Record<string, { entry: CostCenterEntry; wages: number; taxes: number; taxBreakdown: Record<string, number>; benefits: number; benefitBreakdown: Record<string, number> }> = {};
+  // Aggregate by operating entity + department
+  const deptWages: Record<string, { entry: CostCenterEntry; wages: number; taxes: number; taxBreakdown: Record<string, number>; benefits: number; benefitBreakdown: Record<string, number> }> = {};
 
   for (const input of inputs) {
     const { employee, ytdGrossWages, lastCheckDate } = input;
 
+    // Build display name from info fields (displayName is not returned by API)
+    const empName = employee.displayName
+      ?? ([employee.info?.firstName, employee.info?.lastName].filter(Boolean).join(" ") || `Employee ${employee.id}`);
+
     // Skip employees with no pay data
     const annualComp = getAnnualComp(employee);
     if (annualComp <= 0) {
-      warnings.push(`${employee.displayName} (${employee.id}): no compensation data, skipped`);
+      warnings.push(`${empName} (${employee.id}): no compensation data, skipped`);
       continue;
     }
 
@@ -373,10 +377,10 @@ export function calculateAccruals(
       (employee as TaggedEmployee)._companyId
     );
 
-    // Accumulate by entity
-    const entityKey = costCenterEntry.operatingEntityId;
-    if (!entityWages[entityKey]) {
-      entityWages[entityKey] = {
+    // Accumulate by entity + department
+    const deptKey = `${costCenterEntry.operatingEntityId}:${costCenterEntry.department}`;
+    if (!deptWages[deptKey]) {
+      deptWages[deptKey] = {
         entry: costCenterEntry,
         wages: 0,
         taxes: 0,
@@ -385,25 +389,25 @@ export function calculateAccruals(
         benefitBreakdown: {},
       };
     }
-    entityWages[entityKey].wages += wageAccrual;
-    entityWages[entityKey].taxes += taxAccrual;
-    entityWages[entityKey].benefits += benefitAccrual;
+    deptWages[deptKey].wages += wageAccrual;
+    deptWages[deptKey].taxes += taxAccrual;
+    deptWages[deptKey].benefits += benefitAccrual;
 
     // Merge tax breakdown
     for (const [taxKey, taxAmount] of Object.entries(taxBreakdown)) {
-      entityWages[entityKey].taxBreakdown[taxKey] =
-        (entityWages[entityKey].taxBreakdown[taxKey] || 0) + taxAmount;
+      deptWages[deptKey].taxBreakdown[taxKey] =
+        (deptWages[deptKey].taxBreakdown[taxKey] || 0) + taxAmount;
     }
 
     // Merge benefit breakdown
     for (const [bKey, bAmount] of Object.entries(benefitBreakdown)) {
-      entityWages[entityKey].benefitBreakdown[bKey] =
-        (entityWages[entityKey].benefitBreakdown[bKey] || 0) + (bAmount * (accrualDays / WORKING_DAYS_PER_YEAR));
+      deptWages[deptKey].benefitBreakdown[bKey] =
+        (deptWages[deptKey].benefitBreakdown[bKey] || 0) + (bAmount * (accrualDays / WORKING_DAYS_PER_YEAR));
     }
 
     employeeDetails.push({
       employeeId: employee.id,
-      employeeName: employee.displayName,
+      employeeName: empName,
       department: costCenterEntry.department,
       costCenterCode: costCenterCode ?? "UNKNOWN",
       costCenterEntry,
@@ -419,13 +423,14 @@ export function calculateAccruals(
     });
   }
 
-  // Build line items
+  // Build line items — one per entity + department + type
   const lineItems: AccrualLineItem[] = [];
   let totalWageAccrual = 0;
   let totalTaxAccrual = 0;
   let totalBenefitAccrual = 0;
 
-  for (const [, data] of Object.entries(entityWages)) {
+  for (const [, data] of Object.entries(deptWages)) {
+    const dept = data.entry.department;
     const wages = round(data.wages);
     const taxes = round(data.taxes);
     const benefits = round(data.benefits);
@@ -437,13 +442,12 @@ export function calculateAccruals(
         operatingEntityName: data.entry.operatingEntityName,
         employingEntityId: EMPLOYING_ENTITY_ID,
         type: "wages",
-        description: `Accrued wages — ${data.entry.operatingEntityName}`,
+        description: `Accrued wages — ${dept}`,
         amount: wages,
       });
     }
 
     if (taxes > 0) {
-      // Round each breakdown component
       const roundedBreakdown: Record<string, number> = {};
       for (const [k, v] of Object.entries(data.taxBreakdown)) {
         roundedBreakdown[k] = round(v);
@@ -455,7 +459,7 @@ export function calculateAccruals(
         operatingEntityName: data.entry.operatingEntityName,
         employingEntityId: EMPLOYING_ENTITY_ID,
         type: "payroll_tax",
-        description: `Employer payroll taxes — ${data.entry.operatingEntityName}`,
+        description: `Employer payroll taxes — ${dept}`,
         amount: taxes,
         details: roundedBreakdown,
       });
@@ -473,7 +477,7 @@ export function calculateAccruals(
         operatingEntityName: data.entry.operatingEntityName,
         employingEntityId: EMPLOYING_ENTITY_ID,
         type: "benefits",
-        description: `Employer benefits — ${data.entry.operatingEntityName}`,
+        description: `Employer benefits — ${dept}`,
         amount: benefits,
         details: roundedBenefits,
       });
@@ -484,11 +488,14 @@ export function calculateAccruals(
     totalBenefitAccrual += benefits;
   }
 
-  // Sort line items: wages first, then taxes, then benefits, grouped by entity
+  // Sort line items: grouped by entity then department, then type within each
   const typeOrder = { wages: 0, payroll_tax: 1, benefits: 2, pto: 3 };
   lineItems.sort((a, b) => {
     if (a.operatingEntityCode !== b.operatingEntityCode) {
       return a.operatingEntityCode.localeCompare(b.operatingEntityCode);
+    }
+    if (a.description !== b.description) {
+      return a.description.localeCompare(b.description);
     }
     return (typeOrder[a.type] ?? 9) - (typeOrder[b.type] ?? 9);
   });
