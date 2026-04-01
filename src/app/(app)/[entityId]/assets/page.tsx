@@ -48,7 +48,7 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Plus, ArrowRight, Car, Search, Upload, Trash2, DollarSign, ChevronsUpDown, Check, Settings } from "lucide-react";
+import { Plus, ArrowRight, Car, Search, Upload, Trash2, DollarSign, ChevronsUpDown, Check, Settings, Calculator } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { formatCurrency } from "@/lib/utils/dates";
@@ -81,6 +81,8 @@ import { ReconciliationTab } from "./reconciliation-tab";
 import { RollForwardTab } from "./roll-forward-tab";
 import { SoldTab } from "./sold-tab";
 import { ClassSettings } from "./class-settings";
+import { DepreciationScheduleTab } from "./depreciation-schedule-tab";
+import { DepreciationRulesSettings } from "./depreciation-rules-settings";
 
 interface FixedAsset {
   id: string;
@@ -140,6 +142,7 @@ export default function AssetsPage() {
   // Custom classes
   const [customClasses, setCustomClasses] = useState<VehicleClassification[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [deprRulesOpen, setDeprRulesOpen] = useState(false);
 
   const loadCustomClasses = useCallback(async () => {
     const res = await fetch(`/api/assets/classes?entityId=${entityId}`);
@@ -361,6 +364,10 @@ export default function AssetsPage() {
               Delete ({selectedIds.size})
             </Button>
           )}
+          <Button variant="outline" onClick={() => setDeprRulesOpen(true)}>
+            <Calculator className="mr-2 h-4 w-4" />
+            Depr Rules
+          </Button>
           <Button variant="outline" onClick={() => setSettingsOpen(true)}>
             <Settings className="mr-2 h-4 w-4" />
             Edit Settings
@@ -390,6 +397,7 @@ export default function AssetsPage() {
       <Tabs defaultValue="register" className="space-y-6">
         <TabsList>
           <TabsTrigger value="register">Register</TabsTrigger>
+          <TabsTrigger value="depreciation">Depreciation</TabsTrigger>
           <TabsTrigger value="sold">Sold</TabsTrigger>
           <TabsTrigger value="reconciliation">Reconciliation</TabsTrigger>
           <TabsTrigger value="roll-forward">Roll-Forward</TabsTrigger>
@@ -613,6 +621,13 @@ export default function AssetsPage() {
 
         </TabsContent>
 
+        <TabsContent value="depreciation">
+          <DepreciationScheduleTab
+            entityId={entityId}
+            customClasses={customClasses}
+          />
+        </TabsContent>
+
         <TabsContent value="sold">
           <SoldTab entityId={entityId} />
         </TabsContent>
@@ -820,6 +835,14 @@ export default function AssetsPage() {
         open={settingsOpen}
         onOpenChange={setSettingsOpen}
         onClassesChanged={loadCustomClasses}
+      />
+
+      <DepreciationRulesSettings
+        entityId={entityId}
+        open={deprRulesOpen}
+        onOpenChange={setDeprRulesOpen}
+        onRulesChanged={() => {}}
+        customClasses={customClasses}
       />
     </div>
   );

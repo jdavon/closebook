@@ -66,6 +66,39 @@ export type Database = {
         }
         Relationships: []
       }
+      asset_depreciation_rules: {
+        Row: {
+          id: string
+          entity_id: string
+          reporting_group: string
+          book_useful_life_months: number | null
+          book_salvage_pct: number | null
+          book_depreciation_method: string
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          entity_id: string
+          reporting_group: string
+          book_useful_life_months?: number | null
+          book_salvage_pct?: number | null
+          book_depreciation_method?: string
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          entity_id?: string
+          reporting_group?: string
+          book_useful_life_months?: number | null
+          book_salvage_pct?: number | null
+          book_depreciation_method?: string
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       audit_log: {
         Row: {
           id: string
