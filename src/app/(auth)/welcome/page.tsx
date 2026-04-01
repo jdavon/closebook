@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -18,12 +18,19 @@ import { toast } from "sonner";
 import { BookOpen } from "lucide-react";
 
 export default function WelcomePage() {
+  const [email, setEmail] = useState("");
   const [fullName, setFullName] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const router = useRouter();
   const supabase = createClient();
+
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (user?.email) setEmail(user.email);
+    });
+  }, [supabase]);
 
   async function handleSetup(e: React.FormEvent) {
     e.preventDefault();
@@ -82,8 +89,20 @@ export default function WelcomePage() {
           Set up your name and password to get started
         </CardDescription>
       </CardHeader>
-      <form onSubmit={handleSetup}>
+      <form onSubmit={handleSetup} autoComplete="on">
         <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="email">Email</Label>
+            <Input
+              id="email"
+              name="username"
+              type="email"
+              value={email}
+              readOnly
+              autoComplete="username"
+              className="bg-muted"
+            />
+          </div>
           <div className="space-y-2">
             <Label htmlFor="fullName">Full Name</Label>
             <Input
@@ -92,6 +111,7 @@ export default function WelcomePage() {
               placeholder="John Smith"
               value={fullName}
               onChange={(e) => setFullName(e.target.value)}
+              autoComplete="name"
               required
             />
           </div>
@@ -99,10 +119,12 @@ export default function WelcomePage() {
             <Label htmlFor="password">Password</Label>
             <Input
               id="password"
+              name="password"
               type="password"
               placeholder="Min. 8 characters"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
+              autoComplete="new-password"
               required
               minLength={8}
             />
@@ -114,6 +136,7 @@ export default function WelcomePage() {
               type="password"
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
+              autoComplete="new-password"
               required
               minLength={8}
             />
