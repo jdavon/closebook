@@ -34,8 +34,9 @@ import {
   ChevronRight,
   Plus,
   X,
+  Download,
 } from "lucide-react";
-import { formatCurrency } from "@/lib/utils/dates";
+import { formatCurrency, getPeriodShortLabel } from "@/lib/utils/dates";
 import {
   RECON_GROUPS,
   UNALLOCATED_KEY,
@@ -43,6 +44,8 @@ import {
 } from "@/lib/utils/asset-gl-groups";
 import {
   getMasterType,
+  getVehicleClassification,
+  getReportingGroup,
   customRowsToClassifications,
   type VehicleClassification,
   type CustomVehicleClassRow,
@@ -64,16 +67,23 @@ interface EntityAccount {
 interface AssetRow {
   id: string;
   asset_name: string;
+  asset_tag: string | null;
   vehicle_class: string | null;
+  in_service_date: string | null;
   acquisition_cost: number;
+  book_useful_life_months: number;
+  book_salvage_value: number;
+  book_depreciation_method: string;
   book_accumulated_depreciation: number;
   book_net_value: number;
+  status: string;
   cost_account_id: string | null;
   accum_depr_account_id: string | null;
 }
 
 interface DeprRow {
   fixed_asset_id: string;
+  book_depreciation: number;
   book_accumulated: number;
   book_net_value: number;
 }
@@ -121,6 +131,10 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
   const [reconciliations, setReconciliations] = useState<
     Record<string, ReconciliationRecord>
   >({});
+
+  // All assets + depr data for export
+  const [allAssets, setAllAssets] = useState<AssetRow[]>([]);
+  const [deprMapState, setDeprMapState] = useState<Record<string, DeprRow>>({});
 
   // Account picker state
   const [addingToGroup, setAddingToGroup] = useState<string | null>(null);
@@ -204,7 +218,7 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
     const { data: assetsData } = await supabase
       .from("fixed_assets")
       .select(
-        "id, asset_name, vehicle_class, acquisition_cost, book_accumulated_depreciation, book_net_value, cost_account_id, accum_depr_account_id"
+        "id, asset_name, asset_tag, vehicle_class, in_service_date, acquisition_cost, book_useful_life_months, book_salvage_value, book_depreciation_method, book_accumulated_depreciation, book_net_value, status, cost_account_id, accum_depr_account_id"
       )
       .eq("entity_id", entityId);
 
@@ -218,7 +232,7 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
         const batch = assetIds.slice(i, i + 500);
         const { data: deprData } = await supabase
           .from("fixed_asset_depreciation")
-          .select("fixed_asset_id, book_accumulated, book_net_value")
+          .select("fixed_asset_id, book_depreciation, book_accumulated, book_net_value")
           .eq("period_year", periodYear)
           .eq("period_month", periodMonth)
           .in("fixed_asset_id", batch);
@@ -228,6 +242,10 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
         }
       }
     }
+
+    // Store for export
+    setAllAssets(assets);
+    setDeprMapState(deprMap);
 
     // 6. Group assets by recon group and compute totals
     //    If an asset has cost_account_id or accum_depr_account_id set,
@@ -411,6 +429,96 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
     setSaving(null);
     loadData();
   };
+
+  function handleExportCSV() {
+    const periodLabel = getPeriodShortLabel(periodYear, periodMonth);
+    const headers = [
+      "Subledger Group",
+      "Asset Tag",
+      "Asset Name",
+      "Class",
+      "Class Name",
+      "Reporting Group",
+      "Master Type",
+      "Status",
+      "In Service Date",
+      "Depr Method",
+      "Useful Life (mo)",
+      "Acquisition Cost",
+      "Salvage Value",
+      `Monthly Depr (${periodLabel})`,
+      `Accum Depreciation (${periodLabel})`,
+      `Net Book Value (${periodLabel})`,
+    ];
+
+    const rows: string[][] = [];
+
+    for (const asset of allAssets) {
+      const depr = deprMapState[asset.id];
+      const classification = getVehicleClassification(asset.vehicle_class, customClasses);
+      const mt = getMasterType(asset.vehicle_class, customClasses);
+
+      // Determine which recon group this asset falls into
+      let groupLabel = "Unallocated";
+      const mtValue = mt;
+      if (mtValue) {
+        const costGroup = RECON_GROUPS.find(
+          (g) => g.masterType === mtValue && g.lineType === "cost"
+        );
+        groupLabel = costGroup ? costGroup.displayName.replace(" — Cost", "") : mtValue;
+      }
+
+      const monthlyDepr = depr ? depr.book_depreciation : 0;
+      const accumDepr = depr
+        ? depr.book_accumulated
+        : asset.book_accumulated_depreciation;
+      const nbv = depr ? depr.book_net_value : asset.book_net_value;
+
+      rows.push([
+        groupLabel,
+        asset.asset_tag ?? "",
+        asset.asset_name,
+        classification?.class ?? "",
+        classification?.className ?? "",
+        classification?.reportingGroup ?? "",
+        mt ?? "",
+        asset.status,
+        asset.in_service_date ?? "",
+        asset.book_depreciation_method.replace(/_/g, " "),
+        String(asset.book_useful_life_months || ""),
+        asset.acquisition_cost.toFixed(2),
+        asset.book_salvage_value.toFixed(2),
+        monthlyDepr.toFixed(2),
+        accumDepr.toFixed(2),
+        nbv.toFixed(2),
+      ]);
+    }
+
+    // Sort by group then asset name
+    rows.sort((a, b) => a[0].localeCompare(b[0]) || a[2].localeCompare(b[2]));
+
+    const csvContent = [
+      headers.join(","),
+      ...rows.map((row) =>
+        row
+          .map((cell) => {
+            const str = String(cell);
+            return str.includes(",") || str.includes('"')
+              ? `"${str.replace(/"/g, '""')}"`
+              : str;
+          })
+          .join(",")
+      ),
+    ].join("\n");
+
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `asset-reconciliation-${periodYear}-${String(periodMonth).padStart(2, "0")}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
 
   const toggleGroup = (key: string) => {
     setExpandedGroups((prev) => {
@@ -688,7 +796,7 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
   return (
     <div className="space-y-6">
       {/* Period Selector */}
-      <div className="flex items-center gap-4">
+      <div className="flex items-center justify-between gap-4">
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium">Period:</span>
           <Select
@@ -722,6 +830,14 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
             </SelectContent>
           </Select>
         </div>
+        <Button
+          variant="outline"
+          onClick={handleExportCSV}
+          disabled={loading || allAssets.length === 0}
+        >
+          <Download className="mr-2 h-4 w-4" />
+          Export Recon CSV
+        </Button>
       </div>
 
       {loading ? (
