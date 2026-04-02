@@ -575,7 +575,7 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
                 <CheckCircle2 className="mr-1 h-3.5 w-3.5" />
                 Reconciled
               </Badge>
-            ) : Math.abs(variance) > 0.01 && groupMappings.length > 0 ? (
+            ) : Math.abs(variance) > 1.00 && groupMappings.length > 0 ? (
               <Badge variant="destructive">
                 <AlertTriangle className="mr-1 h-3.5 w-3.5" />
                 Variance
@@ -761,7 +761,7 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
                 </p>
                 <p
                   className={`text-lg font-semibold tabular-nums ${
-                    Math.abs(variance) > 0.01
+                    Math.abs(variance) > 1.00
                       ? "text-red-600"
                       : "text-green-600"
                   }`}
@@ -996,7 +996,7 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
                       </p>
                       <p
                         className={`text-lg font-semibold tabular-nums ${
-                          Math.abs(netVariance) > 0.01
+                          Math.abs(netVariance) > 1.00
                             ? "text-red-600"
                             : "text-green-600"
                         }`}
@@ -1054,7 +1054,7 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
                       </p>
                       <p
                         className={`text-lg font-semibold tabular-nums ${
-                          Math.abs(netVariance) > 0.01
+                          Math.abs(netVariance) > 1.00
                             ? "text-red-600"
                             : "text-green-600"
                         }`}
