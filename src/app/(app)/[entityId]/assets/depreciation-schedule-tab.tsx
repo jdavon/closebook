@@ -12,6 +12,8 @@ import {
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
 import { RefreshCw, Calculator } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency, getCurrentPeriod, getPeriodShortLabel } from "@/lib/utils/dates";
@@ -105,21 +107,25 @@ function parseISODate(dateStr: string): { year: number; month: number } {
 /** Apply group rules as fallback when asset lacks depreciation params */
 function resolveAssetForCalc(
   asset: AssetRow,
-  rule: DepreciationRule | undefined
+  rule: DepreciationRule | undefined,
+  forceCategoryRules?: boolean
 ): AssetForDepreciation {
   let usefulLife = asset.book_useful_life_months;
   let salvageValue = asset.book_salvage_value;
   let method = asset.book_depreciation_method;
 
-  // Fall back to group rule if the asset has no useful life set (0 or missing)
-  if (rule && (!usefulLife || usefulLife <= 0)) {
+  const shouldApplyRule = forceCategoryRules
+    ? !!rule
+    : rule && (!usefulLife || usefulLife <= 0);
+
+  if (shouldApplyRule && rule) {
     if (rule.book_useful_life_months && rule.book_useful_life_months > 0) {
       usefulLife = rule.book_useful_life_months;
     }
     if (rule.book_salvage_pct != null && rule.book_salvage_pct >= 0) {
       salvageValue = Math.round(asset.acquisition_cost * (rule.book_salvage_pct / 100) * 100) / 100;
     }
-    if (rule.book_depreciation_method && method === "none") {
+    if (rule.book_depreciation_method) {
       method = rule.book_depreciation_method;
     }
   }
@@ -151,6 +157,7 @@ export function DepreciationScheduleTab({
   const [endYear, setEndYear] = useState(now.getFullYear());
   const [endMonth, setEndMonth] = useState(now.getMonth() + 1);
   const [viewMode, setViewMode] = useState<ViewMode>("depreciation");
+  const [useCategoryRules, setUseCategoryRules] = useState(false);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
 
@@ -205,7 +212,7 @@ export function DepreciationScheduleTab({
     for (const asset of assets) {
       const group = getReportingGroup(asset.vehicle_class, customClasses);
       const rule = group ? rulesMap.get(group) : undefined;
-      const assetForCalc = resolveAssetForCalc(asset, rule);
+      const assetForCalc = resolveAssetForCalc(asset, rule, useCategoryRules);
 
       // Generate from Jan 2026 using the imported opening balance (Dec 2025)
       const opening: ScheduleOpeningBalance = {
@@ -230,7 +237,7 @@ export function DepreciationScheduleTab({
     }
 
     setScheduleMap(map);
-  }, [assets, rules, months, customClasses]);
+  }, [assets, rules, months, customClasses, useCategoryRules]);
 
   useEffect(() => {
     async function init() {
@@ -366,6 +373,35 @@ export function DepreciationScheduleTab({
     buildSchedules();
   }
 
+  /** Resolve the effective UL/salvage/method for display, respecting the toggle */
+  function resolveEffective(asset: AssetRow) {
+    const group = getReportingGroup(asset.vehicle_class, customClasses);
+    const rulesMap = new Map<string, DepreciationRule>();
+    for (const r of rules) rulesMap.set(r.reporting_group, r);
+    const rule = group ? rulesMap.get(group) : undefined;
+
+    let usefulLife = asset.book_useful_life_months;
+    let salvageValue = asset.book_salvage_value;
+    let fromRule = false;
+
+    const shouldApply = useCategoryRules
+      ? !!rule
+      : rule && (!usefulLife || usefulLife <= 0);
+
+    if (shouldApply && rule) {
+      if (rule.book_useful_life_months && rule.book_useful_life_months > 0) {
+        usefulLife = rule.book_useful_life_months;
+        fromRule = true;
+      }
+      if (rule.book_salvage_pct != null && rule.book_salvage_pct >= 0) {
+        salvageValue = Math.round(asset.acquisition_cost * (rule.book_salvage_pct / 100) * 100) / 100;
+        fromRule = true;
+      }
+    }
+
+    return { usefulLife, salvageValue, fromRule };
+  }
+
   function getCellValue(
     asset: AssetRow,
     year: number,
@@ -387,17 +423,7 @@ export function DepreciationScheduleTab({
     // remaining_life
     if (!asset.in_service_date) return "---";
     const isd = parseISODate(asset.in_service_date);
-
-    // Resolve effective useful life
-    const group = getReportingGroup(asset.vehicle_class, customClasses);
-    const rulesMap = new Map<string, DepreciationRule>();
-    for (const r of rules) rulesMap.set(r.reporting_group, r);
-    const rule = group ? rulesMap.get(group) : undefined;
-
-    let usefulLife = asset.book_useful_life_months;
-    if (rule && (!usefulLife || usefulLife <= 0)) {
-      usefulLife = rule.book_useful_life_months ?? 0;
-    }
+    const { usefulLife } = resolveEffective(asset);
 
     if (!usefulLife || usefulLife <= 0) return "---";
 
@@ -413,14 +439,7 @@ export function DepreciationScheduleTab({
     month: number
   ): string {
     if (viewMode === "remaining_life") {
-      const group = getReportingGroup(asset.vehicle_class, customClasses);
-      const rulesMap = new Map<string, DepreciationRule>();
-      for (const r of rules) rulesMap.set(r.reporting_group, r);
-      const rule = group ? rulesMap.get(group) : undefined;
-      let usefulLife = asset.book_useful_life_months;
-      if (rule && (!usefulLife || usefulLife <= 0)) {
-        usefulLife = rule.book_useful_life_months ?? 0;
-      }
+      const { usefulLife } = resolveEffective(asset);
       if (usefulLife > 0 && asset.in_service_date) {
         const isd = parseISODate(asset.in_service_date);
         const elapsed = monthsBetween(isd.year, isd.month, year, month);
@@ -454,15 +473,9 @@ export function DepreciationScheduleTab({
 
   // Effective useful life display for asset info column
   function getEffectiveUL(asset: AssetRow): string {
-    if (asset.book_useful_life_months && asset.book_useful_life_months > 0) {
-      return `${asset.book_useful_life_months} mo`;
-    }
-    const group = getReportingGroup(asset.vehicle_class, customClasses);
-    const rulesMap = new Map<string, DepreciationRule>();
-    for (const r of rules) rulesMap.set(r.reporting_group, r);
-    const rule = group ? rulesMap.get(group) : undefined;
-    if (rule?.book_useful_life_months && rule.book_useful_life_months > 0) {
-      return `${rule.book_useful_life_months} mo*`;
+    const { usefulLife, fromRule } = resolveEffective(asset);
+    if (usefulLife && usefulLife > 0) {
+      return `${usefulLife} mo${fromRule ? "*" : ""}`;
     }
     return "---";
   }
@@ -476,15 +489,7 @@ export function DepreciationScheduleTab({
   function getEndServiceLabel(asset: AssetRow): string {
     if (!asset.in_service_date) return "---";
     const isd = parseISODate(asset.in_service_date);
-    const group = getReportingGroup(asset.vehicle_class, customClasses);
-    const rulesMap = new Map<string, DepreciationRule>();
-    for (const r of rules) rulesMap.set(r.reporting_group, r);
-    const rule = group ? rulesMap.get(group) : undefined;
-
-    let usefulLife = asset.book_useful_life_months;
-    if (rule && (!usefulLife || usefulLife <= 0)) {
-      usefulLife = rule.book_useful_life_months ?? 0;
-    }
+    const { usefulLife } = resolveEffective(asset);
     if (!usefulLife || usefulLife <= 0) return "---";
 
     // End date = in-service month + useful life - 1 (last month of depreciation)
@@ -496,16 +501,9 @@ export function DepreciationScheduleTab({
   }
 
   function getEffectiveSalvage(asset: AssetRow): string {
-    if (asset.book_salvage_value > 0) {
-      return formatCurrency(asset.book_salvage_value);
-    }
-    const group = getReportingGroup(asset.vehicle_class, customClasses);
-    const rulesMap = new Map<string, DepreciationRule>();
-    for (const r of rules) rulesMap.set(r.reporting_group, r);
-    const rule = group ? rulesMap.get(group) : undefined;
-    if (rule?.book_salvage_pct != null && rule.book_salvage_pct > 0) {
-      const val = Math.round(asset.acquisition_cost * (rule.book_salvage_pct / 100) * 100) / 100;
-      return `${formatCurrency(val)}*`;
+    const { salvageValue, fromRule } = resolveEffective(asset);
+    if (salvageValue > 0) {
+      return `${formatCurrency(salvageValue)}${fromRule ? "*" : ""}`;
     }
     return "$0.00";
   }
@@ -581,7 +579,14 @@ export function DepreciationScheduleTab({
           </Select>
         </div>
 
-        <div className="flex items-center gap-2 ml-auto">
+        <div className="flex items-center gap-4 ml-auto">
+          <label className="flex items-center gap-2 cursor-pointer">
+            <Checkbox
+              checked={useCategoryRules}
+              onCheckedChange={(checked) => setUseCategoryRules(!!checked)}
+            />
+            <span className="text-sm whitespace-nowrap">Use Category Rules</span>
+          </label>
           <Select
             value={viewMode}
             onValueChange={(v) => setViewMode(v as ViewMode)}
