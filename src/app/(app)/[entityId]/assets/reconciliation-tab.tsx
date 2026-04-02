@@ -271,14 +271,15 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
     for (const asset of assets) {
       const depr = deprMap[asset.id];
       const cost = asset.acquisition_cost;
-      // Accumulated depreciation is a contra-asset (normally negative on the
-      // balance sheet). The DB stores it as a positive number, so we negate it.
-      // But if the value is already negative (e.g. an adjustment that reduces
-      // accum depr), preserve that sign — don't force it with Math.abs().
+      // Accumulated depreciation is a contra-asset. The DB stores normal
+      // depreciation as positive and adjustments can be negative. Simply
+      // negate to convert to balance-sheet sign:
+      //   DB +10000 (normal depr)  → subledger -10000
+      //   DB -24.12 (reduce depr)  → subledger +24.12
       const rawAccum = depr
         ? Number(depr.book_accumulated)
         : asset.book_accumulated_depreciation;
-      const accumDepr = rawAccum > 0 ? -rawAccum : rawAccum;
+      const accumDepr = -rawAccum;
 
       // Check for GL account override on the asset
       const costOverrideGroup = asset.cost_account_id
