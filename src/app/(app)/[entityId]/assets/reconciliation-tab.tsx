@@ -33,6 +33,7 @@ import {
   AlertTriangle,
   ChevronDown,
   ChevronRight,
+  ChevronLeft,
   Plus,
   X,
   Download,
@@ -873,6 +874,21 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
       <div className="flex items-center justify-between gap-4">
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium">Period:</span>
+          <Button
+            variant="outline"
+            size="icon"
+            className="h-9 w-9"
+            onClick={() => {
+              if (periodMonth === 1) {
+                setPeriodMonth(12);
+                setPeriodYear(periodYear - 1);
+              } else {
+                setPeriodMonth(periodMonth - 1);
+              }
+            }}
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </Button>
           <Select
             value={String(periodMonth)}
             onValueChange={(v) => setPeriodMonth(Number(v))}
@@ -903,6 +919,21 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
               ))}
             </SelectContent>
           </Select>
+          <Button
+            variant="outline"
+            size="icon"
+            className="h-9 w-9"
+            onClick={() => {
+              if (periodMonth === 12) {
+                setPeriodMonth(1);
+                setPeriodYear(periodYear + 1);
+              } else {
+                setPeriodMonth(periodMonth + 1);
+              }
+            }}
+          >
+            <ChevronRight className="h-4 w-4" />
+          </Button>
         </div>
         <Button
           variant="outline"
