@@ -590,32 +590,57 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
               <p className="text-sm text-muted-foreground italic">
                 No GL accounts linked yet
               </p>
-            ) : (
-              <div className="flex flex-wrap gap-2">
-                {groupMappings.map((mapping) => {
-                  const acct = accountsById[mapping.account_id];
-                  return (
-                    <Badge
-                      key={mapping.id}
-                      variant="secondary"
-                      className="text-xs font-mono gap-1"
+            ) : (() => {
+              const acctExpanded = expandedGroups.has(`accts_${group.key}`);
+              const visible = acctExpanded ? groupMappings : groupMappings.slice(0, 1);
+              const hiddenCount = groupMappings.length - 1;
+              return (
+                <div className="space-y-1">
+                  <div className="flex flex-wrap gap-2">
+                    {visible.map((mapping) => {
+                      const acct = accountsById[mapping.account_id];
+                      return (
+                        <Badge
+                          key={mapping.id}
+                          variant="secondary"
+                          className="text-xs font-mono gap-1"
+                        >
+                          {acct
+                            ? `${acct.account_number ?? ""} ${acct.name}`.trim()
+                            : mapping.account_id.slice(0, 8)}
+                          <button
+                            onClick={() =>
+                              handleRemoveAccount(mapping.id, group.key)
+                            }
+                            className="ml-1 hover:text-destructive"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </Badge>
+                      );
+                    })}
+                  </div>
+                  {hiddenCount > 0 && (
+                    <button
+                      onClick={() => toggleGroup(`accts_${group.key}`)}
+                      className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1"
                     >
-                      {acct
-                        ? `${acct.account_number ?? ""} ${acct.name}`.trim()
-                        : mapping.account_id.slice(0, 8)}
-                      <button
-                        onClick={() =>
-                          handleRemoveAccount(mapping.id, group.key)
-                        }
-                        className="ml-1 hover:text-destructive"
-                      >
-                        <X className="h-3 w-3" />
-                      </button>
-                    </Badge>
-                  );
-                })}
-              </div>
-            )}
+                      {acctExpanded ? (
+                        <>
+                          <ChevronDown className="h-3 w-3" />
+                          Show less
+                        </>
+                      ) : (
+                        <>
+                          <ChevronRight className="h-3 w-3" />
+                          +{hiddenCount} more account{hiddenCount !== 1 ? "s" : ""}
+                        </>
+                      )}
+                    </button>
+                  )}
+                </div>
+              );
+            })()}
 
             {/* Add account picker — multi-select */}
             {isAdding ? (
