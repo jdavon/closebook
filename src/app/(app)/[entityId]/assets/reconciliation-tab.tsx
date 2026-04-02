@@ -20,7 +20,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { AccountCombobox } from "@/components/ui/account-combobox";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
 import {
   Collapsible,
   CollapsibleContent,
@@ -138,7 +139,8 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
 
   // Account picker state
   const [addingToGroup, setAddingToGroup] = useState<string | null>(null);
-  const [selectedAccountId, setSelectedAccountId] = useState<string>("");
+  const [selectedAccountIds, setSelectedAccountIds] = useState<Set<string>>(new Set());
+  const [accountSearch, setAccountSearch] = useState("");
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -348,28 +350,32 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
 
   // -- Account linking (same pattern as debt reconciliation) --
 
-  const handleAddAccount = async (groupKey: string) => {
-    if (!selectedAccountId) return;
+  const handleAddAccounts = async (groupKey: string) => {
+    if (selectedAccountIds.size === 0) return;
     setSaving(groupKey);
 
-    const res = await fetch("/api/assets/recon-links", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        entity_id: entityId,
-        recon_group: groupKey,
-        account_id: selectedAccountId,
-      }),
-    });
+    let linked = 0;
+    for (const accountId of selectedAccountIds) {
+      const res = await fetch("/api/assets/recon-links", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          entity_id: entityId,
+          recon_group: groupKey,
+          account_id: accountId,
+        }),
+      });
+      if (res.ok) linked++;
+    }
 
-    if (!res.ok) {
-      const err = await res.json();
-      toast.error(err.error || "Failed to link account");
-    } else {
-      toast.success("Account linked");
+    if (linked > 0) {
+      toast.success(`${linked} account${linked !== 1 ? "s" : ""} linked`);
       setAddingToGroup(null);
-      setSelectedAccountId("");
+      setSelectedAccountIds(new Set());
+      setAccountSearch("");
       loadData();
+    } else {
+      toast.error("Failed to link accounts");
     }
     setSaving(null);
   };
@@ -611,39 +617,76 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
               </div>
             )}
 
-            {/* Add account picker */}
+            {/* Add account picker — multi-select */}
             {isAdding ? (
-              <div className="flex items-center gap-2">
-                <AccountCombobox
-                  accounts={entityAccounts
-                    .filter((a) => !allMappedAccountIds.has(a.id))
-                    .map((a) => ({
-                      id: a.id,
-                      account_number: a.account_number,
-                      name: a.name,
-                      account_type: a.account_type,
-                    }))}
-                  value={selectedAccountId}
-                  onValueChange={setSelectedAccountId}
-                  className="flex-1 min-w-0"
+              <div className="space-y-2">
+                <Input
+                  placeholder="Search accounts..."
+                  value={accountSearch}
+                  onChange={(e) => setAccountSearch(e.target.value)}
+                  className="text-sm"
                 />
-                <Button
-                  size="sm"
-                  onClick={() => handleAddAccount(group.key)}
-                  disabled={!selectedAccountId || saving === group.key}
-                >
-                  Add
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => {
-                    setAddingToGroup(null);
-                    setSelectedAccountId("");
-                  }}
-                >
-                  Cancel
-                </Button>
+                <div className="max-h-48 overflow-y-auto rounded border p-1 space-y-0.5">
+                  {entityAccounts
+                    .filter((a) => !allMappedAccountIds.has(a.id))
+                    .filter((a) => {
+                      if (!accountSearch) return true;
+                      const q = accountSearch.toLowerCase();
+                      return (
+                        (a.account_number ?? "").toLowerCase().includes(q) ||
+                        a.name.toLowerCase().includes(q)
+                      );
+                    })
+                    .map((a) => (
+                      <label
+                        key={a.id}
+                        className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted/50 cursor-pointer text-sm"
+                      >
+                        <Checkbox
+                          checked={selectedAccountIds.has(a.id)}
+                          onCheckedChange={(checked) => {
+                            setSelectedAccountIds((prev) => {
+                              const next = new Set(prev);
+                              if (checked) next.add(a.id);
+                              else next.delete(a.id);
+                              return next;
+                            });
+                          }}
+                        />
+                        <span className="font-mono text-xs text-muted-foreground w-12 shrink-0">
+                          {a.account_number ?? ""}
+                        </span>
+                        <span className="truncate">{a.name}</span>
+                      </label>
+                    ))}
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-muted-foreground">
+                    {selectedAccountIds.size} selected
+                  </span>
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => {
+                        setAddingToGroup(null);
+                        setSelectedAccountIds(new Set());
+                        setAccountSearch("");
+                      }}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      size="sm"
+                      onClick={() => handleAddAccounts(group.key)}
+                      disabled={selectedAccountIds.size === 0 || saving === group.key}
+                    >
+                      {saving === group.key
+                        ? "Linking..."
+                        : `Link ${selectedAccountIds.size} Account${selectedAccountIds.size !== 1 ? "s" : ""}`}
+                    </Button>
+                  </div>
+                </div>
               </div>
             ) : (
               <Button
@@ -651,7 +694,8 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
                 variant="outline"
                 onClick={() => {
                   setAddingToGroup(group.key);
-                  setSelectedAccountId("");
+                  setSelectedAccountIds(new Set());
+                  setAccountSearch("");
                 }}
               >
                 <Plus className="mr-1 h-3.5 w-3.5" />
