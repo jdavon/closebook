@@ -37,6 +37,7 @@ import {
   TrendingDown,
   DollarSign,
   Receipt,
+  RefreshCw,
 } from "lucide-react";
 import { formatCurrency, getCurrentPeriod, getPeriodLabel } from "@/lib/utils/dates";
 
@@ -94,6 +95,8 @@ export default function RevenuePage() {
   const [lineItems, setLineItems] = useState<RevenueLineItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [hasQBOConnection, setHasQBOConnection] = useState(false);
 
   const loadSchedule = useCallback(async () => {
     setLoading(true);
@@ -127,6 +130,47 @@ export default function RevenuePage() {
   useEffect(() => {
     loadSchedule();
   }, [loadSchedule]);
+
+  // Check if this entity has a QBO connection (for showing sync button)
+  useEffect(() => {
+    async function checkQBO() {
+      const { count } = await supabase
+        .from("qbo_connections")
+        .select("id", { count: "exact", head: true })
+        .eq("entity_id", entityId);
+      setHasQBOConnection((count ?? 0) > 0);
+    }
+    checkQBO();
+  }, [supabase, entityId]);
+
+  async function handleQBOSync() {
+    setSyncing(true);
+    try {
+      const res = await fetch("/api/qbo/rental-accruals", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ entityId, periodYear, periodMonth }),
+      });
+
+      const json = await res.json();
+
+      if (!res.ok) {
+        toast.error(json.error || "QBO sync failed");
+      } else if (json.message) {
+        toast.info(json.message);
+      } else {
+        toast.success(
+          `Synced ${json.linesProcessed} invoices from QuickBooks${
+            json.skippedCount > 0 ? ` (${json.skippedCount} skipped)` : ""
+          }`
+        );
+        loadSchedule();
+      }
+    } catch {
+      toast.error("QBO sync failed — network error");
+    }
+    setSyncing(false);
+  }
 
   async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -201,10 +245,19 @@ export default function RevenuePage() {
           <Button
             onClick={() => fileInputRef.current?.click()}
             disabled={uploading}
+            variant="outline"
           >
             <Upload className="mr-2 h-4 w-4" />
             {uploading ? "Uploading..." : "Upload Spreadsheet"}
           </Button>
+          {hasQBOConnection && (
+            <Button onClick={handleQBOSync} disabled={syncing}>
+              <RefreshCw
+                className={`mr-2 h-4 w-4 ${syncing ? "animate-spin" : ""}`}
+              />
+              {syncing ? "Syncing..." : "Sync from QuickBooks"}
+            </Button>
+          )}
         </div>
       </div>
 
@@ -327,16 +380,28 @@ export default function RevenuePage() {
               <FileSpreadsheet className="h-12 w-12 text-muted-foreground mb-4" />
               <h3 className="text-lg font-medium mb-2">No Revenue Data</h3>
               <p className="text-muted-foreground text-center mb-4">
-                Upload a spreadsheet with rental contract data to calculate
-                accruals and deferrals for this period.
+                {hasQBOConnection
+                  ? "Sync invoices from QuickBooks or upload a spreadsheet to calculate accruals and deferrals."
+                  : "Upload a spreadsheet with rental contract data to calculate accruals and deferrals for this period."}
               </p>
-              <Button
-                onClick={() => fileInputRef.current?.click()}
-                disabled={uploading}
-              >
-                <Upload className="mr-2 h-4 w-4" />
-                Upload Spreadsheet
-              </Button>
+              <div className="flex items-center gap-2">
+                {hasQBOConnection && (
+                  <Button onClick={handleQBOSync} disabled={syncing}>
+                    <RefreshCw
+                      className={`mr-2 h-4 w-4 ${syncing ? "animate-spin" : ""}`}
+                    />
+                    {syncing ? "Syncing..." : "Sync from QuickBooks"}
+                  </Button>
+                )}
+                <Button
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={uploading}
+                  variant={hasQBOConnection ? "outline" : "default"}
+                >
+                  <Upload className="mr-2 h-4 w-4" />
+                  Upload Spreadsheet
+                </Button>
+              </div>
             </div>
           ) : (
             <div className="overflow-x-auto">
