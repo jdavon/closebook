@@ -33,6 +33,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Clock,
   DollarSign,
@@ -304,6 +305,7 @@ export default function OvertimeAnalysisPage() {
   const [calendarMonth, setCalendarMonth] = useState<string>(""); // "YYYY-MM"
   const [granularity, setGranularity] = useState<"monthly" | "weekly">("monthly");
   const [selectedPeriod, setSelectedPeriod] = useState<string>("all");
+  const [hideZeroOT, setHideZeroOT] = useState(false);
 
   // Punch calendar state (lazy-loaded when calendar view is active)
   const [punchData, setPunchData] = useState<PunchCalendarResponse | null>(null);
@@ -449,7 +451,10 @@ export default function OvertimeAnalysisPage() {
             hours: getEmployeePeriodHours(emp, selectedPeriod, granularity),
             dataStatus: emp.dataStatus,
           }))
+          .filter((e) => !hideZeroOT || premiumHrs(e.hours) > 0)
           .sort((a, b) => a.displayName.localeCompare(b.displayName));
+
+        if (empNodes.length === 0) continue; // skip empty classes
 
         const classHours = empNodes.reduce(
           (sum, e) => addHours(sum, e.hours),
@@ -465,6 +470,8 @@ export default function OvertimeAnalysisPage() {
 
       // Sort classes alphabetically
       classes.sort((a, b) => a.classLabel.localeCompare(b.classLabel));
+
+      if (classes.length === 0) continue; // skip empty departments
 
       const deptHours = classes.reduce(
         (sum, c) => addHours(sum, c.hours),
@@ -482,7 +489,7 @@ export default function OvertimeAnalysisPage() {
     departments.sort((a, b) => a.department.localeCompare(b.department));
 
     return departments;
-  }, [entityEmployees, selectedPeriod, granularity]);
+  }, [entityEmployees, selectedPeriod, granularity, hideZeroOT]);
 
   // Auto-expand all departments on load
   useEffect(() => {
@@ -758,6 +765,14 @@ export default function OvertimeAnalysisPage() {
                 ))}
               </SelectContent>
             </Select>
+
+            <label className="flex items-center gap-1.5 text-sm cursor-pointer select-none">
+              <Checkbox
+                checked={hideZeroOT}
+                onCheckedChange={(v) => setHideZeroOT(v === true)}
+              />
+              Hide zero OT
+            </label>
           </>
         )}
 
