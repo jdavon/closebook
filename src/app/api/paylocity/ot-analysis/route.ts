@@ -64,6 +64,7 @@ interface OTEmployee {
   operatingEntityCode: string;
   operatingEntityName: string;
   payType: string;
+  baseRate: number;
   costCenterCode: string;
   monthlyHours: Record<string, MonthlyHours>;
   weeklyHours: Record<string, MonthlyHours>;
@@ -337,6 +338,7 @@ export async function GET(request: NextRequest) {
               operatingEntityCode: entityCode,
               operatingEntityName: entityName,
               payType,
+              baseRate,
               costCenterCode,
               ...bucketed,
               dataStatus,
@@ -386,6 +388,7 @@ export async function GET(request: NextRequest) {
                 operatingEntityCode: entityCode,
                 operatingEntityName: entityName,
                 payType,
+                baseRate,
                 costCenterCode,
                 ...bucketed,
                 dataStatus,

@@ -92,6 +92,7 @@ interface OTEmployee {
   operatingEntityCode: string;
   operatingEntityName: string;
   payType: string;
+  baseRate?: number;
   dataStatus?: DataStatus;
   allocationPeriod?: { from: string; through: string | null };
   monthlyHours: Record<string, MonthlyHours>;
@@ -154,18 +155,6 @@ interface PunchCalendarEmployee {
   hasPunchData: boolean;
   dailyData: Record<string, PunchDayData>;
   monthTotals: PunchDayData;
-}
-
-interface PunchCalendarResponse {
-  year: number;
-  month: number;
-  employees: PunchCalendarEmployee[];
-  diagnostics: {
-    totalEmployees: number;
-    withData: number;
-    withoutData: number;
-    errors: number;
-  };
 }
 
 // --- Helpers ---
@@ -307,10 +296,7 @@ export default function OvertimeAnalysisPage() {
   const [selectedPeriod, setSelectedPeriod] = useState<string>("all");
   const [hideZeroOT, setHideZeroOT] = useState(false);
 
-  // Punch calendar state (lazy-loaded when calendar view is active)
-  const [punchData, setPunchData] = useState<PunchCalendarResponse | null>(null);
-  const [punchLoading, setPunchLoading] = useState(false);
-  const [punchError, setPunchError] = useState<string | null>(null);
+  // Calendar drill-down state
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<string | null>(null);
 
   // Collapsible state
@@ -506,52 +492,58 @@ export default function OvertimeAnalysisPage() {
     );
   }, [orgTree]);
 
-  // --- Punch Calendar: lazy-load when calendar view is active ---
-  useEffect(() => {
-    if (viewMode !== "calendar" || !calendarMonth) return;
-
-    async function loadPunchData() {
-      setPunchLoading(true);
-      setPunchError(null);
-      try {
-        const [y, m] = calendarMonth.split("-");
-        const res = await fetch(
-          `/api/paylocity/punch-calendar?year=${y}&month=${Number(m)}&bustCache=1`
-        );
-        if (!res.ok) throw new Error(`Failed to fetch: ${res.status}`);
-        const data = await res.json();
-        setPunchData(data);
-      } catch (err) {
-        setPunchError(
-          err instanceof Error ? err.message : "Failed to load punch data"
-        );
-      } finally {
-        setPunchLoading(false);
-      }
-    }
-    loadPunchData();
-  }, [viewMode, calendarMonth]);
-
   // Clear employee selection when switching months or views
   useEffect(() => {
     setSelectedEmployeeId(null);
   }, [calendarMonth, viewMode]);
 
-  // Filter punch employees to this entity
-  const punchEntityEmployees = useMemo(() => {
-    if (!punchData) return [];
-    const emps = punchData.employees;
-    if (paylocityCompanyId) {
-      return emps.filter(
-        (e) =>
-          e.companyId === paylocityCompanyId ||
-          e.operatingEntityId === entityId
-      );
-    }
-    return emps.filter((e) => e.operatingEntityId === entityId);
-  }, [punchData, entityId, paylocityCompanyId]);
+  // --- Calendar data derived from ot-analysis (same source as table) ---
 
-  // Entity-level punch daily aggregation (all employees summed)
+  // Convert OTEmployee daily data to PunchCalendarEmployee format for the calendar
+  const punchEntityEmployees: PunchCalendarEmployee[] = useMemo(() => {
+    if (!calendarMonth) return [];
+    return entityEmployees
+      .map((emp) => {
+        const dailyData: Record<string, PunchDayData> = {};
+        for (const [date, h] of Object.entries(emp.dailyHours ?? {})) {
+          if (!date.startsWith(calendarMonth)) continue;
+          dailyData[date] = {
+            ...h,
+            totalWorkHours: h.regHours + h.otHours + h.dtHours,
+          };
+        }
+        return {
+          id: emp.id,
+          companyId: emp.companyId,
+          displayName: emp.displayName,
+          department: emp.department,
+          classValue: emp.classValue,
+          operatingEntityId: emp.operatingEntityId,
+          operatingEntityCode: emp.operatingEntityCode,
+          operatingEntityName: emp.operatingEntityName,
+          payType: emp.payType,
+          baseRate: emp.baseRate ?? 0,
+          hasPunchData: Object.keys(dailyData).length > 0,
+          dailyData,
+          monthTotals: Object.values(dailyData).reduce(
+            (sum, day) => ({
+              regHours: sum.regHours + day.regHours,
+              regDollars: sum.regDollars + day.regDollars,
+              otHours: sum.otHours + day.otHours,
+              otDollars: sum.otDollars + day.otDollars,
+              dtHours: sum.dtHours + day.dtHours,
+              dtDollars: sum.dtDollars + day.dtDollars,
+              mealHours: sum.mealHours + day.mealHours,
+              mealDollars: sum.mealDollars + day.mealDollars,
+              totalWorkHours: sum.totalWorkHours + day.totalWorkHours,
+            }),
+            { regHours: 0, regDollars: 0, otHours: 0, otDollars: 0, dtHours: 0, dtDollars: 0, mealHours: 0, mealDollars: 0, totalWorkHours: 0 }
+          ),
+        } satisfies PunchCalendarEmployee;
+      });
+  }, [entityEmployees, calendarMonth]);
+
+  // Entity-level daily aggregation (all employees summed)
   const punchCalendarData = useMemo(() => {
     const byDay: Record<string, MonthlyHours> = {};
     for (const emp of punchEntityEmployees) {
@@ -581,20 +573,16 @@ export default function OvertimeAnalysisPage() {
     const result: Record<string, MonthlyHours> = {};
     for (const [date, day] of Object.entries(selectedPunchEmployee.dailyData)) {
       result[date] = {
-        otHours: day.otHours,
-        otDollars: day.otDollars,
-        dtHours: day.dtHours,
-        dtDollars: day.dtDollars,
-        mealHours: day.mealHours,
-        mealDollars: day.mealDollars,
-        regHours: day.regHours,
-        regDollars: day.regDollars,
+        otHours: day.otHours, otDollars: day.otDollars,
+        dtHours: day.dtHours, dtDollars: day.dtDollars,
+        mealHours: day.mealHours, mealDollars: day.mealDollars,
+        regHours: day.regHours, regDollars: day.regDollars,
       };
     }
     return result;
   }, [selectedPunchEmployee]);
 
-  // Employees with punch data, sorted for the selector dropdown
+  // Employees with data, sorted for the selector dropdown
   const punchEmployeesWithData = useMemo(() => {
     return punchEntityEmployees
       .filter((e) => e.hasPunchData)
@@ -993,7 +981,7 @@ export default function OvertimeAnalysisPage() {
               </CardContent>
             </Card>
           ) : (
-            /* Calendar View — punch-based daily data */
+            /* Calendar View — derived from same ot-analysis data as table */
             <CalendarView
               calendarMonth={calendarMonth}
               onMonthChange={setCalendarMonth}
@@ -1003,8 +991,8 @@ export default function OvertimeAnalysisPage() {
                   : punchCalendarData
               }
               availableMonths={availableMonths}
-              loading={punchLoading}
-              error={punchError}
+              loading={false}
+              error={null}
               employees={punchEmployeesWithData}
               selectedEmployeeId={selectedEmployeeId}
               selectedEmployee={selectedPunchEmployee}
