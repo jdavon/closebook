@@ -477,10 +477,17 @@ export default function OvertimeAnalysisPage() {
     return departments;
   }, [entityEmployees, selectedPeriod, granularity, hideZeroOT]);
 
-  // Auto-expand all departments on load
+  // Auto-expand all departments and classes on load
   useEffect(() => {
     if (orgTree.length > 0) {
       setExpandedDepts(new Set(orgTree.map((d) => d.department)));
+      const allClassKeys = new Set<string>();
+      for (const dept of orgTree) {
+        for (const cls of dept.classes) {
+          allClassKeys.add(`${dept.department}::${cls.classLabel}`);
+        }
+      }
+      setExpandedClasses(allClassKeys);
     }
   }, [orgTree]);
 
@@ -658,6 +665,9 @@ export default function OvertimeAnalysisPage() {
         </TableCell>
         <TableCell className={`${cls} text-muted-foreground`}>
           {fmtHrs(h.regHours)}
+        </TableCell>
+        <TableCell className={`${cls} text-muted-foreground`}>
+          {formatCurrency(h.regDollars)}
         </TableCell>
         <TableCell className={cls}>{pct(ph, th)}</TableCell>
       </>
@@ -934,6 +944,12 @@ export default function OvertimeAnalysisPage() {
                             title="Regular hours for comparison"
                           >
                             Reg Hrs
+                          </TableHead>
+                          <TableHead
+                            className="text-right"
+                            title="Regular pay amount"
+                          >
+                            Reg $
                           </TableHead>
                           <TableHead
                             className="text-right"
