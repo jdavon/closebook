@@ -79,7 +79,7 @@ interface MonthlyHours {
   regDollars: number;
 }
 
-type DataStatus = "ok" | "summary_failed" | "details_failed" | "both_failed";
+type DataStatus = "ok" | "punch_failed";
 
 interface OTEmployee {
   id: string;
@@ -112,9 +112,7 @@ interface OTEmployee {
 interface Diagnostics {
   totalEmployees: number;
   dataOk: number;
-  summaryFailed: number;
-  detailsFailed: number;
-  bothFailed: number;
+  punchFailed: number;
 }
 
 interface AllocationOverride {
@@ -760,7 +758,7 @@ export default function OvertimeAnalysisPage() {
               Loading overtime data from Paylocity...
             </p>
             <p className="text-xs text-muted-foreground mt-1">
-              Fetching pay statement details for all employees
+              Fetching punch data for all employees
             </p>
           </div>
         </div>
@@ -843,18 +841,13 @@ export default function OvertimeAnalysisPage() {
           </div>
 
           {/* Diagnostics Warning — show if any API calls failed */}
-          {diagnostics && (diagnostics.summaryFailed > 0 || diagnostics.detailsFailed > 0) && (
+          {diagnostics && diagnostics.punchFailed > 0 && (
             <div className="flex items-start gap-3 p-3 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-200 text-sm">
               <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
               <div>
-                <p className="font-medium">Some pay data could not be loaded</p>
+                <p className="font-medium">Some punch data could not be loaded</p>
                 <p className="text-amber-700 dark:text-amber-300 mt-0.5">
-                  {diagnostics.summaryFailed > 0 && (
-                    <span>{diagnostics.summaryFailed} employee(s) had summary data failures. </span>
-                  )}
-                  {diagnostics.detailsFailed > 0 && (
-                    <span>{diagnostics.detailsFailed} employee(s) had detail data failures. </span>
-                  )}
+                  {diagnostics.punchFailed} employee(s) had punch data failures.
                   Affected employees are marked with a ⚠ icon. Their OT data may be incomplete.
                 </p>
               </div>
@@ -1097,13 +1090,7 @@ function ClassSection({
                 <div className="flex items-center gap-2 pl-14">
                   {hasFetchError && (
                     <span
-                      title={
-                        emp.dataStatus === "both_failed"
-                          ? "Both summary & detail data failed to load"
-                          : emp.dataStatus === "summary_failed"
-                            ? "Summary data (OT/REG hours) failed to load"
-                            : "Detail data (DT/Meal) failed to load"
-                      }
+                      title="Punch data failed to load — overtime hours may be incomplete"
                     >
                       <AlertTriangle className="h-3.5 w-3.5 text-amber-500 shrink-0" />
                     </span>

@@ -3,10 +3,11 @@ import { getAllCompanyClients } from "@/lib/paylocity";
 import { getOperatingEntityForCostCenter } from "@/lib/paylocity/cost-center-config";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getISOWeek, getISOWeekYear } from "date-fns";
-import type {
-  PayStatementSummary,
-  PayStatementDetail,
-} from "@/lib/paylocity/types";
+import type { PunchDetail } from "@/lib/paylocity/types";
+import {
+  groupPunchesToDailyInputs,
+  applyCAOvertimeRules,
+} from "@/lib/paylocity/overtime-rules";
 
 /**
  * GET /api/paylocity/ot-analysis?year=2026
@@ -14,13 +15,18 @@ import type {
  * Returns overtime analysis for all active employees across all configured
  * Paylocity companies, broken down by month.
  *
- * HYBRID DATA SOURCES:
- *   - PayStatementSummary (WebLink API) — trusted aggregate `overtimeHours`
- *     and `overtimeDollars` per pay check (used for OT + REG totals).
- *   - PayStatementDetail (WebLink API) — individual line items filtered for
- *     detCode = DT (double time 2x) and MEAL (meal premiums) only.
+ * DATA SOURCES:
+ *   - PunchDetails (NextGen API) — per-employee daily punch segments with
+ *     CA daily + weekly OT rules applied.
  *   - employee_allocations (Supabase) — user-maintained overrides for
  *     department, class, and company (entity) assignment.
+ *
+ * Hours are bucketed by ACTUAL WORK DATE, not by paycheck check date.
+ *
+ * CA OVERTIME RULES (via shared overtime-rules utility):
+ *   - Daily: >8hrs = OT (1.5x), >12hrs = DT (2.0x)
+ *   - Weekly: >40 regular hrs in a workweek (Sun-Sat) = OT (1.5x)
+ *   - Meal premium: "No Meal" / "Late Meal" punch types
  *
  * Entity/department/class resolution priority:
  *   1. employee_allocations override (if exists)
@@ -38,7 +44,7 @@ interface MonthlyHours {
   regDollars: number;
 }
 
-type DataStatus = "ok" | "summary_failed" | "details_failed" | "both_failed";
+type DataStatus = "ok" | "punch_failed";
 
 interface OTEmployee {
   id: string;
@@ -78,12 +84,9 @@ interface AllocationRow {
   allocated_entity_name: string | null;
 }
 
-// detCodes to extract from detail line items (supplemental to summary)
-const DETAIL_CODES = new Set(["DT", "MEAL"]);
-
-/** Convert a "YYYY-MM-DD" check date to an ISO week key like "2026-W10" */
-function toWeekKey(checkDate: string): string | null {
-  const d = new Date(checkDate);
+/** Convert a "YYYY-MM-DD" date to an ISO week key like "2026-W10" */
+function toWeekKey(dateStr: string): string | null {
+  const d = new Date(dateStr + "T12:00:00Z");
   if (isNaN(d.getTime())) return null;
   const isoYear = getISOWeekYear(d);
   const isoWeek = getISOWeek(d);
@@ -96,11 +99,32 @@ function ensureBucket(
 ): MonthlyHours {
   if (!map[key]) {
     map[key] = {
-      otHours: 0, otDollars: 0, dtHours: 0, dtDollars: 0,
-      mealHours: 0, mealDollars: 0, regHours: 0, regDollars: 0,
+      otHours: 0,
+      otDollars: 0,
+      dtHours: 0,
+      dtDollars: 0,
+      mealHours: 0,
+      mealDollars: 0,
+      regHours: 0,
+      regDollars: 0,
     };
   }
   return map[key];
+}
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+function roundBucket(b: MonthlyHours): void {
+  b.otHours = round2(b.otHours);
+  b.otDollars = round2(b.otDollars);
+  b.dtHours = round2(b.dtHours);
+  b.dtDollars = round2(b.dtDollars);
+  b.mealHours = round2(b.mealHours);
+  b.mealDollars = round2(b.mealDollars);
+  b.regHours = round2(b.regHours);
+  b.regDollars = round2(b.regDollars);
 }
 
 // In-memory cache (5 min TTL)
@@ -146,6 +170,14 @@ export async function GET(request: NextRequest) {
       // Allocations unavailable — fall back to cost center config only
     }
 
+    // Punch date range — extend ±6 days to capture full workweeks at
+    // year boundaries so weekly OT is calculated correctly.
+    const startDate = `${year - 1}-12-26`;
+    const today = new Date().toISOString().slice(0, 10);
+    const yearEnd = `${year + 1}-01-06`;
+    const endDate = yearEnd < today ? yearEnd : today;
+    const yearPrefix = String(year);
+
     // Fetch all active employees from all companies
     const clients = getAllCompanyClients();
     const companyResults = await Promise.all(
@@ -159,62 +191,41 @@ export async function GET(request: NextRequest) {
     );
 
     const otEmployees: OTEmployee[] = [];
-    // Collect unique pay periods (checkDate → beginDate/endDate) for calendar
-    const payPeriodMap = new Map<string, { checkDate: string; beginDate: string; endDate: string }>();
 
     for (const {
       companyId,
       client,
       employees: rawEmployees,
     } of companyResults) {
-      // Fetch pay statement summary + details in batches of 5
+      // Fetch punch details in batches of 5
       const batchSize = 5;
 
       for (let i = 0; i < rawEmployees.length; i += batchSize) {
         const batch = rawEmployees.slice(i, i + batchSize);
         const batchResults = await Promise.all(
           batch.map(async (emp) => {
-            // Fetch summary and details independently — if details fails,
-            // we still keep the summary (which is the primary data source)
-            let summaries: PayStatementSummary[] = [];
-            let details: PayStatementDetail[] = [];
-            let summaryFailed = false;
-            let detailsFailed = false;
+            let punches: PunchDetail[] = [];
+            let punchFailed = false;
 
             try {
-              summaries = await client.getPayStatementSummary(emp.id, year);
+              punches = await client.getPunchDetails(
+                emp.id,
+                startDate,
+                endDate
+              );
             } catch (err) {
-              summaryFailed = true;
+              punchFailed = true;
               console.warn(
-                `[OT-Analysis] Summary fetch failed for employee ${emp.id} (company ${companyId}):`,
+                `[OT-Analysis] Punch fetch failed for employee ${emp.id} (company ${companyId}):`,
                 err instanceof Error ? err.message : err
               );
             }
 
-            try {
-              details = await client.getPayStatementDetails(emp.id, year);
-            } catch (err) {
-              detailsFailed = true;
-              console.warn(
-                `[OT-Analysis] Details fetch failed for employee ${emp.id} (company ${companyId}):`,
-                err instanceof Error ? err.message : err
-              );
-            }
-
-            const dataStatus: DataStatus =
-              summaryFailed && detailsFailed
-                ? "both_failed"
-                : summaryFailed
-                  ? "summary_failed"
-                  : detailsFailed
-                    ? "details_failed"
-                    : "ok";
-
-            return { emp, summaries, details, dataStatus };
+            return { emp, punches, punchFailed };
           })
         );
 
-        for (const { emp, summaries, details, dataStatus } of batchResults) {
+        for (const { emp, punches, punchFailed } of batchResults) {
           // Skip employees with no name
           const firstName = emp.info?.firstName ?? "";
           const lastName = emp.info?.lastName ?? emp.lastName ?? "";
@@ -248,7 +259,15 @@ export async function GET(request: NextRequest) {
                   ? "HDR"
                   : cc.operatingEntityCode;
 
-          // ── Aggregate from SUMMARY (OT + REG) ──
+          const baseRate = emp.currentPayRate?.baseRate ?? 0;
+
+          // ── Process punch data through CA OT rules ──
+          const dailyInputs = groupPunchesToDailyInputs(punches);
+          const dailyResults = applyCAOvertimeRules(dailyInputs, baseRate);
+
+          // ── Bucket into monthly, weekly, daily ──
+          // Only include days within the requested year (extended range
+          // was only needed for correct weekly OT at boundaries).
           const monthlyHours: Record<string, MonthlyHours> = {};
           const weeklyHours: Record<string, MonthlyHours> = {};
           const dailyHours: Record<string, MonthlyHours> = {};
@@ -265,107 +284,58 @@ export async function GET(request: NextRequest) {
             premiumDollars: 0,
           };
 
-          for (const ps of summaries) {
-            const month = ps.checkDate?.slice(0, 7); // "YYYY-MM"
-            if (!month) continue;
-            const week = toWeekKey(ps.checkDate);
+          for (const day of dailyResults) {
+            // Only include days within the requested year
+            if (!day.date.startsWith(yearPrefix)) continue;
 
+            const month = day.date.slice(0, 7); // "YYYY-MM"
+            const week = toWeekKey(day.date);
+
+            // Monthly bucket
             const m = ensureBucket(monthlyHours, month);
+            m.otHours += day.otHours;
+            m.otDollars += day.otDollars;
+            m.dtHours += day.dtHours;
+            m.dtDollars += day.dtDollars;
+            m.mealHours += day.mealHours;
+            m.mealDollars += day.mealDollars;
+            m.regHours += day.regHours;
+            m.regDollars += day.regDollars;
 
-            // OT from summary (trusted aggregate)
-            const otH = ps.overtimeHours || 0;
-            const otD = ps.overtimeDollars || 0;
-            m.otHours += otH;
-            m.otDollars += otD;
-            totals.otHours += otH;
-            totals.otDollars += otD;
-
-            // REG from summary
-            const regH = ps.regularHours || 0;
-            const regD = ps.regularDollars || 0;
-            m.regHours += regH;
-            m.regDollars += regD;
-            totals.regHours += regH;
-            totals.regDollars += regD;
-
-            // Weekly bucket (mirrors monthly)
+            // Weekly bucket (ISO weeks for display grouping)
             if (week) {
               const w = ensureBucket(weeklyHours, week);
-              w.otHours += otH;
-              w.otDollars += otD;
-              w.regHours += regH;
-              w.regDollars += regD;
+              w.otHours += day.otHours;
+              w.otDollars += day.otDollars;
+              w.dtHours += day.dtHours;
+              w.dtDollars += day.dtDollars;
+              w.mealHours += day.mealHours;
+              w.mealDollars += day.mealDollars;
+              w.regHours += day.regHours;
+              w.regDollars += day.regDollars;
             }
 
-            // Daily bucket (keyed by YYYY-MM-DD, normalized from any date format)
-            if (ps.checkDate) {
-              const dayKey = ps.checkDate.slice(0, 10); // "YYYY-MM-DD"
-              const day = ensureBucket(dailyHours, dayKey);
-              day.otHours += otH;
-              day.otDollars += otD;
-              day.regHours += regH;
-              day.regDollars += regD;
+            // Daily bucket
+            dailyHours[day.date] = {
+              otHours: day.otHours,
+              otDollars: day.otDollars,
+              dtHours: day.dtHours,
+              dtDollars: day.dtDollars,
+              mealHours: day.mealHours,
+              mealDollars: day.mealDollars,
+              regHours: day.regHours,
+              regDollars: day.regDollars,
+            };
 
-              // Track pay period ranges for calendar view
-              if (!payPeriodMap.has(dayKey)) {
-                payPeriodMap.set(dayKey, {
-                  checkDate: dayKey,
-                  beginDate: ps.beginDate?.slice(0, 10) ?? dayKey,
-                  endDate: ps.endDate?.slice(0, 10) ?? dayKey,
-                });
-              }
-            }
-          }
-
-          // ── Aggregate from DETAILS (DT + MEAL only) ──
-          for (const d of details) {
-            const code = d.detCode?.toUpperCase();
-            if (!code || !DETAIL_CODES.has(code)) continue;
-
-            const month = d.checkDate?.slice(0, 7);
-            if (!month) continue;
-            const week = toWeekKey(d.checkDate);
-
-            const hrs = d.hours || 0;
-            const amt = d.amount || 0;
-            const m = ensureBucket(monthlyHours, month);
-
-            if (code === "DT") {
-              m.dtHours += hrs;
-              m.dtDollars += amt;
-              totals.dtHours += hrs;
-              totals.dtDollars += amt;
-            } else if (code === "MEAL") {
-              m.mealHours += hrs;
-              m.mealDollars += amt;
-              totals.mealHours += hrs;
-              totals.mealDollars += amt;
-            }
-
-            // Weekly bucket (mirrors monthly)
-            if (week) {
-              const w = ensureBucket(weeklyHours, week);
-              if (code === "DT") {
-                w.dtHours += hrs;
-                w.dtDollars += amt;
-              } else if (code === "MEAL") {
-                w.mealHours += hrs;
-                w.mealDollars += amt;
-              }
-            }
-
-            // Daily bucket (normalized to YYYY-MM-DD)
-            if (d.checkDate) {
-              const dayKey = d.checkDate.slice(0, 10); // "YYYY-MM-DD"
-              const day = ensureBucket(dailyHours, dayKey);
-              if (code === "DT") {
-                day.dtHours += hrs;
-                day.dtDollars += amt;
-              } else if (code === "MEAL") {
-                day.mealHours += hrs;
-                day.mealDollars += amt;
-              }
-            }
+            // Running totals
+            totals.otHours += day.otHours;
+            totals.otDollars += day.otDollars;
+            totals.dtHours += day.dtHours;
+            totals.dtDollars += day.dtDollars;
+            totals.mealHours += day.mealHours;
+            totals.mealDollars += day.mealDollars;
+            totals.regHours += day.regHours;
+            totals.regDollars += day.regDollars;
           }
 
           // Premium = OT + DT + MEAL combined
@@ -379,7 +349,11 @@ export async function GET(request: NextRequest) {
             totals[key] = round2(totals[key]);
           }
 
-          // Include ALL active employees (even those with zero OT / no pay data)
+          // Round all bucket values
+          for (const m of Object.values(monthlyHours)) roundBucket(m);
+          for (const w of Object.values(weeklyHours)) roundBucket(w);
+
+          // Include ALL active employees (even those with zero OT / no punch data)
           otEmployees.push({
             id: emp.id,
             companyId,
@@ -394,7 +368,7 @@ export async function GET(request: NextRequest) {
             monthlyHours,
             weeklyHours,
             dailyHours,
-            dataStatus,
+            dataStatus: punchFailed ? "punch_failed" : "ok",
             totals,
           });
         }
@@ -413,9 +387,6 @@ export async function GET(request: NextRequest) {
     const months = [...monthSet].sort();
     const weeks = [...weekSet].sort();
     const days = [...daySet].sort();
-    const payPeriods = [...payPeriodMap.values()].sort(
-      (a, b) => a.checkDate.localeCompare(b.checkDate)
-    );
 
     // Compute org-level KPIs
     const kpis = {
@@ -453,16 +424,13 @@ export async function GET(request: NextRequest) {
     };
 
     // Diagnostics — how many employees had API failures
-    const failedSummary = otEmployees.filter(
-      (e) => e.dataStatus === "summary_failed" || e.dataStatus === "both_failed"
-    ).length;
-    const failedDetails = otEmployees.filter(
-      (e) => e.dataStatus === "details_failed" || e.dataStatus === "both_failed"
+    const punchFailed = otEmployees.filter(
+      (e) => e.dataStatus === "punch_failed"
     ).length;
 
-    if (failedSummary > 0 || failedDetails > 0) {
+    if (punchFailed > 0) {
       console.warn(
-        `[OT-Analysis] Data fetch issues: ${failedSummary} summary failures, ${failedDetails} detail failures out of ${otEmployees.length} employees`
+        `[OT-Analysis] Punch data failures: ${punchFailed} out of ${otEmployees.length} employees`
       );
     }
 
@@ -472,14 +440,11 @@ export async function GET(request: NextRequest) {
       months,
       weeks,
       days,
-      payPeriods,
       kpis,
       diagnostics: {
         totalEmployees: otEmployees.length,
         dataOk: otEmployees.filter((e) => e.dataStatus === "ok").length,
-        summaryFailed: failedSummary,
-        detailsFailed: failedDetails,
-        bothFailed: otEmployees.filter((e) => e.dataStatus === "both_failed").length,
+        punchFailed,
       },
     };
 
@@ -502,8 +467,4 @@ export async function GET(request: NextRequest) {
       { status: 500 }
     );
   }
-}
-
-function round2(n: number): number {
-  return Math.round(n * 100) / 100;
 }
