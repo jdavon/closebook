@@ -62,6 +62,51 @@ function getWorkweekSunday(dateStr: string): string {
   return sun.toISOString().slice(0, 10);
 }
 
+// ── Chunked Fetch (Paylocity 31-day API limit) ──────────────────────
+
+/**
+ * Fetch punch details for an arbitrary date range by chunking into
+ * <=31 day segments (Paylocity NextGen API limit).
+ *
+ * Returns an empty array if every chunk returns 404 (employee has no
+ * punch data, e.g. salaried). Only throws if a non-404 error occurs.
+ */
+export async function fetchPunchDetailsChunked(
+  fetchFn: (startDate: string, endDate: string) => Promise<PunchDetail[]>,
+  startDate: string,
+  endDate: string
+): Promise<PunchDetail[]> {
+  const allPunches: PunchDetail[] = [];
+  const start = new Date(startDate + "T12:00:00Z");
+  const end = new Date(endDate + "T12:00:00Z");
+
+  let chunkStart = new Date(start);
+
+  while (chunkStart <= end) {
+    const chunkEnd = new Date(chunkStart);
+    chunkEnd.setUTCDate(chunkEnd.getUTCDate() + 30); // 31 days inclusive
+    if (chunkEnd > end) chunkEnd.setTime(end.getTime());
+
+    const startStr = chunkStart.toISOString().slice(0, 10);
+    const endStr = chunkEnd.toISOString().slice(0, 10);
+
+    try {
+      const punches = await fetchFn(startStr, endStr);
+      allPunches.push(...punches);
+    } catch (err) {
+      // 404 = no punch data for this employee/range (e.g. salaried) — skip
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!msg.includes("404")) throw err;
+    }
+
+    // Move to next chunk
+    chunkStart = new Date(chunkEnd);
+    chunkStart.setUTCDate(chunkStart.getUTCDate() + 1);
+  }
+
+  return allPunches;
+}
+
 // ── Punch Processing ─────────────────────────────────────────────────
 
 /**

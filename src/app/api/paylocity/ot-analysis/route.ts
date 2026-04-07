@@ -7,6 +7,7 @@ import type { PunchDetail } from "@/lib/paylocity/types";
 import {
   groupPunchesToDailyInputs,
   applyCAOvertimeRules,
+  fetchPunchDetailsChunked,
 } from "@/lib/paylocity/overtime-rules";
 
 /**
@@ -208,8 +209,8 @@ export async function GET(request: NextRequest) {
             let punchFailed = false;
 
             try {
-              punches = await client.getPunchDetails(
-                emp.id,
+              punches = await fetchPunchDetailsChunked(
+                (s, e) => client.getPunchDetails(emp.id, s, e),
                 startDate,
                 endDate
               );
