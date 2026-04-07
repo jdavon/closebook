@@ -92,6 +92,7 @@ interface OTEmployee {
   operatingEntityName: string;
   payType: string;
   dataStatus?: DataStatus;
+  allocationPeriod?: { from: string; through: string | null };
   monthlyHours: Record<string, MonthlyHours>;
   weeklyHours: Record<string, MonthlyHours>;
   dailyHours?: Record<string, MonthlyHours>;
@@ -189,6 +190,22 @@ function weekLabel(key: string): string {
   return `Week ${parseInt(weekStr, 10)}`;
 }
 
+function formatPeriodLabel(
+  period?: { from: string; through: string | null }
+): string | undefined {
+  if (!period) return undefined;
+  const fmtShort = (d: string) => {
+    const [, m, day] = d.split("-");
+    return `${Number(m)}/${Number(day)}`;
+  };
+  if (period.from === "2000-01-01") {
+    return period.through ? `thru ${fmtShort(period.through)}` : undefined;
+  }
+  return period.through
+    ? `${fmtShort(period.from)} – ${fmtShort(period.through)}`
+    : `${fmtShort(period.from)}+`;
+}
+
 function emptyHours(): MonthlyHours {
   return {
     otHours: 0, otDollars: 0, dtHours: 0, dtDollars: 0,
@@ -248,6 +265,7 @@ function getEmployeePeriodHours(
 interface EmployeeNode {
   id: string;
   displayName: string;
+  periodLabel?: string;
   payType: string;
   hours: MonthlyHours;
   dataStatus?: DataStatus;
@@ -426,6 +444,7 @@ export default function OvertimeAnalysisPage() {
           .map((emp) => ({
             id: emp.id,
             displayName: emp.displayName,
+            periodLabel: formatPeriodLabel(emp.allocationPeriod),
             payType: emp.payType,
             hours: getEmployeePeriodHours(emp, selectedPeriod, granularity),
             dataStatus: emp.dataStatus,
@@ -1098,6 +1117,11 @@ function ClassSection({
                   <span className="text-muted-foreground">
                     {emp.displayName}
                   </span>
+                  {emp.periodLabel && (
+                    <span className="text-[10px] text-muted-foreground/50 font-normal">
+                      ({emp.periodLabel})
+                    </span>
+                  )}
                   <span className="text-xs text-muted-foreground/60">
                     {emp.payType}
                   </span>

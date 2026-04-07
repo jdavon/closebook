@@ -8,7 +8,12 @@ import {
   groupPunchesToDailyInputs,
   applyCAOvertimeRules,
   fetchPunchDetailsChunked,
+  type DailyOTResult,
 } from "@/lib/paylocity/overtime-rules";
+import {
+  AllocationResolver,
+  type AllocationRow,
+} from "@/lib/paylocity/allocation-resolver";
 
 /**
  * GET /api/paylocity/ot-analysis?year=2026
@@ -19,10 +24,12 @@ import {
  * DATA SOURCES:
  *   - PunchDetails (NextGen API) — per-employee daily punch segments with
  *     CA daily + weekly OT rules applied.
- *   - employee_allocations (Supabase) — user-maintained overrides for
- *     department, class, and company (entity) assignment.
+ *   - employee_allocations (Supabase) — user-maintained date-effective
+ *     overrides for department, class, and company (entity) assignment.
  *
  * Hours are bucketed by ACTUAL WORK DATE, not by paycheck check date.
+ * When an employee has multiple allocation periods, their data is split
+ * into separate OTEmployee entries — one per allocation period.
  *
  * CA OVERTIME RULES (via shared overtime-rules utility):
  *   - Daily: >8hrs = OT (1.5x), >12hrs = DT (2.0x)
@@ -30,7 +37,7 @@ import {
  *   - Meal premium: "No Meal" / "Late Meal" punch types
  *
  * Entity/department/class resolution priority:
- *   1. employee_allocations override (if exists)
+ *   1. employee_allocations override (date-effective, if exists)
  *   2. Paylocity cost center config fallback
  */
 
@@ -62,6 +69,7 @@ interface OTEmployee {
   weeklyHours: Record<string, MonthlyHours>;
   dailyHours: Record<string, MonthlyHours>;
   dataStatus: DataStatus;
+  allocationPeriod?: { from: string; through: string | null };
   totals: {
     otHours: number;
     otDollars: number;
@@ -74,15 +82,6 @@ interface OTEmployee {
     premiumHours: number;
     premiumDollars: number;
   };
-}
-
-interface AllocationRow {
-  employee_id: string;
-  paylocity_company_id: string;
-  department: string | null;
-  class: string | null;
-  allocated_entity_id: string | null;
-  allocated_entity_name: string | null;
 }
 
 /** Convert a "YYYY-MM-DD" date to an ISO week key like "2026-W10" */
@@ -100,14 +99,8 @@ function ensureBucket(
 ): MonthlyHours {
   if (!map[key]) {
     map[key] = {
-      otHours: 0,
-      otDollars: 0,
-      dtHours: 0,
-      dtDollars: 0,
-      mealHours: 0,
-      mealDollars: 0,
-      regHours: 0,
-      regDollars: 0,
+      otHours: 0, otDollars: 0, dtHours: 0, dtDollars: 0,
+      mealHours: 0, mealDollars: 0, regHours: 0, regDollars: 0,
     };
   }
   return map[key];
@@ -126,6 +119,80 @@ function roundBucket(b: MonthlyHours): void {
   b.mealDollars = round2(b.mealDollars);
   b.regHours = round2(b.regHours);
   b.regDollars = round2(b.regDollars);
+}
+
+function deriveEntityCode(entityName: string, fallbackCode: string): string {
+  if (entityName.includes("Silverco")) return "AVON";
+  if (entityName.includes("Avon Rental")) return "ARH";
+  if (entityName.includes("Versatile")) return "VS";
+  if (entityName.includes("Hollywood Depot")) return "HDR";
+  return fallbackCode;
+}
+
+/** Subtract one day from a "YYYY-MM-DD" string */
+function subtractOneDay(dateStr: string): string {
+  const d = new Date(dateStr + "T12:00:00Z");
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().slice(0, 10);
+}
+
+/** Bucket a set of daily results into monthly/weekly/daily maps and totals */
+function bucketDailyResults(
+  days: DailyOTResult[],
+  yearPrefix: string
+) {
+  const monthlyHours: Record<string, MonthlyHours> = {};
+  const weeklyHours: Record<string, MonthlyHours> = {};
+  const dailyHours: Record<string, MonthlyHours> = {};
+  const totals = {
+    otHours: 0, otDollars: 0, dtHours: 0, dtDollars: 0,
+    mealHours: 0, mealDollars: 0, regHours: 0, regDollars: 0,
+    premiumHours: 0, premiumDollars: 0,
+  };
+
+  for (const day of days) {
+    if (!day.date.startsWith(yearPrefix)) continue;
+
+    const month = day.date.slice(0, 7);
+    const week = toWeekKey(day.date);
+
+    const m = ensureBucket(monthlyHours, month);
+    m.otHours += day.otHours; m.otDollars += day.otDollars;
+    m.dtHours += day.dtHours; m.dtDollars += day.dtDollars;
+    m.mealHours += day.mealHours; m.mealDollars += day.mealDollars;
+    m.regHours += day.regHours; m.regDollars += day.regDollars;
+
+    if (week) {
+      const w = ensureBucket(weeklyHours, week);
+      w.otHours += day.otHours; w.otDollars += day.otDollars;
+      w.dtHours += day.dtHours; w.dtDollars += day.dtDollars;
+      w.mealHours += day.mealHours; w.mealDollars += day.mealDollars;
+      w.regHours += day.regHours; w.regDollars += day.regDollars;
+    }
+
+    dailyHours[day.date] = {
+      otHours: day.otHours, otDollars: day.otDollars,
+      dtHours: day.dtHours, dtDollars: day.dtDollars,
+      mealHours: day.mealHours, mealDollars: day.mealDollars,
+      regHours: day.regHours, regDollars: day.regDollars,
+    };
+
+    totals.otHours += day.otHours; totals.otDollars += day.otDollars;
+    totals.dtHours += day.dtHours; totals.dtDollars += day.dtDollars;
+    totals.mealHours += day.mealHours; totals.mealDollars += day.mealDollars;
+    totals.regHours += day.regHours; totals.regDollars += day.regDollars;
+  }
+
+  totals.premiumHours = totals.otHours + totals.dtHours + totals.mealHours;
+  totals.premiumDollars = totals.otDollars + totals.dtDollars + totals.mealDollars;
+
+  for (const key of Object.keys(totals) as (keyof typeof totals)[]) {
+    totals[key] = round2(totals[key]);
+  }
+  for (const m of Object.values(monthlyHours)) roundBucket(m);
+  for (const w of Object.values(weeklyHours)) roundBucket(w);
+
+  return { monthlyHours, weeklyHours, dailyHours, totals };
 }
 
 // In-memory cache (5 min TTL)
@@ -152,20 +219,15 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    // Fetch allocation overrides from Supabase
-    const allocationMap = new Map<string, AllocationRow>();
+    // Fetch allocation overrides from Supabase → date-aware resolver
+    let resolver = new AllocationResolver([]);
     try {
       const supabase = createAdminClient();
       const { data } = await supabase
         .from("employee_allocations")
         .select("*");
       if (data) {
-        for (const row of data as AllocationRow[]) {
-          allocationMap.set(
-            `${row.employee_id}:${row.paylocity_company_id}`,
-            row
-          );
-        }
+        resolver = new AllocationResolver(data as AllocationRow[]);
       }
     } catch {
       // Allocations unavailable — fall back to cost center config only
@@ -198,7 +260,6 @@ export async function GET(request: NextRequest) {
       client,
       employees: rawEmployees,
     } of companyResults) {
-      // Fetch punch details in batches of 5
       const batchSize = 5;
 
       for (let i = 0; i < rawEmployees.length; i += batchSize) {
@@ -227,7 +288,6 @@ export async function GET(request: NextRequest) {
         );
 
         for (const { emp, punches, punchFailed } of batchResults) {
-          // Skip employees with no name
           const firstName = emp.info?.firstName ?? "";
           const lastName = emp.info?.lastName ?? emp.lastName ?? "";
           const displayName =
@@ -241,137 +301,98 @@ export async function GET(request: NextRequest) {
             companyId
           );
 
-          // Apply allocation overrides (priority over cost center config)
-          const alloc = allocationMap.get(`${emp.id}:${companyId}`);
-          const effectiveDepartment = alloc?.department || cc.department;
-          const classValue = alloc?.class || "";
-          const effectiveEntityId =
-            alloc?.allocated_entity_id || cc.operatingEntityId;
-          const effectiveEntityName =
-            alloc?.allocated_entity_name || cc.operatingEntityName;
-          // Derive entity code from name for backward compat
-          const effectiveEntityCode = effectiveEntityName.includes("Silverco")
-            ? "AVON"
-            : effectiveEntityName.includes("Avon Rental")
-              ? "ARH"
-              : effectiveEntityName.includes("Versatile")
-                ? "VS"
-                : effectiveEntityName.includes("Hollywood Depot")
-                  ? "HDR"
-                  : cc.operatingEntityCode;
-
           const baseRate = emp.currentPayRate?.baseRate ?? 0;
+          const dataStatus: DataStatus = punchFailed ? "punch_failed" : "ok";
+          const payType = emp.currentPayRate?.payType ?? "Unknown";
+          const costCenterCode = emp.position?.costCenter1 ?? "UNKNOWN";
 
           // ── Process punch data through CA OT rules ──
           const dailyInputs = groupPunchesToDailyInputs(punches);
           const dailyResults = applyCAOvertimeRules(dailyInputs, baseRate);
 
-          // ── Bucket into monthly, weekly, daily ──
-          // Only include days within the requested year (extended range
-          // was only needed for correct weekly OT at boundaries).
-          const monthlyHours: Record<string, MonthlyHours> = {};
-          const weeklyHours: Record<string, MonthlyHours> = {};
-          const dailyHours: Record<string, MonthlyHours> = {};
-          const totals = {
-            otHours: 0,
-            otDollars: 0,
-            dtHours: 0,
-            dtDollars: 0,
-            mealHours: 0,
-            mealDollars: 0,
-            regHours: 0,
-            regDollars: 0,
-            premiumHours: 0,
-            premiumDollars: 0,
-          };
+          // ── Get allocation periods for this employee ──
+          const periods = resolver.getAllPeriods(emp.id, companyId);
 
-          for (const day of dailyResults) {
-            // Only include days within the requested year
-            if (!day.date.startsWith(yearPrefix)) continue;
+          if (periods.length <= 1) {
+            // ── Fast path: single allocation (or none) ──
+            const alloc = periods[0] ?? null;
+            const dept = alloc?.department || cc.department;
+            const cls = alloc?.class || "";
+            const entityId = alloc?.allocated_entity_id || cc.operatingEntityId;
+            const entityName = alloc?.allocated_entity_name || cc.operatingEntityName;
+            const entityCode = deriveEntityCode(entityName, cc.operatingEntityCode);
 
-            const month = day.date.slice(0, 7); // "YYYY-MM"
-            const week = toWeekKey(day.date);
+            const bucketed = bucketDailyResults(dailyResults, yearPrefix);
 
-            // Monthly bucket
-            const m = ensureBucket(monthlyHours, month);
-            m.otHours += day.otHours;
-            m.otDollars += day.otDollars;
-            m.dtHours += day.dtHours;
-            m.dtDollars += day.dtDollars;
-            m.mealHours += day.mealHours;
-            m.mealDollars += day.mealDollars;
-            m.regHours += day.regHours;
-            m.regDollars += day.regDollars;
+            otEmployees.push({
+              id: emp.id,
+              companyId,
+              displayName,
+              department: dept,
+              classValue: cls,
+              operatingEntityId: entityId,
+              operatingEntityCode: entityCode,
+              operatingEntityName: entityName,
+              payType,
+              costCenterCode,
+              ...bucketed,
+              dataStatus,
+            });
+          } else {
+            // ── Multi-period: split daily data by allocation period ──
+            // Build date ranges for each period
+            const periodRanges = periods.map((p, idx) => ({
+              alloc: p,
+              startDate: p.effective_date,
+              endDate:
+                idx < periods.length - 1
+                  ? subtractOneDay(periods[idx + 1].effective_date)
+                  : null, // null = ongoing
+            }));
 
-            // Weekly bucket (ISO weeks for display grouping)
-            if (week) {
-              const w = ensureBucket(weeklyHours, week);
-              w.otHours += day.otHours;
-              w.otDollars += day.otDollars;
-              w.dtHours += day.dtHours;
-              w.dtDollars += day.dtDollars;
-              w.mealHours += day.mealHours;
-              w.mealDollars += day.mealDollars;
-              w.regHours += day.regHours;
-              w.regDollars += day.regDollars;
+            for (const range of periodRanges) {
+              // Filter daily results to this period
+              const periodDays = dailyResults.filter((day) => {
+                if (day.date < range.startDate) return false;
+                if (range.endDate && day.date > range.endDate) return false;
+                return true;
+              });
+
+              // Skip periods with no data in the requested year
+              const hasYearData = periodDays.some((d) =>
+                d.date.startsWith(yearPrefix)
+              );
+              if (!hasYearData) continue;
+
+              const alloc = range.alloc;
+              const dept = alloc.department || cc.department;
+              const cls = alloc.class || "";
+              const entityId = alloc.allocated_entity_id || cc.operatingEntityId;
+              const entityName = alloc.allocated_entity_name || cc.operatingEntityName;
+              const entityCode = deriveEntityCode(entityName, cc.operatingEntityCode);
+
+              const bucketed = bucketDailyResults(periodDays, yearPrefix);
+
+              otEmployees.push({
+                id: `${emp.id}:${alloc.effective_date}`,
+                companyId,
+                displayName,
+                department: dept,
+                classValue: cls,
+                operatingEntityId: entityId,
+                operatingEntityCode: entityCode,
+                operatingEntityName: entityName,
+                payType,
+                costCenterCode,
+                ...bucketed,
+                dataStatus,
+                allocationPeriod: {
+                  from: range.startDate,
+                  through: range.endDate,
+                },
+              });
             }
-
-            // Daily bucket
-            dailyHours[day.date] = {
-              otHours: day.otHours,
-              otDollars: day.otDollars,
-              dtHours: day.dtHours,
-              dtDollars: day.dtDollars,
-              mealHours: day.mealHours,
-              mealDollars: day.mealDollars,
-              regHours: day.regHours,
-              regDollars: day.regDollars,
-            };
-
-            // Running totals
-            totals.otHours += day.otHours;
-            totals.otDollars += day.otDollars;
-            totals.dtHours += day.dtHours;
-            totals.dtDollars += day.dtDollars;
-            totals.mealHours += day.mealHours;
-            totals.mealDollars += day.mealDollars;
-            totals.regHours += day.regHours;
-            totals.regDollars += day.regDollars;
           }
-
-          // Premium = OT + DT + MEAL combined
-          totals.premiumHours =
-            totals.otHours + totals.dtHours + totals.mealHours;
-          totals.premiumDollars =
-            totals.otDollars + totals.dtDollars + totals.mealDollars;
-
-          // Round totals
-          for (const key of Object.keys(totals) as (keyof typeof totals)[]) {
-            totals[key] = round2(totals[key]);
-          }
-
-          // Round all bucket values
-          for (const m of Object.values(monthlyHours)) roundBucket(m);
-          for (const w of Object.values(weeklyHours)) roundBucket(w);
-
-          // Include ALL active employees (even those with zero OT / no punch data)
-          otEmployees.push({
-            id: emp.id,
-            companyId,
-            displayName,
-            department: effectiveDepartment,
-            classValue,
-            operatingEntityId: effectiveEntityId,
-            operatingEntityCode: effectiveEntityCode,
-            operatingEntityName: effectiveEntityName,
-            payType: emp.currentPayRate?.payType ?? "Unknown",
-            costCenterCode: emp.position?.costCenter1 ?? "UNKNOWN",
-            monthlyHours,
-            weeklyHours,
-            dailyHours,
-            dataStatus: punchFailed ? "punch_failed" : "ok",
-            totals,
-          });
         }
       }
     }
@@ -391,40 +412,20 @@ export async function GET(request: NextRequest) {
 
     // Compute org-level KPIs
     const kpis = {
-      totalOTHours: round2(
-        otEmployees.reduce((s, e) => s + e.totals.otHours, 0)
-      ),
-      totalOTDollars: round2(
-        otEmployees.reduce((s, e) => s + e.totals.otDollars, 0)
-      ),
-      totalDTHours: round2(
-        otEmployees.reduce((s, e) => s + e.totals.dtHours, 0)
-      ),
-      totalDTDollars: round2(
-        otEmployees.reduce((s, e) => s + e.totals.dtDollars, 0)
-      ),
-      totalMealHours: round2(
-        otEmployees.reduce((s, e) => s + e.totals.mealHours, 0)
-      ),
-      totalMealDollars: round2(
-        otEmployees.reduce((s, e) => s + e.totals.mealDollars, 0)
-      ),
-      totalPremiumHours: round2(
-        otEmployees.reduce((s, e) => s + e.totals.premiumHours, 0)
-      ),
-      totalPremiumDollars: round2(
-        otEmployees.reduce((s, e) => s + e.totals.premiumDollars, 0)
-      ),
-      totalRegHours: round2(
-        otEmployees.reduce((s, e) => s + e.totals.regHours, 0)
-      ),
-      employeesWithPremium: otEmployees.filter(
-        (e) => e.totals.premiumHours > 0
-      ).length,
+      totalOTHours: round2(otEmployees.reduce((s, e) => s + e.totals.otHours, 0)),
+      totalOTDollars: round2(otEmployees.reduce((s, e) => s + e.totals.otDollars, 0)),
+      totalDTHours: round2(otEmployees.reduce((s, e) => s + e.totals.dtHours, 0)),
+      totalDTDollars: round2(otEmployees.reduce((s, e) => s + e.totals.dtDollars, 0)),
+      totalMealHours: round2(otEmployees.reduce((s, e) => s + e.totals.mealHours, 0)),
+      totalMealDollars: round2(otEmployees.reduce((s, e) => s + e.totals.mealDollars, 0)),
+      totalPremiumHours: round2(otEmployees.reduce((s, e) => s + e.totals.premiumHours, 0)),
+      totalPremiumDollars: round2(otEmployees.reduce((s, e) => s + e.totals.premiumDollars, 0)),
+      totalRegHours: round2(otEmployees.reduce((s, e) => s + e.totals.regHours, 0)),
+      employeesWithPremium: otEmployees.filter((e) => e.totals.premiumHours > 0).length,
       totalEmployees: otEmployees.length,
     };
 
-    // Diagnostics — how many employees had API failures
+    // Diagnostics
     const punchFailed = otEmployees.filter(
       (e) => e.dataStatus === "punch_failed"
     ).length;
@@ -449,7 +450,6 @@ export async function GET(request: NextRequest) {
       },
     };
 
-    // Update cache
     cachedData = { data: responseData, year, fetchedAt: Date.now() };
 
     return NextResponse.json(responseData, {

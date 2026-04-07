@@ -9,6 +9,7 @@ import {
   estimateAnnualERTaxes,
 } from "@/lib/utils/payroll-calculations";
 import { getOperatingEntityForCostCenter } from "@/lib/paylocity/cost-center-config";
+import { AllocationResolver } from "@/lib/paylocity/allocation-resolver";
 
 // Use an untyped Supabase client since the table isn't in generated types yet
 function getSupabase() {
@@ -59,15 +60,18 @@ export async function GET(request: NextRequest) {
       fetchAll("employee_allocations"),
     ]);
 
-    // Build allocation lookup
-    const allocMap: Record<string, typeof allocations[0]> = {};
-    for (const a of allocations) {
-      allocMap[`${a.employee_id}:${a.paylocity_company_id}`] = a;
-    }
+    // Build date-aware allocation resolver
+    const resolver = new AllocationResolver(allocations);
 
-    // Apply allocation overrides to determine effective entity per row
+    // Apply allocation overrides to determine effective entity per row.
+    // Uses the first day of each row's month to resolve the active allocation.
     const enriched = costs.map((row) => {
-      const override = allocMap[`${row.employee_id}:${row.paylocity_company_id}`];
+      const firstOfMonth = `${row.year}-${String(row.month).padStart(2, "0")}-01`;
+      const override = resolver.getForDate(
+        row.employee_id,
+        row.paylocity_company_id,
+        firstOfMonth
+      );
       const defaultEntity = getOperatingEntityForCostCenter(
         row.cost_center_code,
         row.paylocity_company_id

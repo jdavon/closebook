@@ -49,8 +49,10 @@ import {
   Check,
   X,
   Upload,
+  CalendarDays,
 } from "lucide-react";
 import { ImportAllocationsDialog } from "./import-allocations-dialog";
+import { AllocationHistoryDialog, type AllocationPeriod } from "./allocation-history-dialog";
 
 // --- Constants ---
 
@@ -102,6 +104,7 @@ interface AllocationOverride {
   class: string | null;
   allocated_entity_id: string | null;
   allocated_entity_name: string | null;
+  effective_date?: string;
 }
 
 /** Employee with merged allocation overrides */
@@ -266,6 +269,7 @@ export default function EmployeeRosterPage() {
   const [payTypeFilter, setPayTypeFilter] = useState<string>("all");
   const [companyFilter, setCompanyFilter] = useState<string>("all");
   const [importDialogOpen, setImportDialogOpen] = useState(false);
+  const [historyDialogEmp, setHistoryDialogEmp] = useState<DisplayEmployee | null>(null);
   const [activeTab, setActiveTab] = useState<"roster" | "allocations">("roster");
 
   // Determine if this entity is an employing entity (Silverco or HDR)
@@ -759,9 +763,27 @@ export default function EmployeeRosterPage() {
                 </TableHeader>
                 <TableBody>
                   {filteredEmployees.map((emp) => (
-                    <TableRow key={`${emp.companyId}-${emp.id}`}>
+                    <TableRow key={`${emp.companyId}-${emp.id}`} className="group">
                       <TableCell className="font-medium whitespace-nowrap">
-                        {emp.displayName}
+                        <div className="flex items-center gap-1.5">
+                          {emp.displayName}
+                          <button
+                            onClick={() => setHistoryDialogEmp(emp)}
+                            className="opacity-0 group-hover:opacity-100 hover:opacity-100 focus:opacity-100 transition-opacity text-muted-foreground hover:text-foreground"
+                            title="Allocation history"
+                          >
+                            <CalendarDays className="h-3.5 w-3.5" />
+                          </button>
+                          {allocations.filter(
+                            (a) =>
+                              a.employee_id === emp.id &&
+                              a.paylocity_company_id === emp.companyId
+                          ).length > 1 && (
+                            <Badge variant="outline" className="text-[9px] px-1 py-0 h-4 font-normal">
+                              multi
+                            </Badge>
+                          )}
+                        </div>
                       </TableCell>
                       <TableCell className="font-mono text-xs text-muted-foreground">
                         {emp.id}
@@ -885,6 +907,43 @@ export default function EmployeeRosterPage() {
         paylocityCompanyId={paylocityCompanyId}
         onComplete={refreshAllocations}
       />
+
+      {historyDialogEmp && (
+        <AllocationHistoryDialog
+          open={!!historyDialogEmp}
+          onOpenChange={(open) => { if (!open) setHistoryDialogEmp(null); }}
+          employeeName={historyDialogEmp.displayName}
+          employeeId={historyDialogEmp.id}
+          companyId={historyDialogEmp.companyId}
+          periods={
+            allocations
+              .filter(
+                (a) =>
+                  a.employee_id === historyDialogEmp.id &&
+                  a.paylocity_company_id === historyDialogEmp.companyId
+              )
+              .sort((a, b) =>
+                (a.effective_date ?? "2000-01-01").localeCompare(
+                  b.effective_date ?? "2000-01-01"
+                )
+              )
+              .map((a) => ({
+                employee_id: a.employee_id,
+                paylocity_company_id: a.paylocity_company_id,
+                effective_date: a.effective_date ?? "2000-01-01",
+                department: a.department,
+                class: a.class,
+                allocated_entity_id: a.allocated_entity_id,
+                allocated_entity_name: a.allocated_entity_name,
+              })) as AllocationPeriod[]
+          }
+          entities={OPERATING_ENTITIES}
+          defaultDepartment={historyDialogEmp.department}
+          defaultEntityId={historyDialogEmp.operatingEntityId}
+          defaultEntityName={historyDialogEmp.operatingEntityName}
+          onChanged={refreshAllocations}
+        />
+      )}
     </TooltipProvider>
   );
 }

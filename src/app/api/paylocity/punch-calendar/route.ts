@@ -8,6 +8,10 @@ import {
   applyCAOvertimeRules,
   fetchPunchDetailsChunked,
 } from "@/lib/paylocity/overtime-rules";
+import {
+  AllocationResolver,
+  type AllocationRow,
+} from "@/lib/paylocity/allocation-resolver";
 
 /**
  * GET /api/paylocity/punch-calendar?year=2026&month=2
@@ -58,15 +62,6 @@ interface PunchCalendarEmployee {
   hasPunchData: boolean;
   dailyData: Record<string, PunchDayData>;
   monthTotals: PunchDayData;
-}
-
-interface AllocationRow {
-  employee_id: string;
-  paylocity_company_id: string;
-  department: string | null;
-  class: string | null;
-  allocated_entity_id: string | null;
-  allocated_entity_name: string | null;
 }
 
 // --- Helpers ---
@@ -157,20 +152,15 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    // Fetch allocation overrides from Supabase
-    const allocationMap = new Map<string, AllocationRow>();
+    // Fetch allocation overrides from Supabase → date-aware resolver
+    let resolver = new AllocationResolver([]);
     try {
       const supabase = createAdminClient();
       const { data } = await supabase
         .from("employee_allocations")
         .select("*");
       if (data) {
-        for (const row of data as AllocationRow[]) {
-          allocationMap.set(
-            `${row.employee_id}:${row.paylocity_company_id}`,
-            row
-          );
-        }
+        resolver = new AllocationResolver(data as AllocationRow[]);
       }
     } catch {
       // Allocations unavailable — fall back to cost center config only
@@ -239,74 +229,92 @@ export async function GET(request: NextRequest) {
             companyId
           );
 
-          // Allocation overrides
-          const alloc = allocationMap.get(`${emp.id}:${companyId}`);
-          const effectiveDepartment = alloc?.department || cc.department;
-          const classValue = alloc?.class || "";
-          const effectiveEntityId =
-            alloc?.allocated_entity_id || cc.operatingEntityId;
-          const effectiveEntityName =
-            alloc?.allocated_entity_name || cc.operatingEntityName;
-          const effectiveEntityCode = effectiveEntityName.includes("Silverco")
-            ? "AVON"
-            : effectiveEntityName.includes("Avon Rental")
-              ? "ARH"
-              : effectiveEntityName.includes("Versatile")
-                ? "VS"
-                : effectiveEntityName.includes("Hollywood Depot")
-                  ? "HDR"
-                  : cc.operatingEntityCode;
-
           const baseRate = emp.currentPayRate?.baseRate ?? 0;
+          const payType = emp.currentPayRate?.payType ?? "Unknown";
 
           // ── Process punch data through CA OT rules ──
-          // The extended date range ensures weekly OT is accurate at month
-          // boundaries, but we only keep days within the target month.
           const dailyInputs = groupPunchesToDailyInputs(punches);
           const dailyResults = applyCAOvertimeRules(dailyInputs, baseRate);
 
-          const dailyData: Record<string, PunchDayData> = {};
+          // Filter to target month
+          const monthDays = fetchFailed
+            ? []
+            : dailyResults.filter((d) => d.date.startsWith(monthPrefix));
 
-          if (!fetchFailed) {
-            for (const day of dailyResults) {
-              // Only include days within the requested month
-              if (!day.date.startsWith(monthPrefix)) continue;
+          // ── Get allocation periods and split if needed ──
+          const periods = resolver.getAllPeriods(emp.id, companyId);
 
+          const deriveCode = (name: string) =>
+            name.includes("Silverco") ? "AVON"
+            : name.includes("Avon Rental") ? "ARH"
+            : name.includes("Versatile") ? "VS"
+            : name.includes("Hollywood Depot") ? "HDR"
+            : cc.operatingEntityCode;
+
+          const emitEntry = (
+            id: string,
+            alloc: AllocationRow | null,
+            days: typeof monthDays
+          ) => {
+            const dept = alloc?.department || cc.department;
+            const cls = alloc?.class || "";
+            const entityId = alloc?.allocated_entity_id || cc.operatingEntityId;
+            const entityName = alloc?.allocated_entity_name || cc.operatingEntityName;
+
+            const dailyData: Record<string, PunchDayData> = {};
+            for (const day of days) {
               dailyData[day.date] = {
                 totalWorkHours: day.totalWorkHours,
-                regHours: day.regHours,
-                regDollars: day.regDollars,
-                otHours: day.otHours,
-                otDollars: day.otDollars,
-                dtHours: day.dtHours,
-                dtDollars: day.dtDollars,
-                mealHours: day.mealHours,
-                mealDollars: day.mealDollars,
+                regHours: day.regHours, regDollars: day.regDollars,
+                otHours: day.otHours, otDollars: day.otDollars,
+                dtHours: day.dtHours, dtDollars: day.dtDollars,
+                mealHours: day.mealHours, mealDollars: day.mealDollars,
               };
             }
+
+            const monthTotals = Object.values(dailyData).reduce(
+              (sum, day) => addDay(sum, day),
+              emptyDay()
+            );
+
+            punchEmployees.push({
+              id,
+              companyId,
+              displayName,
+              department: dept,
+              classValue: cls,
+              operatingEntityId: entityId,
+              operatingEntityCode: deriveCode(entityName),
+              operatingEntityName: entityName,
+              payType,
+              baseRate,
+              hasPunchData: Object.keys(dailyData).length > 0,
+              dailyData,
+              monthTotals: roundDay(monthTotals),
+            });
+          };
+
+          if (periods.length <= 1) {
+            // Single allocation (or none) — same as before
+            emitEntry(emp.id, periods[0] ?? null, monthDays);
+          } else {
+            // Split by allocation period
+            for (let pi = 0; pi < periods.length; pi++) {
+              const p = periods[pi];
+              const nextStart = pi < periods.length - 1
+                ? periods[pi + 1].effective_date
+                : null;
+
+              const periodDays = monthDays.filter((d) => {
+                if (d.date < p.effective_date) return false;
+                if (nextStart && d.date >= nextStart) return false;
+                return true;
+              });
+
+              if (periodDays.length === 0) continue;
+              emitEntry(`${emp.id}:${p.effective_date}`, p, periodDays);
+            }
           }
-
-          // Compute month totals
-          const monthTotals = Object.values(dailyData).reduce(
-            (sum, day) => addDay(sum, day),
-            emptyDay()
-          );
-
-          punchEmployees.push({
-            id: emp.id,
-            companyId,
-            displayName,
-            department: effectiveDepartment,
-            classValue,
-            operatingEntityId: effectiveEntityId,
-            operatingEntityCode: effectiveEntityCode,
-            operatingEntityName: effectiveEntityName,
-            payType: emp.currentPayRate?.payType ?? "Unknown",
-            baseRate,
-            hasPunchData: Object.keys(dailyData).length > 0,
-            dailyData,
-            monthTotals: roundDay(monthTotals),
-          });
         }
       }
     }

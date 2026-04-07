@@ -36,6 +36,7 @@ export async function POST(req: NextRequest) {
         (a: {
           employeeId: string;
           paylocityCompanyId: string;
+          effectiveDate?: string;
           department?: string;
           class?: string;
           allocatedEntityId?: string;
@@ -43,6 +44,7 @@ export async function POST(req: NextRequest) {
         }) => ({
           employee_id: a.employeeId,
           paylocity_company_id: a.paylocityCompanyId,
+          effective_date: a.effectiveDate ?? "2000-01-01",
           department: a.department ?? null,
           class: a.class ?? null,
           allocated_entity_id: a.allocatedEntityId ?? null,
@@ -53,7 +55,7 @@ export async function POST(req: NextRequest) {
 
       const { error } = await supabase
         .from("employee_allocations")
-        .upsert(rows, { onConflict: "employee_id,paylocity_company_id" });
+        .upsert(rows, { onConflict: "employee_id,paylocity_company_id,effective_date" });
 
       if (error) {
         // If table doesn't exist, return graceful response

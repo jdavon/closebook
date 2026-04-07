@@ -3927,6 +3927,7 @@ export type Database = {
           class: string | null
           allocated_entity_id: string | null
           allocated_entity_name: string | null
+          effective_date: string
           created_at: string
           updated_at: string
           updated_by: string | null
@@ -3939,6 +3940,7 @@ export type Database = {
           class?: string | null
           allocated_entity_id?: string | null
           allocated_entity_name?: string | null
+          effective_date?: string
           created_at?: string
           updated_at?: string
           updated_by?: string | null
@@ -3951,6 +3953,7 @@ export type Database = {
           class?: string | null
           allocated_entity_id?: string | null
           allocated_entity_name?: string | null
+          effective_date?: string
           created_at?: string
           updated_at?: string
           updated_by?: string | null

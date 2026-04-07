@@ -1,0 +1,382 @@
+"use client";
+
+import { useState, useCallback } from "react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Loader2, Plus, Trash2, Save } from "lucide-react";
+
+// --- Types ---
+
+export interface AllocationPeriod {
+  employee_id: string;
+  paylocity_company_id: string;
+  effective_date: string; // "YYYY-MM-DD"
+  department: string | null;
+  class: string | null;
+  allocated_entity_id: string | null;
+  allocated_entity_name: string | null;
+}
+
+interface EntityOption {
+  id: string;
+  code: string;
+  name: string;
+}
+
+interface Props {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  employeeName: string;
+  employeeId: string;
+  companyId: string;
+  /** All allocation periods for this employee (sorted by effective_date ASC) */
+  periods: AllocationPeriod[];
+  /** Available operating entities for the Company dropdown */
+  entities: EntityOption[];
+  /** Default department from cost center config */
+  defaultDepartment: string;
+  /** Default entity from cost center config */
+  defaultEntityId: string;
+  defaultEntityName: string;
+  /** Called after any save/delete so the parent can refresh */
+  onChanged: () => void;
+}
+
+interface DraftRow {
+  effectiveDate: string;
+  entityId: string;
+  entityName: string;
+  department: string;
+  classValue: string;
+  isNew: boolean;
+  saving: boolean;
+}
+
+function formatDate(d: string): string {
+  if (d === "2000-01-01") return "Initial";
+  const [y, m, day] = d.split("-");
+  return `${Number(m)}/${Number(day)}/${y}`;
+}
+
+export function AllocationHistoryDialog({
+  open,
+  onOpenChange,
+  employeeName,
+  employeeId,
+  companyId,
+  periods,
+  entities,
+  defaultDepartment,
+  defaultEntityId,
+  defaultEntityName,
+  onChanged,
+}: Props) {
+  const [drafts, setDrafts] = useState<DraftRow[]>([]);
+  const [deleting, setDeleting] = useState<string | null>(null);
+
+  // Initialize a new draft row
+  const addDraft = useCallback(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    setDrafts((prev) => [
+      ...prev,
+      {
+        effectiveDate: today,
+        entityId: defaultEntityId,
+        entityName: defaultEntityName,
+        department: defaultDepartment,
+        classValue: "",
+        isNew: true,
+        saving: false,
+      },
+    ]);
+  }, [defaultDepartment, defaultEntityId, defaultEntityName]);
+
+  const updateDraft = useCallback(
+    (idx: number, field: keyof DraftRow, value: string) => {
+      setDrafts((prev) => {
+        const next = [...prev];
+        const row = { ...next[idx] };
+        if (field === "entityId") {
+          row.entityId = value;
+          row.entityName =
+            entities.find((e) => e.id === value)?.name ?? value;
+        } else {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (row as any)[field] = value;
+        }
+        next[idx] = row;
+        return next;
+      });
+    },
+    [entities]
+  );
+
+  const saveDraft = useCallback(
+    async (idx: number) => {
+      const draft = drafts[idx];
+      setDrafts((prev) => {
+        const next = [...prev];
+        next[idx] = { ...next[idx], saving: true };
+        return next;
+      });
+
+      try {
+        const res = await fetch("/api/paylocity/allocations", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            employeeId,
+            paylocityCompanyId: companyId,
+            effectiveDate: draft.effectiveDate,
+            department: draft.department || null,
+            class: draft.classValue || null,
+            allocatedEntityId: draft.entityId,
+            allocatedEntityName: draft.entityName,
+          }),
+        });
+        if (!res.ok) throw new Error("Failed to save");
+
+        // Remove the draft and notify parent
+        setDrafts((prev) => prev.filter((_, i) => i !== idx));
+        onChanged();
+      } catch {
+        setDrafts((prev) => {
+          const next = [...prev];
+          next[idx] = { ...next[idx], saving: false };
+          return next;
+        });
+      }
+    },
+    [drafts, employeeId, companyId, onChanged]
+  );
+
+  const deletePeriod = useCallback(
+    async (effectiveDate: string) => {
+      setDeleting(effectiveDate);
+      try {
+        const res = await fetch("/api/paylocity/allocations", {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            employeeId,
+            paylocityCompanyId: companyId,
+            effectiveDate,
+          }),
+        });
+        if (!res.ok) {
+          const data = await res.json();
+          alert(data.error || "Failed to delete");
+          return;
+        }
+        onChanged();
+      } finally {
+        setDeleting(null);
+      }
+    },
+    [employeeId, companyId, onChanged]
+  );
+
+  // Merge existing periods + drafts for display
+  const entityOptions = entities.map((e) => ({
+    value: e.id,
+    label: `${e.code} — ${e.name}`,
+  }));
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Allocation History</DialogTitle>
+          <DialogDescription>{employeeName}</DialogDescription>
+        </DialogHeader>
+
+        <div className="overflow-x-auto rounded-md border mt-2">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-[120px]">Effective Date</TableHead>
+                <TableHead>Company</TableHead>
+                <TableHead>Department</TableHead>
+                <TableHead>Class</TableHead>
+                <TableHead className="w-[80px]" />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {/* Existing periods */}
+              {periods.map((p) => {
+                const entityMatch = entities.find(
+                  (e) => e.id === p.allocated_entity_id
+                );
+                return (
+                  <TableRow key={p.effective_date}>
+                    <TableCell className="font-mono text-sm">
+                      {formatDate(p.effective_date)}
+                    </TableCell>
+                    <TableCell className="text-sm">
+                      {entityMatch
+                        ? `${entityMatch.code} — ${entityMatch.name}`
+                        : p.allocated_entity_name || "—"}
+                    </TableCell>
+                    <TableCell className="text-sm">
+                      {p.department || "—"}
+                    </TableCell>
+                    <TableCell className="text-sm">
+                      {p.class || "—"}
+                    </TableCell>
+                    <TableCell>
+                      {p.effective_date !== "2000-01-01" && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7"
+                          disabled={deleting === p.effective_date}
+                          onClick={() => deletePeriod(p.effective_date)}
+                        >
+                          {deleting === p.effective_date ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                          )}
+                        </Button>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+
+              {/* Draft rows */}
+              {drafts.map((d, idx) => (
+                <TableRow
+                  key={`draft-${idx}`}
+                  className="bg-blue-50/50 dark:bg-blue-950/20"
+                >
+                  <TableCell>
+                    <input
+                      type="date"
+                      value={d.effectiveDate}
+                      onChange={(e) =>
+                        updateDraft(idx, "effectiveDate", e.target.value)
+                      }
+                      className="h-7 text-xs border rounded px-1.5 bg-background"
+                      disabled={d.saving}
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <Select
+                      value={d.entityId}
+                      onValueChange={(v) => updateDraft(idx, "entityId", v)}
+                      disabled={d.saving}
+                    >
+                      <SelectTrigger className="h-7 text-xs w-[180px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {entityOptions.map((opt) => (
+                          <SelectItem
+                            key={opt.value}
+                            value={opt.value}
+                            className="text-xs"
+                          >
+                            {opt.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </TableCell>
+                  <TableCell>
+                    <Input
+                      value={d.department}
+                      onChange={(e) =>
+                        updateDraft(idx, "department", e.target.value)
+                      }
+                      className="h-7 text-xs w-[140px]"
+                      placeholder="Department"
+                      disabled={d.saving}
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <Input
+                      value={d.classValue}
+                      onChange={(e) =>
+                        updateDraft(idx, "classValue", e.target.value)
+                      }
+                      className="h-7 text-xs w-[100px]"
+                      placeholder="Class"
+                      disabled={d.saving}
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7"
+                      onClick={() => saveDraft(idx)}
+                      disabled={d.saving || !d.effectiveDate}
+                    >
+                      {d.saving ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Save className="h-3.5 w-3.5 text-primary" />
+                      )}
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+
+              {/* Empty state */}
+              {periods.length === 0 && drafts.length === 0 && (
+                <TableRow>
+                  <TableCell
+                    colSpan={5}
+                    className="text-center text-muted-foreground py-6"
+                  >
+                    No allocation overrides set. Using default cost center
+                    mapping.
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </div>
+
+        <div className="flex justify-between items-center mt-3">
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-1.5"
+            onClick={addDraft}
+          >
+            <Plus className="h-3.5 w-3.5" />
+            Add Period
+          </Button>
+          <p className="text-xs text-muted-foreground">
+            Each period takes effect on its date and remains active until the
+            next period begins.
+          </p>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
