@@ -322,7 +322,7 @@ export default function OvertimeAnalysisPage() {
       setError(null);
       try {
         const [otRes, allocRes] = await Promise.all([
-          fetch(`/api/paylocity/ot-analysis?year=${year}`),
+          fetch(`/api/paylocity/ot-analysis?year=${year}&bustCache=1`),
           fetch("/api/paylocity/allocations"),
         ]);
         if (!otRes.ok) throw new Error(`Failed to fetch: ${otRes.status}`);
@@ -509,7 +509,7 @@ export default function OvertimeAnalysisPage() {
       try {
         const [y, m] = calendarMonth.split("-");
         const res = await fetch(
-          `/api/paylocity/punch-calendar?year=${y}&month=${Number(m)}`
+          `/api/paylocity/punch-calendar?year=${y}&month=${Number(m)}&bustCache=1`
         );
         if (!res.ok) throw new Error(`Failed to fetch: ${res.status}`);
         const data = await res.json();

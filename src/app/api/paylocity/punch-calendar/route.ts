@@ -139,8 +139,11 @@ export async function GET(request: NextRequest) {
   const cacheKey = `${year}-${month}`;
 
   try {
+    const bustCache = request.nextUrl.searchParams.get("bustCache") === "1";
+
     // Check cache
     if (
+      !bustCache &&
       cachedData &&
       cachedData.key === cacheKey &&
       Date.now() - cachedData.fetchedAt < CACHE_TTL_MS

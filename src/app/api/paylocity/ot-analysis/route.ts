@@ -206,8 +206,11 @@ export async function GET(request: NextRequest) {
     new Date().getFullYear();
 
   try {
+    const bustCache = request.nextUrl.searchParams.get("bustCache") === "1";
+
     // Check cache
     if (
+      !bustCache &&
       cachedData &&
       cachedData.year === year &&
       Date.now() - cachedData.fetchedAt < CACHE_TTL_MS
