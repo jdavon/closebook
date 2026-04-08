@@ -671,32 +671,9 @@ export default function RevenueProjectionPage({ entityId: entityIdProp, isEmbed 
 
   if (loading && !data) {
     return (
-      <div className="space-y-6 p-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold">Revenue Projection</h1>
-            <p className="text-muted-foreground text-sm">
-              Loading RentalWorks data...
-            </p>
-          </div>
-        </div>
-        <div className="grid gap-4 md:grid-cols-4">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <Card key={i}>
-              <CardHeader className="pb-2">
-                <Skeleton className="h-4 w-24" />
-              </CardHeader>
-              <CardContent>
-                <Skeleton className="h-8 w-32" />
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-        <Card>
-          <CardContent className="pt-6">
-            <Skeleton className="h-[400px] w-full" />
-          </CardContent>
-        </Card>
+      <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
+        <Loader2 className="h-10 w-10 animate-spin text-muted-foreground" />
+        <p className="text-muted-foreground text-sm">Loading RentalWorks data...</p>
       </div>
     );
   }
