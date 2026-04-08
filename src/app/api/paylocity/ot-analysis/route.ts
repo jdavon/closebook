@@ -3,7 +3,7 @@ import { getAllCompanyClients } from "@/lib/paylocity";
 import { getOperatingEntityForCostCenter } from "@/lib/paylocity/cost-center-config";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getISOWeek, getISOWeekYear } from "date-fns";
-import type { PunchDetail } from "@/lib/paylocity/types";
+import type { PunchDetail, PayStatementSummary } from "@/lib/paylocity/types";
 import {
   groupPunchesToDailyInputs,
   applyCAOvertimeRules,
@@ -271,27 +271,38 @@ export async function GET(request: NextRequest) {
         const batchResults = await Promise.all(
           batch.map(async (emp) => {
             let punches: PunchDetail[] = [];
+            let summaries: PayStatementSummary[] = [];
             let punchFailed = false;
 
-            try {
-              punches = await fetchPunchDetailsChunked(
+            // Fetch punch data and pay statement summaries in parallel
+            const [punchResult, summaryResult] = await Promise.allSettled([
+              fetchPunchDetailsChunked(
                 (s, e) => client.getPunchDetails(emp.id, s, e),
                 startDate,
                 endDate
-              );
-            } catch (err) {
+              ),
+              client.getPayStatementSummary(emp.id, year),
+            ]);
+
+            if (punchResult.status === "fulfilled") {
+              punches = punchResult.value;
+            } else {
               punchFailed = true;
               console.warn(
                 `[OT-Analysis] Punch fetch failed for employee ${emp.id} (company ${companyId}):`,
-                err instanceof Error ? err.message : err
+                punchResult.reason instanceof Error ? punchResult.reason.message : punchResult.reason
               );
             }
 
-            return { emp, punches, punchFailed };
+            if (summaryResult.status === "fulfilled") {
+              summaries = summaryResult.value;
+            }
+
+            return { emp, punches, summaries, punchFailed };
           })
         );
 
-        for (const { emp, punches, punchFailed } of batchResults) {
+        for (const { emp, punches, summaries, punchFailed } of batchResults) {
           const firstName = emp.info?.firstName ?? "";
           const lastName = emp.info?.lastName ?? emp.lastName ?? "";
           const displayName =
@@ -314,6 +325,43 @@ export async function GET(request: NextRequest) {
           const dailyInputs = groupPunchesToDailyInputs(punches);
           const dailyResults = applyCAOvertimeRules(dailyInputs, baseRate);
 
+          // ── Fallback: for employees with no punch data (e.g. salaried),
+          //    populate reg hours/dollars from pay statement summaries ──
+          const hasPunchData = dailyResults.some((d) =>
+            d.date.startsWith(yearPrefix)
+          );
+
+          let payStatementReg:
+            | { monthlyHours: Record<string, MonthlyHours>; totals: { regHours: number; regDollars: number } }
+            | null = null;
+
+          if (!hasPunchData && summaries.length > 0) {
+            const monthly: Record<string, MonthlyHours> = {};
+            let totalRegH = 0;
+            let totalRegD = 0;
+
+            for (const ps of summaries) {
+              const month = ps.checkDate?.slice(0, 7);
+              if (!month || !month.startsWith(yearPrefix)) continue;
+
+              const regH = ps.regularHours || 0;
+              const regD = ps.regularDollars || 0;
+
+              const m = ensureBucket(monthly, month);
+              m.regHours += regH;
+              m.regDollars += regD;
+              totalRegH += regH;
+              totalRegD += regD;
+            }
+
+            for (const m of Object.values(monthly)) roundBucket(m);
+
+            payStatementReg = {
+              monthlyHours: monthly,
+              totals: { regHours: round2(totalRegH), regDollars: round2(totalRegD) },
+            };
+          }
+
           // ── Get allocation periods for this employee ──
           const periods = resolver.getAllPeriods(emp.id, companyId);
 
@@ -327,6 +375,17 @@ export async function GET(request: NextRequest) {
             const entityCode = deriveEntityCode(entityName, cc.operatingEntityCode);
 
             const bucketed = bucketDailyResults(dailyResults, yearPrefix);
+
+            // Merge pay statement reg data if employee has no punch data
+            if (payStatementReg) {
+              for (const [month, hrs] of Object.entries(payStatementReg.monthlyHours)) {
+                const m = ensureBucket(bucketed.monthlyHours, month);
+                m.regHours += hrs.regHours;
+                m.regDollars += hrs.regDollars;
+              }
+              bucketed.totals.regHours += payStatementReg.totals.regHours;
+              bucketed.totals.regDollars += payStatementReg.totals.regDollars;
+            }
 
             otEmployees.push({
               id: emp.id,
@@ -363,12 +422,6 @@ export async function GET(request: NextRequest) {
                 return true;
               });
 
-              // Skip periods with no data in the requested year
-              const hasYearData = periodDays.some((d) =>
-                d.date.startsWith(yearPrefix)
-              );
-              if (!hasYearData) continue;
-
               const alloc = range.alloc;
               const dept = alloc.department || cc.department;
               const cls = alloc.class || "";
@@ -377,6 +430,27 @@ export async function GET(request: NextRequest) {
               const entityCode = deriveEntityCode(entityName, cc.operatingEntityCode);
 
               const bucketed = bucketDailyResults(periodDays, yearPrefix);
+
+              // Merge pay statement reg for months that fall within this period
+              if (payStatementReg) {
+                for (const [month, hrs] of Object.entries(payStatementReg.monthlyHours)) {
+                  // Use first of month to determine which period owns this month
+                  const firstOfMonth = `${month}-01`;
+                  if (firstOfMonth < range.startDate) continue;
+                  if (range.endDate && firstOfMonth > range.endDate) continue;
+                  const m = ensureBucket(bucketed.monthlyHours, month);
+                  m.regHours += hrs.regHours;
+                  m.regDollars += hrs.regDollars;
+                  bucketed.totals.regHours = round2(bucketed.totals.regHours + hrs.regHours);
+                  bucketed.totals.regDollars = round2(bucketed.totals.regDollars + hrs.regDollars);
+                }
+              }
+
+              // Skip periods with no data at all
+              const hasAnyData = bucketed.totals.regHours > 0 ||
+                bucketed.totals.otHours > 0 || bucketed.totals.dtHours > 0 ||
+                bucketed.totals.mealHours > 0;
+              if (!hasAnyData) continue;
 
               otEmployees.push({
                 id: `${emp.id}:${alloc.effective_date}`,
