@@ -226,6 +226,7 @@ export default function RevenueProjectionPage() {
   const [error, setError] = useState<string | null>(null);
   const [dateMode, setDateMode] = useState<DateMode>("rental_period");
   const [invoiceMonthFilter, setInvoiceMonthFilter] = useState<string>("all");
+  const [pipelineMonthFilter, setPipelineMonthFilter] = useState<string>("all");
   const [chartDrillDown, setChartDrillDown] = useState<{ month: string; label: string; category: "closed" | "pending" | "pipeline" } | null>(null);
 
   const fetchData = async () => {
@@ -255,6 +256,7 @@ export default function RevenueProjectionPage() {
   const handleDateModeChange = (mode: DateMode) => {
     setDateMode(mode);
     setChartDrillDown(null);
+    setPipelineMonthFilter("all");
   };
 
   useEffect(() => {
@@ -338,6 +340,70 @@ export default function RevenueProjectionPage() {
       return aVal - bVal;
     });
   }, [filteredInvoices, dateMode, invoiceMonthFilter]);
+
+  // Pipeline months with amounts from chart data (matches the overview chart exactly)
+  const pipelineMonths = useMemo(() => {
+    if (!data) return [];
+    return data.monthlyData
+      .filter((m) => m.pipeline > 0)
+      .sort((a, b) => b.month.localeCompare(a.month))
+      .map((m) => ({ key: m.month, label: m.label, amount: m.pipeline }));
+  }, [data]);
+
+  // Filter + allocate pipeline orders by selected month — uses the same
+  // allocation logic as the chart so the totals always match the overview.
+  const filteredPipelineOrders = useMemo(() => {
+    if (!data) return [];
+    if (pipelineMonthFilter === "all") {
+      return data.pipelineOrders.map((o) => ({ ...o, allocatedAmount: o.total }));
+    }
+    const month = pipelineMonthFilter;
+    const toMonthKey = (dateStr: string) => {
+      if (!dateStr) return "";
+      const iso = dateStr.match(/^(\d{4})-(\d{2})/);
+      if (iso) return `${iso[1]}-${iso[2]}`;
+      const us = dateStr.match(/^(\d{1,2})\/\d{1,2}\/(\d{4})/);
+      if (us) return `${us[2]}-${String(us[1]).padStart(2, "0")}`;
+      return "";
+    };
+    const computeAllocation = (o: typeof data.pipelineOrders[number]): number => {
+      if (dateMode === "rental_period" && o.estimatedStartDate && o.estimatedStopDate) {
+        const start = new Date(o.estimatedStartDate);
+        const end = new Date(o.estimatedStopDate);
+        if (isNaN(start.getTime()) || isNaN(end.getTime())) return o.total;
+        const totalDays = Math.round((end.getTime() - start.getTime()) / 86400000) + 1;
+        if (totalDays <= 0) return o.total;
+        const [y, m] = month.split("-").map(Number);
+        const monthStart = new Date(y, m - 1, 1);
+        const monthEnd = new Date(y, m, 0);
+        const overlapStart = start > monthStart ? start : monthStart;
+        const overlapEnd = end < monthEnd ? end : monthEnd;
+        const overlapDays = Math.round((overlapEnd.getTime() - overlapStart.getTime()) / 86400000) + 1;
+        if (overlapDays <= 0) return 0;
+        return Math.round((o.total * overlapDays / totalDays) * 100) / 100;
+      }
+      return o.total;
+    };
+    const orderMatchesMonth = (o: typeof data.pipelineOrders[number]) => {
+      if (dateMode === "rental_period" && o.estimatedStartDate && o.estimatedStopDate) {
+        const start = new Date(o.estimatedStartDate);
+        const end = new Date(o.estimatedStopDate);
+        if (isNaN(start.getTime()) || isNaN(end.getTime())) return toMonthKey(o.orderDate) === month;
+        const [y, m] = month.split("-").map(Number);
+        const monthStart = new Date(y, m - 1, 1);
+        const monthEnd = new Date(y, m, 0);
+        return start <= monthEnd && end >= monthStart;
+      } else if (dateMode === "billing_date" && o.estimatedStartDate) {
+        return toMonthKey(o.estimatedStopDate || o.estimatedStartDate) === month;
+      } else {
+        return toMonthKey(o.orderDate) === month;
+      }
+    };
+    return data.pipelineOrders
+      .filter(orderMatchesMonth)
+      .map((o) => ({ ...o, allocatedAmount: computeAllocation(o) }))
+      .sort((a, b) => b.allocatedAmount - a.allocatedAmount);
+  }, [data, pipelineMonthFilter, dateMode]);
 
   // Drill-down data for chart click
   const drillDownItems = useMemo(() => {
@@ -490,7 +556,7 @@ export default function RevenueProjectionPage() {
   // Reset expanded state when filter changes
   useEffect(() => {
     setExpandedCustomers(new Set());
-  }, [invoiceMonthFilter, dateMode]);
+  }, [invoiceMonthFilter, pipelineMonthFilter, dateMode]);
 
   const toggleCustomer = useCallback((customer: string) => {
     setExpandedCustomers((prev) => {
@@ -1271,74 +1337,125 @@ export default function RevenueProjectionPage() {
         <TabsContent value="pipeline">
           <Card>
             <CardHeader>
-              <CardTitle>Open Orders</CardTitle>
-              <CardDescription>
-                Active Versatile orders from RentalWorks
-              </CardDescription>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle>Open Orders</CardTitle>
+                  <CardDescription>
+                    {pipelineMonthFilter === "all"
+                      ? "Active Versatile orders from RentalWorks"
+                      : dateMode === "rental_period"
+                        ? "Pipeline allocated by rental period (pro-rata)"
+                        : dateMode === "billing_date"
+                          ? "Pipeline grouped by billing date"
+                          : "Pipeline grouped by order date"}
+                  </CardDescription>
+                </div>
+                {pipelineMonths.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <button
+                      onClick={() => setPipelineMonthFilter("all")}
+                      className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                        pipelineMonthFilter === "all"
+                          ? "bg-primary text-primary-foreground"
+                          : "bg-muted text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      All
+                    </button>
+                    {pipelineMonths.map(({ key, label, amount }) => (
+                      <button
+                        key={key}
+                        onClick={() => setPipelineMonthFilter(key)}
+                        className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                          pipelineMonthFilter === key
+                            ? "bg-primary text-primary-foreground"
+                            : "bg-muted text-muted-foreground hover:text-foreground"
+                        }`}
+                        title={formatCurrency(amount)}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
             </CardHeader>
             <CardContent>
-              {data.pipelineOrders.length === 0 ? (
+              {filteredPipelineOrders.length === 0 ? (
                 <p className="text-muted-foreground py-8 text-center text-sm">
-                  No open orders found.
+                  {pipelineMonthFilter === "all" ? "No open orders found." : "No orders for this month."}
                 </p>
               ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Order #</TableHead>
-                      <TableHead>Customer</TableHead>
-                      <TableHead>Deal</TableHead>
-                      <TableHead>Description</TableHead>
-                      <TableHead className="text-right">Total</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Rental Dates</TableHead>
-                      <TableHead>Type</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {data.pipelineOrders.map((order) => (
-                      <TableRow key={order.orderId}>
-                        <TableCell className="font-medium">
-                          {order.orderNumber}
-                        </TableCell>
-                        <TableCell>{order.customer}</TableCell>
-                        <TableCell className="max-w-[150px] truncate">
-                          {order.deal}
-                        </TableCell>
-                        <TableCell className="max-w-[200px] truncate">
-                          {order.description}
-                        </TableCell>
-                        <TableCell className="text-right font-medium tabular-nums">
-                          {formatCurrency(order.total)}
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant="outline">{order.status}</Badge>
-                        </TableCell>
-                        <TableCell className="text-muted-foreground whitespace-nowrap">
-                          {order.estimatedStartDate ? `${formatDate(order.estimatedStartDate)} – ${formatDate(order.estimatedStopDate)}` : "—"}
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant="secondary">
-                            {EQUIPMENT_TYPE_LABELS[order.equipmentType] ||
-                              order.equipmentType}
-                          </Badge>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                    <TableRow className="border-t-2 font-semibold">
-                      <TableCell colSpan={4}>Total Pipeline</TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {formatCurrency(
-                          data.pipelineOrders.reduce(
-                            (s, o) => s + o.total,
-                            0,
-                          ),
-                        )}
-                      </TableCell>
-                      <TableCell colSpan={3} />
-                    </TableRow>
-                  </TableBody>
-                </Table>
+                (() => {
+                  const showAllocation = pipelineMonthFilter !== "all" && dateMode === "rental_period";
+                  return (
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Order #</TableHead>
+                          <TableHead>Customer</TableHead>
+                          <TableHead>Deal</TableHead>
+                          <TableHead>Description</TableHead>
+                          <TableHead>Rental Dates</TableHead>
+                          {showAllocation && <TableHead className="text-right">Order Total</TableHead>}
+                          <TableHead className="text-right">{showAllocation ? "Allocated" : "Total"}</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead>Type</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {filteredPipelineOrders.map((order) => (
+                          <TableRow key={order.orderId}>
+                            <TableCell className="font-medium">
+                              {order.orderNumber}
+                            </TableCell>
+                            <TableCell>{order.customer}</TableCell>
+                            <TableCell className="max-w-[150px] truncate">
+                              {order.deal}
+                            </TableCell>
+                            <TableCell className="max-w-[200px] truncate">
+                              {order.description}
+                            </TableCell>
+                            <TableCell className="text-muted-foreground whitespace-nowrap">
+                              {order.estimatedStartDate ? `${formatDate(order.estimatedStartDate)} – ${formatDate(order.estimatedStopDate)}` : "—"}
+                            </TableCell>
+                            {showAllocation && (
+                              <TableCell className="text-right tabular-nums text-muted-foreground">
+                                {formatCurrency(order.total)}
+                              </TableCell>
+                            )}
+                            <TableCell className="text-right font-medium tabular-nums">
+                              {formatCurrency(order.allocatedAmount)}
+                            </TableCell>
+                            <TableCell>
+                              <Badge variant="outline">{order.status}</Badge>
+                            </TableCell>
+                            <TableCell>
+                              <Badge variant="secondary">
+                                {EQUIPMENT_TYPE_LABELS[order.equipmentType] ||
+                                  order.equipmentType}
+                              </Badge>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                        <TableRow className="border-t-2 font-semibold">
+                          <TableCell colSpan={5}>
+                            Total {pipelineMonthFilter === "all" ? "Pipeline" : `(${filteredPipelineOrders.length} orders)`}
+                          </TableCell>
+                          {showAllocation && (
+                            <TableCell className="text-right tabular-nums text-muted-foreground">
+                              {formatCurrency(filteredPipelineOrders.reduce((s, o) => s + o.total, 0))}
+                            </TableCell>
+                          )}
+                          <TableCell className="text-right tabular-nums">
+                            {formatCurrency(filteredPipelineOrders.reduce((s, o) => s + o.allocatedAmount, 0))}
+                          </TableCell>
+                          <TableCell colSpan={2} />
+                        </TableRow>
+                      </TableBody>
+                    </Table>
+                  );
+                })()
               )}
             </CardContent>
           </Card>
