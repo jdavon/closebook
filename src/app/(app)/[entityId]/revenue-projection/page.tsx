@@ -227,6 +227,7 @@ export default function RevenueProjectionPage({ entityId: entityIdProp }: { enti
   const [dateMode, setDateMode] = useState<DateMode>("rental_period");
   const [invoiceMonthFilter, setInvoiceMonthFilter] = useState<string>("all");
   const [pipelineMonthFilter, setPipelineMonthFilter] = useState<string>("all");
+  const [unbilledMonthFilter, setUnbilledMonthFilter] = useState<string>("all");
   const [chartDrillDown, setChartDrillDown] = useState<{ month: string; label: string; category: "closed" | "pending" | "pipeline" } | null>(null);
 
   const fetchData = async () => {
@@ -257,6 +258,7 @@ export default function RevenueProjectionPage({ entityId: entityIdProp }: { enti
     setDateMode(mode);
     setChartDrillDown(null);
     setPipelineMonthFilter("all");
+    setUnbilledMonthFilter("all");
   };
 
   useEffect(() => {
@@ -404,6 +406,106 @@ export default function RevenueProjectionPage({ entityId: entityIdProp }: { enti
       .map((o) => ({ ...o, allocatedAmount: computeAllocation(o) }))
       .sort((a, b) => b.allocatedAmount - a.allocatedAmount);
   }, [data, pipelineMonthFilter, dateMode]);
+
+  // Unbilled months — derived from unbilled orders' rental dates
+  const unbilledMonths = useMemo(() => {
+    if (!data) return [];
+    const monthSet = new Map<string, { label: string; amount: number }>();
+    const toLabel = (mk: string) =>
+      mk.replace(/^(\d{4})-(\d{2})$/, (_, y, m) => {
+        const names = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+        return `${names[Number(m) - 1]} ${y}`;
+      });
+    for (const o of data.unbilledOrders) {
+      if (dateMode === "rental_period" && o.estimatedStartDate && o.estimatedStopDate) {
+        const start = new Date(o.estimatedStartDate);
+        const end = new Date(o.estimatedStopDate);
+        if (isNaN(start.getTime()) || isNaN(end.getTime())) continue;
+        const totalDays = Math.round((end.getTime() - start.getTime()) / 86400000) + 1;
+        if (totalDays <= 0) continue;
+        let curDate = new Date(start);
+        while (curDate <= end) {
+          const y = curDate.getFullYear();
+          const m = curDate.getMonth();
+          const mk = `${y}-${String(m + 1).padStart(2, "0")}`;
+          const monthStart = new Date(y, m, 1);
+          const monthEnd = new Date(y, m + 1, 0);
+          const overlapStart = start > monthStart ? start : monthStart;
+          const overlapEnd = end < monthEnd ? end : monthEnd;
+          const overlapDays = Math.round((overlapEnd.getTime() - overlapStart.getTime()) / 86400000) + 1;
+          const allocated = Math.round((o.total * overlapDays / totalDays) * 100) / 100;
+          if (!monthSet.has(mk)) monthSet.set(mk, { label: toLabel(mk), amount: 0 });
+          monthSet.get(mk)!.amount += allocated;
+          curDate = new Date(y, m + 1, 1);
+        }
+      } else {
+        const dateStr = dateMode === "billing_date" ? (o.estimatedStopDate || o.estimatedStartDate || o.orderDate) : o.orderDate;
+        const match = dateStr?.match(/^(\d{4})-(\d{2})/);
+        if (match) {
+          const mk = `${match[1]}-${match[2]}`;
+          if (!monthSet.has(mk)) monthSet.set(mk, { label: toLabel(mk), amount: 0 });
+          monthSet.get(mk)!.amount += o.total;
+        }
+      }
+    }
+    return Array.from(monthSet.entries())
+      .sort((a, b) => b[0].localeCompare(a[0]))
+      .map(([key, { label, amount }]) => ({ key, label, amount }));
+  }, [data, dateMode]);
+
+  // Filter + allocate unbilled orders by selected month
+  const filteredUnbilledOrders = useMemo(() => {
+    if (!data) return [];
+    if (unbilledMonthFilter === "all") {
+      return data.unbilledOrders.map((o) => ({ ...o, allocatedAmount: o.total }));
+    }
+    const month = unbilledMonthFilter;
+    const toMonthKey = (dateStr: string) => {
+      if (!dateStr) return "";
+      const iso = dateStr.match(/^(\d{4})-(\d{2})/);
+      if (iso) return `${iso[1]}-${iso[2]}`;
+      const us = dateStr.match(/^(\d{1,2})\/\d{1,2}\/(\d{4})/);
+      if (us) return `${us[2]}-${String(us[1]).padStart(2, "0")}`;
+      return "";
+    };
+    const computeAllocation = (o: typeof data.unbilledOrders[number]): number => {
+      if (dateMode === "rental_period" && o.estimatedStartDate && o.estimatedStopDate) {
+        const start = new Date(o.estimatedStartDate);
+        const end = new Date(o.estimatedStopDate);
+        if (isNaN(start.getTime()) || isNaN(end.getTime())) return o.total;
+        const totalDays = Math.round((end.getTime() - start.getTime()) / 86400000) + 1;
+        if (totalDays <= 0) return o.total;
+        const [y, m] = month.split("-").map(Number);
+        const monthStart = new Date(y, m - 1, 1);
+        const monthEnd = new Date(y, m, 0);
+        const overlapStart = start > monthStart ? start : monthStart;
+        const overlapEnd = end < monthEnd ? end : monthEnd;
+        const overlapDays = Math.round((overlapEnd.getTime() - overlapStart.getTime()) / 86400000) + 1;
+        if (overlapDays <= 0) return 0;
+        return Math.round((o.total * overlapDays / totalDays) * 100) / 100;
+      }
+      return o.total;
+    };
+    const orderMatchesMonth = (o: typeof data.unbilledOrders[number]) => {
+      if (dateMode === "rental_period" && o.estimatedStartDate && o.estimatedStopDate) {
+        const start = new Date(o.estimatedStartDate);
+        const end = new Date(o.estimatedStopDate);
+        if (isNaN(start.getTime()) || isNaN(end.getTime())) return toMonthKey(o.orderDate) === month;
+        const [y, m] = month.split("-").map(Number);
+        const monthStart = new Date(y, m - 1, 1);
+        const monthEnd = new Date(y, m, 0);
+        return start <= monthEnd && end >= monthStart;
+      } else if (dateMode === "billing_date" && o.estimatedStartDate) {
+        return toMonthKey(o.estimatedStopDate || o.estimatedStartDate) === month;
+      } else {
+        return toMonthKey(o.orderDate) === month;
+      }
+    };
+    return data.unbilledOrders
+      .filter(orderMatchesMonth)
+      .map((o) => ({ ...o, allocatedAmount: computeAllocation(o) }))
+      .sort((a, b) => b.allocatedAmount - a.allocatedAmount);
+  }, [data, unbilledMonthFilter, dateMode]);
 
   // Drill-down data for chart click
   const drillDownItems = useMemo(() => {
@@ -731,6 +833,11 @@ export default function RevenueProjectionPage({ entityId: entityIdProp }: { enti
           <TabsTrigger value="quotes">
             Quotes ({data.pipelineQuotes.length})
           </TabsTrigger>
+          {data.unbilledOrders.length > 0 && (
+            <TabsTrigger value="unbilled">
+              Unbilled ({data.unbilledOrders.length})
+            </TabsTrigger>
+          )}
           <TabsTrigger value="insights">
             <Lightbulb className="mr-1.5 h-3.5 w-3.5" />
             Insights
@@ -1522,6 +1629,130 @@ export default function RevenueProjectionPage({ entityId: entityIdProp }: { enti
                     </TableRow>
                   </TableBody>
                 </Table>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Unbilled Tab */}
+        <TabsContent value="unbilled">
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle>Unbilled Rentals</CardTitle>
+                  <CardDescription>
+                    {unbilledMonthFilter === "all"
+                      ? "Complete orders with no invoice — revenue earned but not yet billed"
+                      : dateMode === "rental_period"
+                        ? "Unbilled revenue allocated by rental period (pro-rata)"
+                        : dateMode === "billing_date"
+                          ? "Unbilled revenue grouped by billing date"
+                          : "Unbilled revenue grouped by order date"}
+                  </CardDescription>
+                </div>
+                {unbilledMonths.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <button
+                      onClick={() => setUnbilledMonthFilter("all")}
+                      className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                        unbilledMonthFilter === "all"
+                          ? "bg-primary text-primary-foreground"
+                          : "bg-muted text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      All
+                    </button>
+                    {unbilledMonths.map(({ key, label, amount }) => (
+                      <button
+                        key={key}
+                        onClick={() => setUnbilledMonthFilter(key)}
+                        className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                          unbilledMonthFilter === key
+                            ? "bg-primary text-primary-foreground"
+                            : "bg-muted text-muted-foreground hover:text-foreground"
+                        }`}
+                        title={formatCurrency(amount)}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </CardHeader>
+            <CardContent>
+              {filteredUnbilledOrders.length === 0 ? (
+                <p className="text-muted-foreground py-8 text-center text-sm">
+                  {unbilledMonthFilter === "all" ? "No unbilled rentals found." : "No unbilled rentals for this month."}
+                </p>
+              ) : (
+                (() => {
+                  const showAllocation = unbilledMonthFilter !== "all" && dateMode === "rental_period";
+                  return (
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Order #</TableHead>
+                          <TableHead>Customer</TableHead>
+                          <TableHead>Deal</TableHead>
+                          <TableHead>Description</TableHead>
+                          <TableHead>Rental Dates</TableHead>
+                          {showAllocation && <TableHead className="text-right">Order Total</TableHead>}
+                          <TableHead className="text-right">{showAllocation ? "Allocated" : "Total"}</TableHead>
+                          <TableHead>Type</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {filteredUnbilledOrders.map((order) => (
+                          <TableRow key={order.orderId}>
+                            <TableCell className="font-medium">
+                              {order.orderNumber}
+                            </TableCell>
+                            <TableCell>{order.customer}</TableCell>
+                            <TableCell className="max-w-[150px] truncate">
+                              {order.deal}
+                            </TableCell>
+                            <TableCell className="max-w-[200px] truncate">
+                              {order.description}
+                            </TableCell>
+                            <TableCell className="text-muted-foreground whitespace-nowrap">
+                              {order.estimatedStartDate ? `${formatDate(order.estimatedStartDate)} – ${formatDate(order.estimatedStopDate)}` : "—"}
+                            </TableCell>
+                            {showAllocation && (
+                              <TableCell className="text-right tabular-nums text-muted-foreground">
+                                {formatCurrency(order.total)}
+                              </TableCell>
+                            )}
+                            <TableCell className="text-right font-medium tabular-nums">
+                              {formatCurrency(order.allocatedAmount)}
+                            </TableCell>
+                            <TableCell>
+                              <Badge variant="secondary">
+                                {EQUIPMENT_TYPE_LABELS[order.equipmentType] ||
+                                  order.equipmentType}
+                              </Badge>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                        <TableRow className="border-t-2 font-semibold">
+                          <TableCell colSpan={5}>
+                            Total {unbilledMonthFilter === "all" ? "Unbilled" : `(${filteredUnbilledOrders.length} orders)`}
+                          </TableCell>
+                          {showAllocation && (
+                            <TableCell className="text-right tabular-nums text-muted-foreground">
+                              {formatCurrency(filteredUnbilledOrders.reduce((s, o) => s + o.total, 0))}
+                            </TableCell>
+                          )}
+                          <TableCell className="text-right tabular-nums">
+                            {formatCurrency(filteredUnbilledOrders.reduce((s, o) => s + o.allocatedAmount, 0))}
+                          </TableCell>
+                          <TableCell />
+                        </TableRow>
+                      </TableBody>
+                    </Table>
+                  );
+                })()
               )}
             </CardContent>
           </Card>

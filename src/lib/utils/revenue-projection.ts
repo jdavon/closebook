@@ -139,6 +139,7 @@ export interface RevenueProjectionResponse {
   pipelineOrders: PipelineOrder[];
   pipelineQuotes: PipelineQuote[];
   closedInvoices: ClosedInvoice[];
+  unbilledOrders: PipelineOrder[];
   equipmentBreakdown: EquipmentBreakdown[];
   dataAsOf: string;
   dateMode: DateMode;
@@ -598,6 +599,31 @@ export function processRevenueData(
     }))
     .sort((a, b) => b.total - a.total);
 
+  // --- Unbilled: COMPLETE orders with no matching invoice ---
+  const invoicedOrderNumbers = new Set(
+    validInvoices.map((inv) => inv.OrderNumber).filter(Boolean),
+  );
+  const unbilledOrders: PipelineOrder[] = vsOrders
+    .filter((o) => {
+      const status = (o.Status || "").toUpperCase();
+      return status === "COMPLETE" && !invoicedOrderNumbers.has(o.OrderNumber);
+    })
+    .map((o) => ({
+      orderId: o.OrderId,
+      orderNumber: o.OrderNumber,
+      customer: o.Customer,
+      deal: o.Deal || "",
+      description: o.Description || "",
+      total: toNum(o.Total),
+      status: o.Status,
+      orderDate: o.OrderDate,
+      estimatedStartDate: o.EstimatedStartDate || "",
+      estimatedStopDate: o.EstimatedStopDate || "",
+      equipmentType: classifyEquipmentType(o.Description || ""),
+      warehouse: o.Warehouse,
+    }))
+    .sort((a, b) => b.total - a.total);
+
   // --- Invoices table (closed + pending) ---
   const allDisplayInvoices = [...closedInvoices, ...pendingInvoices];
   const closedInvoiceRows: ClosedInvoice[] = allDisplayInvoices
@@ -676,6 +702,7 @@ export function processRevenueData(
     pipelineOrders,
     pipelineQuotes,
     closedInvoices: closedInvoiceRows,
+    unbilledOrders,
     equipmentBreakdown,
     dataAsOf: new Date().toISOString(),
     dateMode,
