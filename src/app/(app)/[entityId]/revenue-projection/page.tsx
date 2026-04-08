@@ -214,7 +214,7 @@ function EquipmentTooltip({ active, payload }: { active?: boolean; payload?: Arr
 
 // ─── Component ──────────────────────────────────────────────────────────────
 
-export default function RevenueProjectionPage({ entityId: entityIdProp, isEmbed }: { entityId?: string; isEmbed?: boolean } = {}) {
+export default function RevenueProjectionPage({ entityId: entityIdProp, isEmbed, defaultTab }: { entityId?: string; isEmbed?: boolean; defaultTab?: string } = {}) {
   const params = useParams();
   const entityId = entityIdProp || (params.entityId as string);
 
@@ -821,7 +821,7 @@ export default function RevenueProjectionPage({ entityId: entityIdProp, isEmbed 
       </div>
 
       {/* Tabs */}
-      <Tabs defaultValue="overview">
+      <Tabs defaultValue={defaultTab || "overview"}>
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="invoices">
