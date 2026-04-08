@@ -1,11 +1,17 @@
 import { redirect } from "next/navigation";
-import { getUserEntities } from "@/lib/db/queries/organizations";
+import { createAdminClient } from "@/lib/supabase/admin";
 import RevenueProjectionEmbed from "./embed-client";
 
 export default async function VersatileRevenueProjectionPage() {
-  const entities = await getUserEntities();
-  const versatile = entities.find((e) => e.name.toLowerCase().includes("versatile"));
+  const supabase = createAdminClient();
+  const { data: entities } = await supabase
+    .from("entities")
+    .select("id, name")
+    .ilike("name", "%versatile%")
+    .eq("is_active", true)
+    .limit(1);
 
+  const versatile = entities?.[0];
   if (!versatile) {
     redirect("/login");
   }

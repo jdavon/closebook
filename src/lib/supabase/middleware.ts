@@ -42,9 +42,10 @@ export async function updateSession(request: NextRequest) {
     request.nextUrl.pathname.startsWith("/invite");
 
   const isApiRoute = request.nextUrl.pathname.startsWith("/api");
+  const isEmbedRoute = request.nextUrl.pathname.startsWith("/embed");
 
-  // Redirect unauthenticated users to login (except auth and API routes)
-  if (!user && !isAuthRoute && !isApiRoute) {
+  // Redirect unauthenticated users to login (except auth, API, and embed routes)
+  if (!user && !isAuthRoute && !isApiRoute && !isEmbedRoute) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     return NextResponse.redirect(url);
