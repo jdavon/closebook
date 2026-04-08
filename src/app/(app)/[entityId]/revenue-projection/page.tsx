@@ -223,6 +223,8 @@ export default function RevenueProjectionPage({ entityId: entityIdProp, isEmbed 
   const [rawOrders, setRawOrders] = useState<RWOrderRow[] | null>(null);
   const [rawQuotes, setRawQuotes] = useState<RWQuoteRow[] | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadProgress, setLoadProgress] = useState(0);
+  const [loadStep, setLoadStep] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [dateMode, setDateMode] = useState<DateMode>("rental_period");
   const [invoiceMonthFilter, setInvoiceMonthFilter] = useState<string>("all");
@@ -233,20 +235,29 @@ export default function RevenueProjectionPage({ entityId: entityIdProp, isEmbed 
   const fetchData = async () => {
     setLoading(true);
     setError(null);
+    setLoadProgress(0);
+    setLoadStep("Fetching invoices…");
     try {
-      const res = await fetch("/api/revenue-projection", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ entityId }),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.error || `Request failed: ${res.status}`);
-      }
-      const result = await res.json();
-      setRawInvoices(result._rawInvoices);
-      setRawOrders(result._rawOrders);
-      setRawQuotes(result._rawQuotes);
+      const invRes = await fetch("/api/rw-revenue/invoices");
+      if (!invRes.ok) throw new Error("Failed to load invoices");
+      const invoices = await invRes.json();
+      setRawInvoices(invoices);
+      setLoadProgress(40);
+
+      setLoadStep("Fetching orders…");
+      const ordRes = await fetch("/api/rw-revenue/orders");
+      if (!ordRes.ok) throw new Error("Failed to load orders");
+      const orders = await ordRes.json();
+      setRawOrders(orders);
+      setLoadProgress(70);
+
+      setLoadStep("Fetching quotes…");
+      const quoRes = await fetch("/api/rw-revenue/quotes");
+      if (!quoRes.ok) throw new Error("Failed to load quotes");
+      const quotes = await quoRes.json();
+      setRawQuotes(quotes);
+      setLoadProgress(100);
+      setLoadStep("Done");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load data");
     } finally {
@@ -673,7 +684,15 @@ export default function RevenueProjectionPage({ entityId: entityIdProp, isEmbed 
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
         <Loader2 className="h-10 w-10 animate-spin text-muted-foreground" />
-        <p className="text-muted-foreground text-sm">Loading RentalWorks data...</p>
+        <div className="flex flex-col items-center gap-2 w-64">
+          <div className="w-full bg-muted rounded-full h-2 overflow-hidden">
+            <div
+              className="bg-primary h-full rounded-full transition-all duration-500 ease-out"
+              style={{ width: `${loadProgress}%` }}
+            />
+          </div>
+          <p className="text-muted-foreground text-sm">{loadStep}</p>
+        </div>
       </div>
     );
   }
