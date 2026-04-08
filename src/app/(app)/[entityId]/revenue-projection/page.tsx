@@ -214,7 +214,7 @@ function EquipmentTooltip({ active, payload }: { active?: boolean; payload?: Arr
 
 // ─── Component ──────────────────────────────────────────────────────────────
 
-export default function RevenueProjectionPage({ entityId: entityIdProp }: { entityId?: string } = {}) {
+export default function RevenueProjectionPage({ entityId: entityIdProp, isEmbed }: { entityId?: string; isEmbed?: boolean } = {}) {
   const params = useParams();
   const entityId = entityIdProp || (params.entityId as string);
 
@@ -731,51 +731,55 @@ export default function RevenueProjectionPage({ entityId: entityIdProp }: { enti
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <div className="bg-muted inline-flex items-center rounded-lg p-1">
-            <button
-              onClick={() => handleDateModeChange("invoice_date")}
-              className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
-                dateMode === "invoice_date"
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
+          {!isEmbed && (
+            <div className="bg-muted inline-flex items-center rounded-lg p-1">
+              <button
+                onClick={() => handleDateModeChange("invoice_date")}
+                className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                  dateMode === "invoice_date"
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                Invoice Date
+              </button>
+              <button
+                onClick={() => handleDateModeChange("billing_date")}
+                className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                  dateMode === "billing_date"
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                Billing Date
+              </button>
+              <button
+                onClick={() => handleDateModeChange("rental_period")}
+                className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                  dateMode === "rental_period"
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                Rental Period
+              </button>
+            </div>
+          )}
+          {!isEmbed && (
+            <Button
+              onClick={saveSnapshot}
+              variant="outline"
+              size="sm"
+              disabled={savingSnapshot || !data}
             >
-              Invoice Date
-            </button>
-            <button
-              onClick={() => handleDateModeChange("billing_date")}
-              className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
-                dateMode === "billing_date"
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              Billing Date
-            </button>
-            <button
-              onClick={() => handleDateModeChange("rental_period")}
-              className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
-                dateMode === "rental_period"
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              Rental Period
-            </button>
-          </div>
-          <Button
-            onClick={saveSnapshot}
-            variant="outline"
-            size="sm"
-            disabled={savingSnapshot || !data}
-          >
-            {savingSnapshot ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            ) : (
-              <Save className="mr-2 h-4 w-4" />
-            )}
-            Save Snapshot
-          </Button>
+              {savingSnapshot ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Save className="mr-2 h-4 w-4" />
+              )}
+              Save Snapshot
+            </Button>
+          )}
           <Button
             onClick={() => fetchData()}
             variant="outline"
@@ -838,18 +842,24 @@ export default function RevenueProjectionPage({ entityId: entityIdProp }: { enti
               Unbilled ({data.unbilledOrders.length})
             </TabsTrigger>
           )}
-          <TabsTrigger value="insights">
-            <Lightbulb className="mr-1.5 h-3.5 w-3.5" />
-            Insights
-          </TabsTrigger>
-          <TabsTrigger value="trends">
-            <Activity className="mr-1.5 h-3.5 w-3.5" />
-            Trends
-          </TabsTrigger>
-          <TabsTrigger value="accruals">
-            <BookOpen className="mr-1.5 h-3.5 w-3.5" />
-            Accruals
-          </TabsTrigger>
+          {!isEmbed && (
+            <TabsTrigger value="insights">
+              <Lightbulb className="mr-1.5 h-3.5 w-3.5" />
+              Insights
+            </TabsTrigger>
+          )}
+          {!isEmbed && (
+            <TabsTrigger value="trends">
+              <Activity className="mr-1.5 h-3.5 w-3.5" />
+              Trends
+            </TabsTrigger>
+          )}
+          {!isEmbed && (
+            <TabsTrigger value="accruals">
+              <BookOpen className="mr-1.5 h-3.5 w-3.5" />
+              Accruals
+            </TabsTrigger>
+          )}
         </TabsList>
 
         {/* Overview Tab */}
@@ -1080,7 +1090,7 @@ export default function RevenueProjectionPage({ entityId: entityIdProp }: { enti
           )}
 
           {/* Accrued & Deferred Revenue Chart */}
-          {data.monthlyData.some((m) => m.accrued > 0 || m.deferred > 0) && (
+          {!isEmbed && data.monthlyData.some((m) => m.accrued > 0 || m.deferred > 0) && (
             <Card>
               <CardHeader>
                 <CardTitle>Accrued & Deferred Revenue</CardTitle>
