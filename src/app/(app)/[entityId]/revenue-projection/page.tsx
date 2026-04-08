@@ -1217,8 +1217,8 @@ export default function RevenueProjectionPage() {
                                           <span className="flex items-center gap-1.5 text-sm font-medium">
                                             {inv.invoiceNumber}
                                             {inv.status && inv.status !== "CLOSED" && inv.status !== "PROCESSED" && (
-                                              <Badge variant={inv.status === "APPROVED" ? "secondary" : "outline"} className="text-[10px] px-1.5 py-0">
-                                                {inv.status}
+                                              <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-orange-400 bg-orange-50 text-orange-700">
+                                                Pending
                                               </Badge>
                                             )}
                                           </span>
