@@ -1291,7 +1291,6 @@ export default function RevenueProjectionPage() {
                       <TableHead>Description</TableHead>
                       <TableHead className="text-right">Total</TableHead>
                       <TableHead>Status</TableHead>
-                      <TableHead>Date</TableHead>
                       <TableHead>Rental Dates</TableHead>
                       <TableHead>Type</TableHead>
                     </TableRow>
@@ -1315,9 +1314,6 @@ export default function RevenueProjectionPage() {
                         <TableCell>
                           <Badge variant="outline">{order.status}</Badge>
                         </TableCell>
-                        <TableCell className="text-muted-foreground">
-                          {order.orderDate}
-                        </TableCell>
                         <TableCell className="text-muted-foreground whitespace-nowrap">
                           {order.estimatedStartDate ? `${formatDate(order.estimatedStartDate)} – ${formatDate(order.estimatedStopDate)}` : "—"}
                         </TableCell>
@@ -1339,7 +1335,7 @@ export default function RevenueProjectionPage() {
                           ),
                         )}
                       </TableCell>
-                      <TableCell colSpan={4} />
+                      <TableCell colSpan={3} />
                     </TableRow>
                   </TableBody>
                 </Table>
