@@ -214,9 +214,9 @@ function EquipmentTooltip({ active, payload }: { active?: boolean; payload?: Arr
 
 // ─── Component ──────────────────────────────────────────────────────────────
 
-export default function RevenueProjectionPage() {
+export default function RevenueProjectionPage({ entityId: entityIdProp }: { entityId?: string } = {}) {
   const params = useParams();
-  const entityId = params.entityId as string;
+  const entityId = entityIdProp || (params.entityId as string);
 
   // Raw rows from the API — cached so we can re-process client-side on mode change
   const [rawInvoices, setRawInvoices] = useState<RWInvoiceRow[] | null>(null);
