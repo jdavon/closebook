@@ -226,6 +226,7 @@ export default function RevenueProjectionPage() {
   const [error, setError] = useState<string | null>(null);
   const [dateMode, setDateMode] = useState<DateMode>("rental_period");
   const [invoiceMonthFilter, setInvoiceMonthFilter] = useState<string>("all");
+  const [pendingMonthFilter, setPendingMonthFilter] = useState<string>("all");
   const [pipelineMonthFilter, setPipelineMonthFilter] = useState<string>("all");
   const [chartDrillDown, setChartDrillDown] = useState<{ month: string; label: string; category: "closed" | "pending" | "pipeline" } | null>(null);
 
@@ -256,6 +257,7 @@ export default function RevenueProjectionPage() {
   const handleDateModeChange = (mode: DateMode) => {
     setDateMode(mode);
     setChartDrillDown(null);
+    setPendingMonthFilter("all");
     setPipelineMonthFilter("all");
   };
 
@@ -277,9 +279,55 @@ export default function RevenueProjectionPage() {
     return processRevenueData(rawInvoices, rawOrders, rawQuotes, "invoice_date");
   }, [rawInvoices, rawOrders, rawQuotes, dateMode, data]);
 
-  // Derive unique months from invoices for filter dropdown
-  // In rental_period mode, include all months that any invoice spans via allocations
+  // Split invoices by status
+  const CLOSED_STATUSES = new Set(["CLOSED", "PROCESSED"]);
+  const PENDING_STATUSES = new Set(["NEW", "APPROVED"]);
+
+  const closedOnlyInvoices = useMemo(() => {
+    if (!data) return [];
+    return data.closedInvoices.filter((inv) => CLOSED_STATUSES.has(inv.status));
+  }, [data]);
+
+  const pendingOnlyInvoices = useMemo(() => {
+    if (!data) return [];
+    return data.closedInvoices.filter((inv) => PENDING_STATUSES.has(inv.status));
+  }, [data]);
+
+  // Derive unique months from closed invoices for filter dropdown
   const invoiceMonths = useMemo(() => {
+    const monthSet = new Map<string, string>();
+    const toLabel = (mk: string) =>
+      mk.replace(/^(\d{4})-(\d{2})$/, (_, y, m) => {
+        const names = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+        return `${names[Number(m) - 1]} ${y}`;
+      });
+    for (const inv of closedOnlyInvoices) {
+      if (inv.allocations) {
+        for (const alloc of inv.allocations) {
+          if (!monthSet.has(alloc.month)) monthSet.set(alloc.month, toLabel(alloc.month));
+        }
+      } else if (inv.month && !monthSet.has(inv.month)) {
+        monthSet.set(inv.month, toLabel(inv.month));
+      }
+    }
+    return Array.from(monthSet.entries())
+      .sort((a, b) => b[0].localeCompare(a[0]))
+      .map(([key, label]) => ({ key, label }));
+  }, [closedOnlyInvoices]);
+
+  // Filter closed invoices by month
+  const filteredInvoices = useMemo(() => {
+    if (invoiceMonthFilter === "all") return closedOnlyInvoices;
+    return closedOnlyInvoices.filter((inv) => {
+      if (inv.allocations) {
+        return inv.allocations.some((a) => a.month === invoiceMonthFilter);
+      }
+      return inv.month === invoiceMonthFilter;
+    });
+  }, [closedOnlyInvoices, invoiceMonthFilter]);
+
+  // Pending invoice months
+  const pendingMonths = useMemo(() => {
     if (!data) return [];
     const monthSet = new Map<string, string>();
     const toLabel = (mk: string) =>
@@ -287,35 +335,54 @@ export default function RevenueProjectionPage() {
         const names = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
         return `${names[Number(m) - 1]} ${y}`;
       });
-    for (const inv of data.closedInvoices) {
-      // Add all allocation months if present
+    for (const inv of pendingOnlyInvoices) {
       if (inv.allocations) {
         for (const alloc of inv.allocations) {
-          if (!monthSet.has(alloc.month)) {
-            monthSet.set(alloc.month, toLabel(alloc.month));
-          }
+          if (!monthSet.has(alloc.month)) monthSet.set(alloc.month, toLabel(alloc.month));
         }
       } else if (inv.month && !monthSet.has(inv.month)) {
         monthSet.set(inv.month, toLabel(inv.month));
       }
     }
     return Array.from(monthSet.entries())
-      .sort((a, b) => b[0].localeCompare(a[0])) // newest first
+      .sort((a, b) => b[0].localeCompare(a[0]))
       .map(([key, label]) => ({ key, label }));
-  }, [data]);
+  }, [data, pendingOnlyInvoices]);
 
-  // Filter invoices — in rental_period mode, include invoices that have
-  // allocations touching the selected month
-  const filteredInvoices = useMemo(() => {
-    if (!data) return [];
-    if (invoiceMonthFilter === "all") return data.closedInvoices;
-    return data.closedInvoices.filter((inv) => {
+  // Filter pending invoices by month
+  const filteredPendingInvoices = useMemo(() => {
+    if (pendingMonthFilter === "all") return pendingOnlyInvoices;
+    return pendingOnlyInvoices.filter((inv) => {
       if (inv.allocations) {
-        return inv.allocations.some((a) => a.month === invoiceMonthFilter);
+        return inv.allocations.some((a) => a.month === pendingMonthFilter);
       }
-      return inv.month === invoiceMonthFilter;
+      return inv.month === pendingMonthFilter;
     });
-  }, [data, invoiceMonthFilter]);
+  }, [pendingOnlyInvoices, pendingMonthFilter]);
+
+  // Group pending invoices by customer
+  const pendingCustomerGroups = useMemo(() => {
+    const groups = new Map<string, { customer: string; invoices: ClosedInvoice[]; totalRevenue: number; totalAllocated: number }>();
+    const showAllocation = dateMode === "rental_period" && pendingMonthFilter !== "all";
+    for (const inv of filteredPendingInvoices) {
+      const key = inv.customer || "Unknown";
+      if (!groups.has(key)) {
+        groups.set(key, { customer: key, invoices: [], totalRevenue: 0, totalAllocated: 0 });
+      }
+      const g = groups.get(key)!;
+      g.invoices.push(inv);
+      g.totalRevenue += inv.subTotal;
+      if (showAllocation) {
+        const alloc = inv.allocations?.find((a) => a.month === pendingMonthFilter);
+        g.totalAllocated += alloc ? alloc.amount : inv.subTotal;
+      }
+    }
+    return Array.from(groups.values()).sort((a, b) => {
+      const aVal = showAllocation ? b.totalAllocated : b.totalRevenue;
+      const bVal = showAllocation ? a.totalAllocated : a.totalRevenue;
+      return aVal - bVal;
+    });
+  }, [filteredPendingInvoices, dateMode, pendingMonthFilter]);
 
   // Group filtered invoices by customer
   const customerGroups = useMemo(() => {
@@ -552,14 +619,25 @@ export default function RevenueProjectionPage() {
   }, [fetchSnapshots]);
 
   const [expandedCustomers, setExpandedCustomers] = useState<Set<string>>(new Set());
+  const [expandedPendingCustomers, setExpandedPendingCustomers] = useState<Set<string>>(new Set());
 
   // Reset expanded state when filter changes
   useEffect(() => {
     setExpandedCustomers(new Set());
-  }, [invoiceMonthFilter, pipelineMonthFilter, dateMode]);
+    setExpandedPendingCustomers(new Set());
+  }, [invoiceMonthFilter, pendingMonthFilter, pipelineMonthFilter, dateMode]);
 
   const toggleCustomer = useCallback((customer: string) => {
     setExpandedCustomers((prev) => {
+      const next = new Set(prev);
+      if (next.has(customer)) next.delete(customer);
+      else next.add(customer);
+      return next;
+    });
+  }, []);
+
+  const togglePendingCustomer = useCallback((customer: string) => {
+    setExpandedPendingCustomers((prev) => {
       const next = new Set(prev);
       if (next.has(customer)) next.delete(customer);
       else next.add(customer);
@@ -723,8 +801,13 @@ export default function RevenueProjectionPage() {
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="invoices">
-            Invoices ({data.closedInvoices.length})
+            Invoices ({closedOnlyInvoices.length})
           </TabsTrigger>
+          {pendingOnlyInvoices.length > 0 && (
+            <TabsTrigger value="pending">
+              Pending ({pendingOnlyInvoices.length})
+            </TabsTrigger>
+          )}
           <TabsTrigger value="pipeline">
             Pipeline ({data.pipelineOrders.length})
           </TabsTrigger>
@@ -1318,6 +1401,254 @@ export default function RevenueProjectionPage() {
                                 <TableCell className="text-right tabular-nums">
                                   {formatCurrency(
                                     filteredInvoices.reduce((s, i) => s + i.grossTotal, 0),
+                                  )}
+                                </TableCell>
+                              </>
+                            )}
+                          </TableRow>
+                        </TableBody>
+                      </Table>
+                    );
+                  })()}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Pending Tab */}
+        <TabsContent value="pending">
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle>Pending Invoices</CardTitle>
+                  <CardDescription>
+                    Invoices awaiting processing — grouped by{" "}
+                    {dateMode === "invoice_date"
+                      ? "invoice date"
+                      : dateMode === "rental_period"
+                        ? "rental period (pro-rata)"
+                        : "rental billing date"}
+                  </CardDescription>
+                </div>
+                {pendingMonths.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <button
+                      onClick={() => setPendingMonthFilter("all")}
+                      className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                        pendingMonthFilter === "all"
+                          ? "bg-primary text-primary-foreground"
+                          : "bg-muted text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      All
+                    </button>
+                    {pendingMonths.map(({ key, label }) => (
+                      <button
+                        key={key}
+                        onClick={() => setPendingMonthFilter(key)}
+                        className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                          pendingMonthFilter === key
+                            ? "bg-primary text-primary-foreground"
+                            : "bg-muted text-muted-foreground hover:text-foreground"
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </CardHeader>
+            <CardContent>
+              {filteredPendingInvoices.length === 0 ? (
+                <p className="text-muted-foreground py-8 text-center text-sm">
+                  No pending invoices found.
+                </p>
+              ) : (
+                <div className="overflow-x-auto">
+                  {(() => {
+                    const showAllocation = dateMode === "rental_period" && pendingMonthFilter !== "all";
+                    const getAlloc = (inv: ClosedInvoice) =>
+                      inv.allocations?.find((a) => a.month === pendingMonthFilter);
+                    return (
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead className="w-8" />
+                            <TableHead>Customer</TableHead>
+                            <TableHead className="text-right">Invoices</TableHead>
+                            {showAllocation ? (
+                              <>
+                                <TableHead className="text-right">Invoice Total</TableHead>
+                                <TableHead className="text-right">Allocated</TableHead>
+                              </>
+                            ) : (
+                              <>
+                                <TableHead className="text-right">Revenue</TableHead>
+                                <TableHead className="text-right">Tax</TableHead>
+                                <TableHead className="text-right">Total</TableHead>
+                              </>
+                            )}
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {pendingCustomerGroups.map((group) => {
+                            const isExpanded = expandedPendingCustomers.has(group.customer);
+                            const groupTax = group.invoices.reduce((s, i) => s + i.tax, 0);
+                            const groupGross = group.invoices.reduce((s, i) => s + i.grossTotal, 0);
+                            return (
+                              <React.Fragment key={group.customer}>
+                                <TableRow
+                                  className="hover:bg-muted/50 cursor-pointer"
+                                  onClick={() => togglePendingCustomer(group.customer)}
+                                >
+                                  <TableCell className="w-8 px-2">
+                                    <ChevronRight
+                                      className={`h-4 w-4 text-muted-foreground transition-transform ${
+                                        isExpanded ? "rotate-90" : ""
+                                      }`}
+                                    />
+                                  </TableCell>
+                                  <TableCell className="font-medium">
+                                    {group.customer}
+                                  </TableCell>
+                                  <TableCell className="text-muted-foreground text-right tabular-nums">
+                                    {group.invoices.length}
+                                  </TableCell>
+                                  {showAllocation ? (
+                                    <>
+                                      <TableCell className="text-muted-foreground text-right tabular-nums">
+                                        {formatCurrency(group.totalRevenue)}
+                                      </TableCell>
+                                      <TableCell className="text-right font-semibold tabular-nums">
+                                        {formatCurrency(group.totalAllocated)}
+                                      </TableCell>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <TableCell className="text-right font-semibold tabular-nums">
+                                        {formatCurrency(group.totalRevenue)}
+                                      </TableCell>
+                                      <TableCell className="text-muted-foreground text-right tabular-nums">
+                                        {formatCurrency(groupTax)}
+                                      </TableCell>
+                                      <TableCell className="text-right tabular-nums">
+                                        {formatCurrency(groupGross)}
+                                      </TableCell>
+                                    </>
+                                  )}
+                                </TableRow>
+                                {isExpanded && group.invoices.map((inv) => {
+                                  const alloc = showAllocation ? getAlloc(inv) : null;
+                                  return (
+                                    <TableRow key={inv.invoiceId} className="bg-muted/30">
+                                      <TableCell />
+                                      <TableCell className="pl-8">
+                                        <div className="flex flex-col gap-0.5">
+                                          <span className="flex items-center gap-1.5 text-sm font-medium">
+                                            {inv.invoiceNumber}
+                                            <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+                                              {inv.status}
+                                            </Badge>
+                                          </span>
+                                          <span className="text-muted-foreground max-w-[260px] truncate text-xs">
+                                            {inv.orderDescription || inv.orderNumber}
+                                          </span>
+                                        </div>
+                                      </TableCell>
+                                      <TableCell>
+                                        <div className="flex flex-col gap-0.5 text-xs">
+                                          <span className="text-muted-foreground whitespace-nowrap">
+                                            {formatDate(inv.invoiceDate)}
+                                          </span>
+                                          {(inv.billingStartDate || inv.billingEndDate) && (
+                                            <span className="text-muted-foreground whitespace-nowrap">
+                                              {formatDate(inv.billingStartDate)} – {formatDate(inv.billingEndDate)}
+                                            </span>
+                                          )}
+                                        </div>
+                                      </TableCell>
+                                      {showAllocation ? (
+                                        <>
+                                          <TableCell className="text-muted-foreground text-right tabular-nums text-sm">
+                                            {formatCurrency(inv.subTotal)}
+                                            {alloc && (
+                                              <span className="text-muted-foreground ml-1 text-xs">
+                                                ({alloc.percentage}%, {alloc.days}d)
+                                              </span>
+                                            )}
+                                          </TableCell>
+                                          <TableCell className="text-right font-medium tabular-nums text-sm">
+                                            {alloc ? formatCurrency(alloc.amount) : formatCurrency(inv.subTotal)}
+                                          </TableCell>
+                                        </>
+                                      ) : (
+                                        <>
+                                          <TableCell className="text-right tabular-nums text-sm">
+                                            {formatCurrency(inv.subTotal)}
+                                            {dateMode === "rental_period" && inv.allocations && (
+                                              <div className="mt-0.5 flex flex-wrap justify-end gap-1">
+                                                {inv.allocations.map((a) => (
+                                                  <span
+                                                    key={a.month}
+                                                    className="bg-muted text-muted-foreground rounded px-1 py-0.5 text-[10px]"
+                                                  >
+                                                    {a.label}: {a.percentage}%
+                                                  </span>
+                                                ))}
+                                              </div>
+                                            )}
+                                          </TableCell>
+                                          <TableCell className="text-muted-foreground text-right tabular-nums text-sm">
+                                            {formatCurrency(inv.tax)}
+                                          </TableCell>
+                                          <TableCell className="text-right tabular-nums text-sm">
+                                            {formatCurrency(inv.grossTotal)}
+                                          </TableCell>
+                                        </>
+                                      )}
+                                    </TableRow>
+                                  );
+                                })}
+                              </React.Fragment>
+                            );
+                          })}
+                          <TableRow className="border-t-2 font-semibold">
+                            <TableCell />
+                            <TableCell>
+                              Total ({filteredPendingInvoices.length} invoices, {pendingCustomerGroups.length} customers)
+                            </TableCell>
+                            <TableCell />
+                            {showAllocation ? (
+                              <>
+                                <TableCell className="text-muted-foreground text-right tabular-nums">
+                                  {formatCurrency(
+                                    filteredPendingInvoices.reduce((s, i) => s + i.subTotal, 0),
+                                  )}
+                                </TableCell>
+                                <TableCell className="text-right tabular-nums">
+                                  {formatCurrency(
+                                    pendingCustomerGroups.reduce((s, g) => s + g.totalAllocated, 0),
+                                  )}
+                                </TableCell>
+                              </>
+                            ) : (
+                              <>
+                                <TableCell className="text-right tabular-nums">
+                                  {formatCurrency(
+                                    filteredPendingInvoices.reduce((s, i) => s + i.subTotal, 0),
+                                  )}
+                                </TableCell>
+                                <TableCell className="text-right tabular-nums">
+                                  {formatCurrency(
+                                    filteredPendingInvoices.reduce((s, i) => s + i.tax, 0),
+                                  )}
+                                </TableCell>
+                                <TableCell className="text-right tabular-nums">
+                                  {formatCurrency(
+                                    filteredPendingInvoices.reduce((s, i) => s + i.grossTotal, 0),
                                   )}
                                 </TableCell>
                               </>
