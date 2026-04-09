@@ -69,12 +69,15 @@ import {
   X,
   Loader2,
   AlertTriangle,
+  FileText,
+  Printer,
 } from "lucide-react";
 import {
   formatCurrency,
   formatPercentage,
   getCurrentPeriod,
   getPeriodLabel,
+  getPeriodShortLabel,
 } from "@/lib/utils/dates";
 import { cn } from "@/lib/utils";
 import type { AccountClassification, ClassFilterMode } from "@/lib/types/database";
@@ -143,6 +146,25 @@ interface FormAssignment {
   qbo_class_ids: string[];
 }
 
+interface ReportAccountRow {
+  accountId: string;
+  accountNumber: string | null;
+  accountName: string;
+  accountType: string;
+  role: "revenue" | "expense";
+  classFilterLabel: string;
+  monthlyValues: Record<string, number>;
+}
+
+interface ReportData {
+  entityName: string;
+  profileName: string;
+  commissionRate: number;
+  months: { year: number; month: number }[];
+  accountRows: ReportAccountRow[];
+  results: Record<string, { isPaid: boolean; paidAmount: number | null; commissionEarned: number }>;
+}
+
 // ── Page ───────────────────────────────────────────────────────────────
 
 export default function CommissionsPage() {
@@ -199,6 +221,16 @@ export default function CommissionsPage() {
   const [formNotes, setFormNotes] = useState("");
   const [formAssignments, setFormAssignments] = useState<FormAssignment[]>([]);
   const [saving, setSaving] = useState(false);
+
+  // Report
+  const [reportDialogOpen, setReportDialogOpen] = useState(false);
+  const [reportProfileId, setReportProfileId] = useState("");
+  const [reportStartYear, setReportStartYear] = useState(current.year);
+  const [reportStartMonth, setReportStartMonth] = useState(1);
+  const [reportEndYear, setReportEndYear] = useState(current.year);
+  const [reportEndMonth, setReportEndMonth] = useState(current.month);
+  const [reportLoading, setReportLoading] = useState(false);
+  const [reportData, setReportData] = useState<ReportData | null>(null);
 
   // Account picker popovers
   const [openPopovers, setOpenPopovers] = useState<Record<number, boolean>>({});
@@ -521,6 +553,82 @@ export default function CommissionsPage() {
     }
   }
 
+  // ── Report ──────────────────────────────────────────────────────────
+
+  function openReportDialog() {
+    setReportProfileId(profiles.length === 1 ? profiles[0].id : "");
+    setReportStartYear(periodYear);
+    setReportStartMonth(1);
+    setReportEndYear(periodYear);
+    setReportEndMonth(periodMonth);
+    setReportData(null);
+    setReportDialogOpen(true);
+  }
+
+  async function handleGenerateReport() {
+    if (!reportProfileId) {
+      toast.error("Please select a salesperson");
+      return;
+    }
+    if (
+      reportEndYear < reportStartYear ||
+      (reportEndYear === reportStartYear && reportEndMonth < reportStartMonth)
+    ) {
+      toast.error("End period must be after start period");
+      return;
+    }
+    setReportLoading(true);
+    try {
+      const res = await fetch("/api/commissions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "generate_report",
+          entityId,
+          profileId: reportProfileId,
+          startYear: reportStartYear,
+          startMonth: reportStartMonth,
+          endYear: reportEndYear,
+          endMonth: reportEndMonth,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setReportData(data.report);
+      } else {
+        toast.error(data.error || "Failed to generate report");
+      }
+    } catch {
+      toast.error("Failed to generate report");
+    }
+    setReportLoading(false);
+  }
+
+  function handlePrintReport() {
+    const el = document.getElementById("commission-report-content");
+    if (!el) return;
+    const win = window.open("", "_blank");
+    if (!win) return;
+    const styleLinks = Array.from(
+      document.querySelectorAll('link[rel="stylesheet"]')
+    )
+      .map((link) => link.outerHTML)
+      .join("\n");
+    const inlineStyles = Array.from(document.querySelectorAll("style"))
+      .map((s) => s.outerHTML)
+      .join("\n");
+    const orientation =
+      (reportData?.months.length ?? 0) > 4 ? "landscape" : "portrait";
+    win.document.write(
+      `<!DOCTYPE html><html><head><title>Commission Report</title>${styleLinks}${inlineStyles}<style>body{padding:0.5in;background:white}@media print{body{padding:0}@page{size:letter ${orientation}!important;margin:0.3in 0.4in}}</style></head><body>${el.outerHTML}</body></html>`
+    );
+    win.document.close();
+    setTimeout(() => {
+      win.focus();
+      win.print();
+    }, 500);
+  }
+
   // ── Dialog ───────────────────────────────────────────────────────────
 
   function openAddDialog() {
@@ -737,6 +845,10 @@ export default function CommissionsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={openReportDialog}>
+            <FileText className="mr-2 h-4 w-4" />
+            Commission Report
+          </Button>
           <Button variant="outline" onClick={openAddDialog}>
             <Plus className="mr-2 h-4 w-4" />
             Add Salesperson
@@ -1656,6 +1768,469 @@ export default function CommissionsPage() {
               </Button>
             </div>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Commission Report Dialog */}
+      <Dialog
+        open={reportDialogOpen}
+        onOpenChange={(open) => {
+          setReportDialogOpen(open);
+          if (!open) setReportData(null);
+        }}
+      >
+        <DialogContent
+          className={cn(
+            "max-h-[90vh] overflow-y-auto",
+            reportData ? "max-w-[95vw]" : "max-w-lg"
+          )}
+        >
+          {reportData ? (
+            <>
+              <DialogHeader>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <DialogTitle>Commission Report</DialogTitle>
+                    <DialogDescription>
+                      {reportData.profileName} —{" "}
+                      {getPeriodLabel(
+                        reportData.months[0].year,
+                        reportData.months[0].month
+                      )}
+                      {reportData.months.length > 1 &&
+                        ` through ${getPeriodLabel(
+                          reportData.months[reportData.months.length - 1].year,
+                          reportData.months[reportData.months.length - 1].month
+                        )}`}
+                    </DialogDescription>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setReportData(null)}
+                    >
+                      Back
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handlePrintReport}
+                    >
+                      <Printer className="mr-2 h-4 w-4" />
+                      Print
+                    </Button>
+                  </div>
+                </div>
+              </DialogHeader>
+              <div id="commission-report-content" className="overflow-x-auto">
+                {(() => {
+                  const {
+                    entityName,
+                    profileName,
+                    commissionRate,
+                    months: rMonths,
+                    accountRows,
+                  } = reportData;
+                  const revenueRows = accountRows.filter(
+                    (r) => r.role === "revenue"
+                  );
+                  const expenseRows = accountRows.filter(
+                    (r) => r.role === "expense"
+                  );
+                  const monthKeys = rMonths.map(
+                    (m) => `${m.year}-${m.month}`
+                  );
+
+                  const monthlyRevenue: Record<string, number> = {};
+                  const monthlyExpenses: Record<string, number> = {};
+                  for (const key of monthKeys) {
+                    monthlyRevenue[key] = revenueRows.reduce(
+                      (sum, r) => sum + (r.monthlyValues[key] ?? 0),
+                      0
+                    );
+                    monthlyExpenses[key] = expenseRows.reduce(
+                      (sum, r) => sum + (r.monthlyValues[key] ?? 0),
+                      0
+                    );
+                  }
+                  const totalRevenue = Object.values(monthlyRevenue).reduce(
+                    (sum, v) => sum + v,
+                    0
+                  );
+                  const totalExpenses = Object.values(monthlyExpenses).reduce(
+                    (sum, v) => sum + v,
+                    0
+                  );
+
+                  let stripeIndex = 0;
+                  const colCount = rMonths.length + 2;
+
+                  return (
+                    <div className="stmt-single-page">
+                      {/* Report Header */}
+                      <div className="stmt-header text-center space-y-0.5 mb-4">
+                        <div className="text-lg font-semibold">
+                          {entityName}
+                        </div>
+                        <div className="text-base font-semibold">
+                          Commission Report
+                        </div>
+                        <div className="text-sm">
+                          {profileName} —{" "}
+                          {formatPercentage(commissionRate)} Commission
+                          Rate
+                        </div>
+                        <div className="text-sm text-muted-foreground">
+                          {rMonths.length === 1
+                            ? getPeriodLabel(
+                                rMonths[0].year,
+                                rMonths[0].month
+                              )
+                            : `${getPeriodLabel(
+                                rMonths[0].year,
+                                rMonths[0].month
+                              )} through ${getPeriodLabel(
+                                rMonths[rMonths.length - 1].year,
+                                rMonths[rMonths.length - 1].month
+                              )}`}
+                        </div>
+                      </div>
+
+                      {/* Report Table */}
+                      <table className="stmt-table">
+                        <thead>
+                          <tr>
+                            <th>Account</th>
+                            {rMonths.map((m) => (
+                              <th key={`${m.year}-${m.month}`}>
+                                {getPeriodShortLabel(m.year, m.month)}
+                              </th>
+                            ))}
+                            <th>Total</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {/* Revenue Section */}
+                          <tr className="stmt-section-header">
+                            <td colSpan={colCount}>Revenue</td>
+                          </tr>
+                          {revenueRows.map((row) => {
+                            const isStriped = stripeIndex % 2 === 0;
+                            stripeIndex++;
+                            const rowTotal = monthKeys.reduce(
+                              (sum, k) =>
+                                sum + (row.monthlyValues[k] ?? 0),
+                              0
+                            );
+                            return (
+                              <tr
+                                key={`rev-${row.accountId}`}
+                                className={`stmt-line-item ${isStriped ? "stmt-row-striped" : ""}`}
+                              >
+                                <td>
+                                  {[row.accountNumber, row.accountName]
+                                    .filter(Boolean)
+                                    .join(" ")}
+                                  {row.classFilterLabel !==
+                                    "All Classes" && (
+                                    <span className="text-xs text-muted-foreground ml-1">
+                                      ({row.classFilterLabel})
+                                    </span>
+                                  )}
+                                </td>
+                                {monthKeys.map((k) => (
+                                  <td key={k}>
+                                    {formatCurrency(
+                                      row.monthlyValues[k] ?? 0
+                                    )}
+                                  </td>
+                                ))}
+                                <td>{formatCurrency(rowTotal)}</td>
+                              </tr>
+                            );
+                          })}
+                          {revenueRows.length === 0 && (
+                            <tr className="stmt-line-item">
+                              <td
+                                colSpan={colCount}
+                                className="text-muted-foreground italic"
+                              >
+                                No revenue accounts assigned
+                              </td>
+                            </tr>
+                          )}
+                          <tr className="stmt-subtotal">
+                            <td>Total Revenue</td>
+                            {monthKeys.map((k) => (
+                              <td key={k}>
+                                {formatCurrency(monthlyRevenue[k] ?? 0)}
+                              </td>
+                            ))}
+                            <td>{formatCurrency(totalRevenue)}</td>
+                          </tr>
+
+                          <tr className="stmt-separator">
+                            <td colSpan={colCount} />
+                          </tr>
+
+                          {/* Expense Section */}
+                          <tr className="stmt-section-header">
+                            <td colSpan={colCount}>
+                              Expense Deductions
+                            </td>
+                          </tr>
+                          {expenseRows.map((row) => {
+                            const isStriped = stripeIndex % 2 === 0;
+                            stripeIndex++;
+                            const rowTotal = monthKeys.reduce(
+                              (sum, k) =>
+                                sum + (row.monthlyValues[k] ?? 0),
+                              0
+                            );
+                            return (
+                              <tr
+                                key={`exp-${row.accountId}`}
+                                className={`stmt-line-item ${isStriped ? "stmt-row-striped" : ""}`}
+                              >
+                                <td>
+                                  {[row.accountNumber, row.accountName]
+                                    .filter(Boolean)
+                                    .join(" ")}
+                                  {row.classFilterLabel !==
+                                    "All Classes" && (
+                                    <span className="text-xs text-muted-foreground ml-1">
+                                      ({row.classFilterLabel})
+                                    </span>
+                                  )}
+                                </td>
+                                {monthKeys.map((k) => (
+                                  <td key={k}>
+                                    {formatCurrency(
+                                      row.monthlyValues[k] ?? 0
+                                    )}
+                                  </td>
+                                ))}
+                                <td>{formatCurrency(rowTotal)}</td>
+                              </tr>
+                            );
+                          })}
+                          {expenseRows.length === 0 && (
+                            <tr className="stmt-line-item">
+                              <td
+                                colSpan={colCount}
+                                className="text-muted-foreground italic"
+                              >
+                                No expense accounts assigned
+                              </td>
+                            </tr>
+                          )}
+                          <tr className="stmt-subtotal">
+                            <td>Total Expense Deductions</td>
+                            {monthKeys.map((k) => (
+                              <td key={k}>
+                                {formatCurrency(
+                                  monthlyExpenses[k] ?? 0
+                                )}
+                              </td>
+                            ))}
+                            <td>{formatCurrency(totalExpenses)}</td>
+                          </tr>
+
+                          <tr className="stmt-separator">
+                            <td colSpan={colCount} />
+                          </tr>
+
+                          {/* Commission Summary */}
+                          <tr className="stmt-subtotal">
+                            <td>Commission Base</td>
+                            {monthKeys.map((k) => (
+                              <td key={k}>
+                                {formatCurrency(
+                                  (monthlyRevenue[k] ?? 0) -
+                                    (monthlyExpenses[k] ?? 0)
+                                )}
+                              </td>
+                            ))}
+                            <td>
+                              {formatCurrency(
+                                totalRevenue - totalExpenses
+                              )}
+                            </td>
+                          </tr>
+                          <tr className="stmt-margin-row">
+                            <td style={{ paddingLeft: "2rem" }}>
+                              Commission Rate
+                            </td>
+                            {monthKeys.map((k) => (
+                              <td key={k}>
+                                {formatPercentage(commissionRate)}
+                              </td>
+                            ))}
+                            <td>
+                              {formatPercentage(commissionRate)}
+                            </td>
+                          </tr>
+                          <tr className="stmt-grand-total">
+                            <td>Commission Earned</td>
+                            {monthKeys.map((k) => {
+                              const base =
+                                (monthlyRevenue[k] ?? 0) -
+                                (monthlyExpenses[k] ?? 0);
+                              return (
+                                <td key={k}>
+                                  {formatCurrency(
+                                    base * commissionRate
+                                  )}
+                                </td>
+                              );
+                            })}
+                            <td>
+                              {formatCurrency(
+                                (totalRevenue - totalExpenses) *
+                                  commissionRate
+                              )}
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  );
+                })()}
+              </div>
+            </>
+          ) : (
+            <>
+              <DialogHeader>
+                <DialogTitle>Commission Report</DialogTitle>
+                <DialogDescription>
+                  Select a salesperson and date range to generate a
+                  detailed commission report.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <Label>Salesperson</Label>
+                  <Select
+                    value={reportProfileId}
+                    onValueChange={setReportProfileId}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select salesperson..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {profiles.map((p) => (
+                        <SelectItem key={p.id} value={p.id}>
+                          {p.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Start Period</Label>
+                  <div className="flex items-center gap-2">
+                    <Select
+                      value={String(reportStartMonth)}
+                      onValueChange={(v) =>
+                        setReportStartMonth(Number(v))
+                      }
+                    >
+                      <SelectTrigger className="w-[140px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {months.map((m) => (
+                          <SelectItem key={m} value={String(m)}>
+                            {new Date(2000, m - 1).toLocaleString(
+                              "default",
+                              { month: "long" }
+                            )}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Select
+                      value={String(reportStartYear)}
+                      onValueChange={(v) =>
+                        setReportStartYear(Number(v))
+                      }
+                    >
+                      <SelectTrigger className="w-[100px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {years.map((y) => (
+                          <SelectItem key={y} value={String(y)}>
+                            {y}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label>End Period</Label>
+                  <div className="flex items-center gap-2">
+                    <Select
+                      value={String(reportEndMonth)}
+                      onValueChange={(v) =>
+                        setReportEndMonth(Number(v))
+                      }
+                    >
+                      <SelectTrigger className="w-[140px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {months.map((m) => (
+                          <SelectItem key={m} value={String(m)}>
+                            {new Date(2000, m - 1).toLocaleString(
+                              "default",
+                              { month: "long" }
+                            )}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Select
+                      value={String(reportEndYear)}
+                      onValueChange={(v) =>
+                        setReportEndYear(Number(v))
+                      }
+                    >
+                      <SelectTrigger className="w-[100px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {years.map((y) => (
+                          <SelectItem key={y} value={String(y)}>
+                            {y}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div className="flex justify-end gap-2 pt-2">
+                  <Button
+                    variant="outline"
+                    onClick={() => setReportDialogOpen(false)}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    onClick={handleGenerateReport}
+                    disabled={reportLoading}
+                  >
+                    {reportLoading && (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    )}
+                    Generate Report
+                  </Button>
+                </div>
+              </div>
+            </>
+          )}
         </DialogContent>
       </Dialog>
     </div>

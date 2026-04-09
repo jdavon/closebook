@@ -656,5 +656,192 @@ export async function POST(request: Request) {
     });
   }
 
+  // ── Generate Report ──────────────────────────────────────────────────
+  if (action === "generate_report") {
+    const { entityId, profileId, startYear, startMonth, endYear, endMonth } = body;
+
+    if (!entityId || !profileId || !startYear || !startMonth || !endYear || !endMonth) {
+      return NextResponse.json(
+        { error: "entityId, profileId, startYear, startMonth, endYear, endMonth are required" },
+        { status: 400 }
+      );
+    }
+
+    // Get entity name
+    const { data: entity } = await adminClient
+      .from("entities")
+      .select("name")
+      .eq("id", entityId)
+      .single();
+
+    // Get profile
+    const { data: profile } = await adminClient
+      .from("commission_profiles")
+      .select("*")
+      .eq("id", profileId)
+      .single();
+
+    if (!profile) {
+      return NextResponse.json({ error: "Profile not found" }, { status: 404 });
+    }
+
+    // Get assignments with account details
+    const { data: rawAssignments } = await adminClient
+      .from("commission_account_assignments")
+      .select(
+        "account_id, role, class_filter_mode, qbo_class_ids, accounts(name, account_number, account_type)"
+      )
+      .eq("commission_profile_id", profileId);
+
+    // Build month list
+    const monthList: { year: number; month: number }[] = [];
+    {
+      let my = startYear, mm = startMonth;
+      while (my < endYear || (my === endYear && mm <= endMonth)) {
+        monthList.push({ year: my, month: mm });
+        mm++;
+        if (mm > 12) { mm = 1; my++; }
+      }
+    }
+
+    // Year range for GL data (includes prior months for standalone derivation)
+    const minYear = startMonth === 1 ? startYear - 1 : startYear;
+    const maxYear = endYear;
+
+    // Batch-fetch all GL balances in the year range
+    const { data: allGlData } = await adminClient
+      .from("gl_balances")
+      .select("account_id, period_year, period_month, ending_balance")
+      .eq("entity_id", entityId)
+      .gte("period_year", minYear)
+      .lte("period_year", maxYear);
+
+    const rptGlMap: Record<string, Record<string, number>> = {};
+    for (const row of allGlData ?? []) {
+      const key = `${row.period_year}-${row.period_month}`;
+      if (!rptGlMap[key]) rptGlMap[key] = {};
+      rptGlMap[key][row.account_id] = Number(row.ending_balance ?? 0);
+    }
+
+    // Batch-fetch class balances for all months in range
+    const { data: allClassData } = await adminClient
+      .from("gl_class_balances")
+      .select("account_id, qbo_class_id, period_year, period_month, net_change")
+      .eq("entity_id", entityId)
+      .gte("period_year", startYear)
+      .lte("period_year", endYear);
+
+    const rptClassMap: Record<string, Record<string, number>> = {};
+    for (const row of allClassData ?? []) {
+      const key = `${row.period_year}-${row.period_month}`;
+      if (!rptClassMap[key]) rptClassMap[key] = {};
+      rptClassMap[key][`${row.account_id}__${row.qbo_class_id}`] = Number(row.net_change ?? 0);
+    }
+
+    // Fetch commission results for paid status
+    const { data: existingResults } = await adminClient
+      .from("commission_results")
+      .select("period_year, period_month, is_paid, paid_amount, commission_earned")
+      .eq("commission_profile_id", profileId);
+
+    const rptResultMap: Record<string, { isPaid: boolean; paidAmount: number | null; commissionEarned: number }> = {};
+    for (const r of existingResults ?? []) {
+      rptResultMap[`${r.period_year}-${r.period_month}`] = {
+        isPaid: r.is_paid,
+        paidAmount: r.paid_amount != null ? Number(r.paid_amount) : null,
+        commissionEarned: Number(r.commission_earned),
+      };
+    }
+
+    // QBO class names
+    const { data: rptClasses } = await adminClient
+      .from("qbo_classes")
+      .select("id, name")
+      .eq("entity_id", entityId);
+    const rptClassNameMap: Record<string, string> = {};
+    for (const cls of rptClasses ?? []) {
+      rptClassNameMap[cls.id] = cls.name;
+    }
+
+    // Process each assignment across all months
+    const accountRows = [];
+    for (const raw of rawAssignments ?? []) {
+      const a = {
+        account_id: raw.account_id as string,
+        role: raw.role as "revenue" | "expense",
+        class_filter_mode: ((raw.class_filter_mode as string) ?? "all"),
+        qbo_class_ids: ((raw.qbo_class_ids as string[]) ?? []),
+        accounts: raw.accounts as { name: string; account_number: string | null; account_type: string } | null,
+      };
+
+      let classFilterLabel = "All Classes";
+      if (a.class_filter_mode !== "all" && a.qbo_class_ids.length > 0) {
+        const names = a.qbo_class_ids.map((id: string) => rptClassNameMap[id] ?? "Unknown").sort();
+        classFilterLabel = `${a.class_filter_mode === "include" ? "Include" : "Exclude"}: ${names.join(", ")}`;
+      }
+
+      const monthlyValues: Record<string, number> = {};
+      for (const { year: mYear, month: mMonth } of monthList) {
+        const periodKey = `${mYear}-${mMonth}`;
+        const isFYStart = mMonth === 1;
+        const priorM = mMonth === 1 ? 12 : mMonth - 1;
+        const priorY = mMonth === 1 ? mYear - 1 : mYear;
+        const priorKey = `${priorY}-${priorM}`;
+        const curGl = rptGlMap[periodKey] ?? {};
+        const priGl = rptGlMap[priorKey] ?? {};
+        const curClass = rptClassMap[periodKey] ?? {};
+
+        let netChange = 0;
+        if (a.class_filter_mode === "include" && a.qbo_class_ids.length > 0) {
+          netChange = a.qbo_class_ids.reduce(
+            (sum: number, cid: string) => sum + (curClass[`${a.account_id}__${cid}`] ?? 0),
+            0
+          );
+        } else if (a.class_filter_mode === "exclude" && a.qbo_class_ids.length > 0) {
+          const currentEnding = curGl[a.account_id] ?? 0;
+          const priorEnding = isFYStart ? 0 : (priGl[a.account_id] ?? 0);
+          const totalStandalone = currentEnding - priorEnding;
+          const excludedStandalone = a.qbo_class_ids.reduce(
+            (sum: number, cid: string) => sum + (curClass[`${a.account_id}__${cid}`] ?? 0),
+            0
+          );
+          netChange = totalStandalone - excludedStandalone;
+        } else {
+          const currentEnding = curGl[a.account_id] ?? 0;
+          if (isFYStart) {
+            netChange = currentEnding;
+          } else {
+            const priorEnding = priGl[a.account_id] ?? 0;
+            netChange = currentEnding - priorEnding;
+          }
+        }
+
+        monthlyValues[periodKey] = (a.role === "revenue" ? netChange * -1 : netChange) || 0;
+      }
+
+      accountRows.push({
+        accountId: a.account_id,
+        accountNumber: a.accounts?.account_number ?? null,
+        accountName: a.accounts?.name ?? "Unknown",
+        accountType: a.accounts?.account_type ?? "",
+        role: a.role,
+        classFilterLabel,
+        monthlyValues,
+      });
+    }
+
+    return NextResponse.json({
+      success: true,
+      report: {
+        entityName: (entity as { name: string } | null)?.name ?? "Unknown Entity",
+        profileName: profile.name,
+        commissionRate: Number(profile.commission_rate),
+        months: monthList,
+        accountRows,
+        results: rptResultMap,
+      },
+    });
+  }
+
   return NextResponse.json({ error: "Unknown action" }, { status: 400 });
 }
