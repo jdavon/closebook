@@ -140,6 +140,7 @@ export interface RevenueProjectionResponse {
   pipelineQuotes: PipelineQuote[];
   closedInvoices: ClosedInvoice[];
   unbilledOrders: PipelineOrder[];
+  overdueActiveOrders: PipelineOrder[];
   equipmentBreakdown: EquipmentBreakdown[];
   dataAsOf: string;
   dateMode: DateMode;
@@ -624,6 +625,34 @@ export function processRevenueData(
     }))
     .sort((a, b) => b.total - a.total);
 
+  // --- Overdue active: non-complete active orders whose rental period has ended ---
+  const todayMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  const overdueActiveOrders: PipelineOrder[] = vsOrders
+    .filter((o) => {
+      const status = (o.Status || "").toUpperCase();
+      if (TERMINAL_ORDER_STATUSES.has(status) || status === "COMPLETE") return false;
+      if (!o.EstimatedStopDate) return false;
+      const endParts = parseDateParts(o.EstimatedStopDate);
+      if (!endParts) return false;
+      const endMs = utcDate(endParts.y, endParts.m, endParts.d);
+      return endMs < todayMs;
+    })
+    .map((o) => ({
+      orderId: o.OrderId,
+      orderNumber: o.OrderNumber,
+      customer: o.Customer,
+      deal: o.Deal || "",
+      description: o.Description || "",
+      total: toNum(o.Total),
+      status: o.Status,
+      orderDate: o.OrderDate,
+      estimatedStartDate: o.EstimatedStartDate || "",
+      estimatedStopDate: o.EstimatedStopDate || "",
+      equipmentType: classifyEquipmentType(o.Description || ""),
+      warehouse: o.Warehouse,
+    }))
+    .sort((a, b) => b.total - a.total);
+
   // --- Invoices table (closed + pending) ---
   const allDisplayInvoices = [...closedInvoices, ...pendingInvoices];
   const closedInvoiceRows: ClosedInvoice[] = allDisplayInvoices
@@ -703,6 +732,7 @@ export function processRevenueData(
     pipelineQuotes,
     closedInvoices: closedInvoiceRows,
     unbilledOrders,
+    overdueActiveOrders,
     equipmentBreakdown,
     dataAsOf: new Date().toISOString(),
     dateMode,

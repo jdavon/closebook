@@ -1704,6 +1704,7 @@ export default function RevenueProjectionPage({ entityId: entityIdProp, isEmbed,
                           <TableHead>Deal</TableHead>
                           <TableHead>Description</TableHead>
                           <TableHead>Rental Dates</TableHead>
+                          <TableHead className="text-right">Days Outstanding</TableHead>
                           {showAllocation && <TableHead className="text-right">Order Total</TableHead>}
                           <TableHead className="text-right">{showAllocation ? "Allocated" : "Total"}</TableHead>
                           <TableHead>Type</TableHead>
@@ -1725,6 +1726,17 @@ export default function RevenueProjectionPage({ entityId: entityIdProp, isEmbed,
                             <TableCell className="text-muted-foreground whitespace-nowrap">
                               {order.estimatedStartDate ? `${formatDate(order.estimatedStartDate)} – ${formatDate(order.estimatedStopDate)}` : "—"}
                             </TableCell>
+                            <TableCell className="text-right tabular-nums">
+                              {(() => {
+                                if (!order.estimatedStopDate) return "—";
+                                const end = new Date(order.estimatedStopDate);
+                                const today = new Date();
+                                today.setHours(0, 0, 0, 0);
+                                end.setHours(0, 0, 0, 0);
+                                const days = Math.floor((today.getTime() - end.getTime()) / 86400000);
+                                return days > 0 ? days : "—";
+                              })()}
+                            </TableCell>
                             {showAllocation && (
                               <TableCell className="text-right tabular-nums text-muted-foreground">
                                 {formatCurrency(order.total)}
@@ -1742,7 +1754,7 @@ export default function RevenueProjectionPage({ entityId: entityIdProp, isEmbed,
                           </TableRow>
                         ))}
                         <TableRow className="border-t-2 font-semibold">
-                          <TableCell colSpan={5}>
+                          <TableCell colSpan={6}>
                             Total {unbilledMonthFilter === "all" ? "Unbilled" : `(${filteredUnbilledOrders.length} orders)`}
                           </TableCell>
                           {showAllocation && (
@@ -1762,6 +1774,91 @@ export default function RevenueProjectionPage({ entityId: entityIdProp, isEmbed,
               )}
             </CardContent>
           </Card>
+
+          {/* Overdue Active Orders */}
+          {data.overdueActiveOrders.length > 0 && (
+            <Card className="mt-4">
+              <CardHeader>
+                <div>
+                  <CardTitle>Overdue Active Orders</CardTitle>
+                  <CardDescription>
+                    Active orders whose rental period has ended but are not yet marked complete
+                  </CardDescription>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Order #</TableHead>
+                      <TableHead>Customer</TableHead>
+                      <TableHead>Deal</TableHead>
+                      <TableHead>Description</TableHead>
+                      <TableHead>Rental Dates</TableHead>
+                      <TableHead className="text-right">Days Outstanding</TableHead>
+                      <TableHead className="text-right">Total</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Type</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {data.overdueActiveOrders.map((order) => (
+                      <TableRow key={order.orderId}>
+                        <TableCell className="font-medium">
+                          {order.orderNumber}
+                        </TableCell>
+                        <TableCell>{order.customer}</TableCell>
+                        <TableCell className="max-w-[150px] truncate">
+                          {order.deal}
+                        </TableCell>
+                        <TableCell className="max-w-[200px] truncate">
+                          {order.description}
+                        </TableCell>
+                        <TableCell className="text-muted-foreground whitespace-nowrap">
+                          {order.estimatedStartDate ? `${formatDate(order.estimatedStartDate)} – ${formatDate(order.estimatedStopDate)}` : "—"}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {(() => {
+                            if (!order.estimatedStopDate) return "—";
+                            const end = new Date(order.estimatedStopDate);
+                            const today = new Date();
+                            today.setHours(0, 0, 0, 0);
+                            end.setHours(0, 0, 0, 0);
+                            const days = Math.floor((today.getTime() - end.getTime()) / 86400000);
+                            return days > 0 ? days : "—";
+                          })()}
+                        </TableCell>
+                        <TableCell className="text-right font-medium tabular-nums">
+                          {formatCurrency(order.total)}
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant="outline">
+                            {order.status}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant="secondary">
+                            {EQUIPMENT_TYPE_LABELS[order.equipmentType] ||
+                              order.equipmentType}
+                          </Badge>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                    <TableRow className="border-t-2 font-semibold">
+                      <TableCell colSpan={6}>
+                        Total ({data.overdueActiveOrders.length} orders)
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {formatCurrency(data.overdueActiveOrders.reduce((s, o) => s + o.total, 0))}
+                      </TableCell>
+                      <TableCell />
+                      <TableCell />
+                    </TableRow>
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+          )}
         </TabsContent>
 
         {/* Insights Tab */}
