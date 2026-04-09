@@ -1866,6 +1866,15 @@ export default function CommissionsPage() {
                   let stripeIndex = 0;
                   const colCount = rMonths.length + 2;
 
+                  const fmtVal = (v: number) =>
+                    v < 0 ? (
+                      <span className="stmt-negative">
+                        {formatCurrency(v)}
+                      </span>
+                    ) : (
+                      formatCurrency(v)
+                    );
+
                   return (
                     <div className="stmt-single-page">
                       {/* Report Header */}
@@ -1877,9 +1886,7 @@ export default function CommissionsPage() {
                           Commission Report
                         </div>
                         <div className="text-sm">
-                          {profileName} —{" "}
-                          {formatPercentage(commissionRate)} Commission
-                          Rate
+                          {profileName}
                         </div>
                         <div className="text-sm text-muted-foreground">
                           {rMonths.length === 1
@@ -1941,12 +1948,10 @@ export default function CommissionsPage() {
                                 </td>
                                 {monthKeys.map((k) => (
                                   <td key={k}>
-                                    {formatCurrency(
-                                      row.monthlyValues[k] ?? 0
-                                    )}
+                                    {fmtVal(row.monthlyValues[k] ?? 0)}
                                   </td>
                                 ))}
-                                <td>{formatCurrency(rowTotal)}</td>
+                                <td>{fmtVal(rowTotal)}</td>
                               </tr>
                             );
                           })}
@@ -1964,10 +1969,10 @@ export default function CommissionsPage() {
                             <td>Total Revenue</td>
                             {monthKeys.map((k) => (
                               <td key={k}>
-                                {formatCurrency(monthlyRevenue[k] ?? 0)}
+                                {fmtVal(monthlyRevenue[k] ?? 0)}
                               </td>
                             ))}
-                            <td>{formatCurrency(totalRevenue)}</td>
+                            <td>{fmtVal(totalRevenue)}</td>
                           </tr>
 
                           <tr className="stmt-separator">
@@ -2006,12 +2011,10 @@ export default function CommissionsPage() {
                                 </td>
                                 {monthKeys.map((k) => (
                                   <td key={k}>
-                                    {formatCurrency(
-                                      row.monthlyValues[k] ?? 0
-                                    )}
+                                    {fmtVal(row.monthlyValues[k] ?? 0)}
                                   </td>
                                 ))}
-                                <td>{formatCurrency(rowTotal)}</td>
+                                <td>{fmtVal(rowTotal)}</td>
                               </tr>
                             );
                           })}
@@ -2029,12 +2032,10 @@ export default function CommissionsPage() {
                             <td>Total Expense Deductions</td>
                             {monthKeys.map((k) => (
                               <td key={k}>
-                                {formatCurrency(
-                                  monthlyExpenses[k] ?? 0
-                                )}
+                                {fmtVal(monthlyExpenses[k] ?? 0)}
                               </td>
                             ))}
-                            <td>{formatCurrency(totalExpenses)}</td>
+                            <td>{fmtVal(totalExpenses)}</td>
                           </tr>
 
                           <tr className="stmt-separator">
@@ -2046,14 +2047,14 @@ export default function CommissionsPage() {
                             <td>Commission Base</td>
                             {monthKeys.map((k) => (
                               <td key={k}>
-                                {formatCurrency(
+                                {fmtVal(
                                   (monthlyRevenue[k] ?? 0) -
                                     (monthlyExpenses[k] ?? 0)
                                 )}
                               </td>
                             ))}
                             <td>
-                              {formatCurrency(
+                              {fmtVal(
                                 totalRevenue - totalExpenses
                               )}
                             </td>
@@ -2079,14 +2080,12 @@ export default function CommissionsPage() {
                                 (monthlyExpenses[k] ?? 0);
                               return (
                                 <td key={k}>
-                                  {formatCurrency(
-                                    base * commissionRate
-                                  )}
+                                  {fmtVal(base * commissionRate)}
                                 </td>
                               );
                             })}
                             <td>
-                              {formatCurrency(
+                              {fmtVal(
                                 (totalRevenue - totalExpenses) *
                                   commissionRate
                               )}
