@@ -124,10 +124,10 @@ const EMPTY_TIER: RebateTier = {
   max_disc_studio: 0,
 };
 
-export default function RebateTrackerPage() {
+export default function RebateTrackerPage({ entityId: entityIdProp, isEmbed }: { entityId?: string; isEmbed?: boolean } = {}) {
   const params = useParams();
   const router = useRouter();
-  const entityId = params.entityId as string;
+  const entityId = entityIdProp || (params.entityId as string);
 
   const [customers, setCustomers] = useState<RebateCustomer[]>([]);
   const [allTiers, setAllTiers] = useState<Record<string, RebateTier[]>>({});
@@ -629,12 +629,14 @@ export default function RebateTrackerPage() {
           </p>
         </div>
         <div className="flex gap-2">
-          <Link href={`/${entityId}/rebates/settings`}>
-            <Button variant="outline" size="sm">
-              <Settings className="mr-2 h-4 w-4" />
-              Settings
-            </Button>
-          </Link>
+          {!isEmbed && (
+            <Link href={`/${entityId}/rebates/settings`}>
+              <Button variant="outline" size="sm">
+                <Settings className="mr-2 h-4 w-4" />
+                Settings
+              </Button>
+            </Link>
+          )}
           <Button
             variant="outline"
             size="sm"
