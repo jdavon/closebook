@@ -704,38 +704,59 @@ export async function POST(request: Request) {
       }
     }
 
-    // Year range for GL data (includes prior months for standalone derivation)
-    const minYear = startMonth === 1 ? startYear - 1 : startYear;
-    const maxYear = endYear;
-
-    // Batch-fetch all GL balances in the year range
-    const { data: allGlData } = await adminClient
-      .from("gl_balances")
-      .select("account_id, period_year, period_month, ending_balance")
-      .eq("entity_id", entityId)
-      .gte("period_year", minYear)
-      .lte("period_year", maxYear);
-
+    // Fetch GL balances and class balances per-month to avoid Supabase row limits.
+    // Each month query returns one row per account (well under 1000).
     const rptGlMap: Record<string, Record<string, number>> = {};
-    for (const row of allGlData ?? []) {
-      const key = `${row.period_year}-${row.period_month}`;
-      if (!rptGlMap[key]) rptGlMap[key] = {};
-      rptGlMap[key][row.account_id] = Number(row.ending_balance ?? 0);
-    }
-
-    // Batch-fetch class balances for all months in range
-    const { data: allClassData } = await adminClient
-      .from("gl_class_balances")
-      .select("account_id, qbo_class_id, period_year, period_month, net_change")
-      .eq("entity_id", entityId)
-      .gte("period_year", startYear)
-      .lte("period_year", endYear);
-
     const rptClassMap: Record<string, Record<string, number>> = {};
-    for (const row of allClassData ?? []) {
-      const key = `${row.period_year}-${row.period_month}`;
-      if (!rptClassMap[key]) rptClassMap[key] = {};
-      rptClassMap[key][`${row.account_id}__${row.qbo_class_id}`] = Number(row.net_change ?? 0);
+
+    for (const { year: mY, month: mM } of monthList) {
+      const periodKey = `${mY}-${mM}`;
+      const isFYStart = mM === 1;
+      const priorM = mM === 1 ? 12 : mM - 1;
+      const priorY = mM === 1 ? mY - 1 : mY;
+      const priorKey = `${priorY}-${priorM}`;
+
+      // Current month GL balances
+      if (!rptGlMap[periodKey]) {
+        const { data } = await adminClient
+          .from("gl_balances")
+          .select("account_id, ending_balance")
+          .eq("entity_id", entityId)
+          .eq("period_year", mY)
+          .eq("period_month", mM);
+        rptGlMap[periodKey] = {};
+        for (const row of data ?? []) {
+          rptGlMap[periodKey][row.account_id] = Number(row.ending_balance ?? 0);
+        }
+      }
+
+      // Prior month GL balances (for standalone derivation)
+      if (!isFYStart && !rptGlMap[priorKey]) {
+        const { data } = await adminClient
+          .from("gl_balances")
+          .select("account_id, ending_balance")
+          .eq("entity_id", entityId)
+          .eq("period_year", priorY)
+          .eq("period_month", priorM);
+        rptGlMap[priorKey] = {};
+        for (const row of data ?? []) {
+          rptGlMap[priorKey][row.account_id] = Number(row.ending_balance ?? 0);
+        }
+      }
+
+      // Class balances for current month (already standalone monthly)
+      if (!rptClassMap[periodKey]) {
+        const { data } = await adminClient
+          .from("gl_class_balances")
+          .select("account_id, qbo_class_id, net_change")
+          .eq("entity_id", entityId)
+          .eq("period_year", mY)
+          .eq("period_month", mM);
+        rptClassMap[periodKey] = {};
+        for (const row of data ?? []) {
+          rptClassMap[periodKey][`${row.account_id}__${row.qbo_class_id}`] = Number(row.net_change ?? 0);
+        }
+      }
     }
 
     // Fetch commission results for paid status
