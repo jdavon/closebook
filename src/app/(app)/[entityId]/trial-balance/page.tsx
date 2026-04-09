@@ -58,6 +58,7 @@ import {
   Check,
   ChevronsUpDown,
   Link2,
+  Download,
 } from "lucide-react";
 import {
   formatCurrency,
@@ -314,6 +315,68 @@ export default function TrialBalancePage() {
     }, 8000);
   }
 
+  function handleExport() {
+    if (balances.length === 0) return;
+
+    const rows: string[][] = [
+      ["Account #", "Account Name", "Classification", "Type", "Debit", "Credit", "Net Balance"],
+    ];
+
+    for (const classification of CLASSIFICATION_ORDER) {
+      const classBalances = grouped[classification];
+      if (!classBalances || classBalances.length === 0) continue;
+
+      let classDebits = 0;
+      let classCredits = 0;
+
+      for (const b of classBalances) {
+        classDebits += b.debit_total ?? 0;
+        classCredits += b.credit_total ?? 0;
+        rows.push([
+          b.accounts?.account_number ?? "",
+          b.accounts?.name ?? "",
+          classification,
+          b.accounts?.account_type ?? "",
+          (b.debit_total ?? 0).toFixed(2),
+          (b.credit_total ?? 0).toFixed(2),
+          b.ending_balance.toFixed(2),
+        ]);
+      }
+
+      rows.push([
+        "",
+        `${classification} Total`,
+        "",
+        "",
+        classDebits.toFixed(2),
+        classCredits.toFixed(2),
+        (classDebits - classCredits).toFixed(2),
+      ]);
+    }
+
+    rows.push([
+      "",
+      "Grand Total",
+      "",
+      "",
+      totalDebits.toFixed(2),
+      totalCredits.toFixed(2),
+      difference.toFixed(2),
+    ]);
+
+    const csv = rows
+      .map((r) => r.map((c) => `"${c.replace(/"/g, '""')}"`).join(","))
+      .join("\n");
+
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `trial-balance_${year}-${month.padStart(2, "0")}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   function navigatePeriod(direction: "prev" | "next") {
     const y = parseInt(year);
     const m = parseInt(month);
@@ -465,6 +528,14 @@ export default function TrialBalancePage() {
             title="Next month"
           >
             <ChevronsRight className="h-4 w-4" />
+          </Button>
+          <Button
+            variant="outline"
+            onClick={handleExport}
+            disabled={balances.length === 0}
+          >
+            <Download className="mr-2 h-4 w-4" />
+            Export CSV
           </Button>
           <Button
             variant="outline"
