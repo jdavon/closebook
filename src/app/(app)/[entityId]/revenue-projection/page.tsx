@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useMemo, useCallback } from "react";
-import { useParams, useSearchParams } from "next/navigation";
+import { useParams } from "next/navigation";
 import {
   Card,
   CardContent,
@@ -38,8 +38,6 @@ import {
   ArrowDownRight,
   Minus,
   Calendar,
-  AlertTriangle,
-  ArrowUpDown,
 } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency } from "@/lib/utils/dates";
@@ -53,7 +51,6 @@ import {
   type RWInvoiceRow,
   type RWOrderRow,
   type RWQuoteRow,
-  type UnbilledOrder,
 } from "@/lib/utils/revenue-projection";
 import {
   ComposedChart,
@@ -219,9 +216,7 @@ function EquipmentTooltip({ active, payload }: { active?: boolean; payload?: Arr
 
 export default function RevenueProjectionPage({ entityId: entityIdProp, isEmbed, defaultTab }: { entityId?: string; isEmbed?: boolean; defaultTab?: string } = {}) {
   const params = useParams();
-  const searchParams = useSearchParams();
   const entityId = entityIdProp || (params.entityId as string);
-  const initialTab = defaultTab || searchParams.get("tab") || "overview";
 
   // Raw rows from the API — cached so we can re-process client-side on mode change
   const [rawInvoices, setRawInvoices] = useState<RWInvoiceRow[] | null>(null);
@@ -236,7 +231,6 @@ export default function RevenueProjectionPage({ entityId: entityIdProp, isEmbed,
   const [pipelineMonthFilter, setPipelineMonthFilter] = useState<string>("all");
   const [unbilledMonthFilter, setUnbilledMonthFilter] = useState<string>("all");
   const [chartDrillDown, setChartDrillDown] = useState<{ month: string; label: string; category: "closed" | "pending" | "pipeline" } | null>(null);
-  const [unbilledSort, setUnbilledSort] = useState<{ field: "daysOutstanding" | "total"; dir: "desc" | "asc" }>({ field: "daysOutstanding", dir: "desc" });
 
   const fetchData = async () => {
     setLoading(true);
@@ -596,26 +590,6 @@ export default function RevenueProjectionPage({ entityId: entityIdProp, isEmbed,
     return { invoices, orders: [] as Array<typeof data.pipelineOrders[number] & { allocatedAmount: number }> };
   }, [chartDrillDown, data, dateMode]);
 
-  const sortedUnbilledOrders = useMemo(() => {
-    if (!data) return [];
-    const orders = [...data.unbilledOrders];
-    const { field, dir } = unbilledSort;
-    orders.sort((a, b) => {
-      const va = field === "total" ? a.total : a.daysOutstanding;
-      const vb = field === "total" ? b.total : b.daysOutstanding;
-      return dir === "desc" ? vb - va : va - vb;
-    });
-    return orders;
-  }, [data, unbilledSort]);
-
-  const toggleUnbilledSort = useCallback((field: "daysOutstanding" | "total") => {
-    setUnbilledSort((prev) =>
-      prev.field === field
-        ? { field, dir: prev.dir === "desc" ? "asc" : "desc" }
-        : { field, dir: "desc" }
-    );
-  }, []);
-
   const handleBarClick = useCallback((category: "closed" | "pending" | "pipeline") => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return (barData: any) => {
@@ -847,7 +821,7 @@ export default function RevenueProjectionPage({ entityId: entityIdProp, isEmbed,
       </div>
 
       {/* Tabs */}
-      <Tabs defaultValue={initialTab}>
+      <Tabs defaultValue={defaultTab || "overview"}>
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="invoices">
@@ -859,6 +833,11 @@ export default function RevenueProjectionPage({ entityId: entityIdProp, isEmbed,
           <TabsTrigger value="quotes">
             Quotes ({data.pipelineQuotes.length})
           </TabsTrigger>
+          {data.unbilledOrders.length > 0 && (
+            <TabsTrigger value="unbilled">
+              Unbilled ({data.unbilledOrders.length})
+            </TabsTrigger>
+          )}
           {!isEmbed && (
             <TabsTrigger value="insights">
               <Lightbulb className="mr-1.5 h-3.5 w-3.5" />
@@ -877,10 +856,6 @@ export default function RevenueProjectionPage({ entityId: entityIdProp, isEmbed,
               Accruals
             </TabsTrigger>
           )}
-          <TabsTrigger value="unbilled">
-            <AlertTriangle className="mr-1.5 h-3.5 w-3.5" />
-            Unbilled ({data.unbilledOrders.length})
-          </TabsTrigger>
         </TabsList>
 
         {/* Overview Tab */}
@@ -1820,97 +1795,6 @@ export default function RevenueProjectionPage({ entityId: entityIdProp, isEmbed,
           ) : (
             <p className="text-muted-foreground py-8 text-center text-sm">Loading accrual data…</p>
           )}
-        </TabsContent>
-
-        {/* Unbilled Tab */}
-        <TabsContent value="unbilled">
-          <div className="mb-4 grid grid-cols-2 gap-4 sm:grid-cols-4">
-            <Card>
-              <CardContent className="pt-6">
-                <p className="text-muted-foreground text-xs font-medium uppercase tracking-wide">Unbilled Orders</p>
-                <p className="mt-1 text-2xl font-bold">{data.unbilledOrders.length}</p>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardContent className="pt-6">
-                <p className="text-muted-foreground text-xs font-medium uppercase tracking-wide">Unbilled Revenue</p>
-                <p className="mt-1 text-2xl font-bold text-emerald-700">{formatCurrency(data.unbilledRevenue)}</p>
-              </CardContent>
-            </Card>
-          </div>
-          <Card>
-            <CardHeader>
-              <CardTitle>Past-Due Active Orders</CardTitle>
-              <CardDescription>
-                Active orders past their final rental date that have not been invoiced
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {sortedUnbilledOrders.length === 0 ? (
-                <p className="text-muted-foreground py-8 text-center text-sm">
-                  No unbilled past-due orders found.
-                </p>
-              ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Order #</TableHead>
-                      <TableHead>Customer</TableHead>
-                      <TableHead>Description</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Final Rental Date</TableHead>
-                      <TableHead
-                        className="cursor-pointer select-none text-right"
-                        onClick={() => toggleUnbilledSort("daysOutstanding")}
-                      >
-                        <span className="inline-flex items-center gap-1">
-                          Days Outstanding
-                          <ArrowUpDown className={`h-3.5 w-3.5 ${unbilledSort.field === "daysOutstanding" ? "text-foreground" : "text-muted-foreground/50"}`} />
-                        </span>
-                      </TableHead>
-                      <TableHead
-                        className="cursor-pointer select-none text-right"
-                        onClick={() => toggleUnbilledSort("total")}
-                      >
-                        <span className="inline-flex items-center gap-1">
-                          Total
-                          <ArrowUpDown className={`h-3.5 w-3.5 ${unbilledSort.field === "total" ? "text-foreground" : "text-muted-foreground/50"}`} />
-                        </span>
-                      </TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {sortedUnbilledOrders.map((order) => (
-                      <TableRow key={order.orderId} className={order.daysOutstanding > 30 ? "bg-rose-50" : ""}>
-                        <TableCell className="font-medium">{order.orderNumber}</TableCell>
-                        <TableCell>{order.customer}</TableCell>
-                        <TableCell className="max-w-[200px] truncate">{order.description || order.deal}</TableCell>
-                        <TableCell>
-                          <Badge variant="outline">{order.status}</Badge>
-                        </TableCell>
-                        <TableCell className="text-muted-foreground">
-                          {order.estimatedStopDate}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          <span className={`font-semibold ${order.daysOutstanding > 30 ? "text-rose-600" : order.daysOutstanding > 14 ? "text-amber-600" : ""}`}>
-                            {order.daysOutstanding} days
-                          </span>
-                        </TableCell>
-                        <TableCell className="text-right font-medium tabular-nums">
-                          {formatCurrency(order.total)}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                    <TableRow className="border-t-2 font-semibold">
-                      <TableCell colSpan={5}>Total Unbilled</TableCell>
-                      <TableCell className="text-right tabular-nums">{data.unbilledOrders.length} orders</TableCell>
-                      <TableCell className="text-right tabular-nums">{formatCurrency(data.unbilledRevenue)}</TableCell>
-                    </TableRow>
-                  </TableBody>
-                </Table>
-              )}
-            </CardContent>
-          </Card>
         </TabsContent>
       </Tabs>
     </div>
