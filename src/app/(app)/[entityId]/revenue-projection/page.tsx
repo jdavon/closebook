@@ -427,7 +427,8 @@ export default function RevenueProjectionPage({ entityId: entityIdProp, isEmbed,
         const names = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
         return `${names[Number(m) - 1]} ${y}`;
       });
-    for (const o of data.unbilledOrders) {
+    const allUnbilledAndOverdue = [...data.unbilledOrders, ...data.overdueActiveOrders];
+    for (const o of allUnbilledAndOverdue) {
       if (dateMode === "rental_period" && o.estimatedStartDate && o.estimatedStopDate) {
         const start = new Date(o.estimatedStartDate);
         const end = new Date(o.estimatedStopDate);
@@ -513,6 +514,60 @@ export default function RevenueProjectionPage({ entityId: entityIdProp, isEmbed,
       }
     };
     return data.unbilledOrders
+      .filter(orderMatchesMonth)
+      .map((o) => ({ ...o, allocatedAmount: computeAllocation(o) }))
+      .sort((a, b) => b.allocatedAmount - a.allocatedAmount);
+  }, [data, unbilledMonthFilter, dateMode]);
+
+  // Filter + allocate overdue active orders by selected month
+  const filteredOverdueActiveOrders = useMemo(() => {
+    if (!data) return [];
+    if (unbilledMonthFilter === "all") {
+      return data.overdueActiveOrders.map((o) => ({ ...o, allocatedAmount: o.total }));
+    }
+    const month = unbilledMonthFilter;
+    const toMonthKey = (dateStr: string) => {
+      if (!dateStr) return "";
+      const iso = dateStr.match(/^(\d{4})-(\d{2})/);
+      if (iso) return `${iso[1]}-${iso[2]}`;
+      const us = dateStr.match(/^(\d{1,2})\/\d{1,2}\/(\d{4})/);
+      if (us) return `${us[2]}-${String(us[1]).padStart(2, "0")}`;
+      return "";
+    };
+    const computeAllocation = (o: typeof data.overdueActiveOrders[number]): number => {
+      if (dateMode === "rental_period" && o.estimatedStartDate && o.estimatedStopDate) {
+        const start = new Date(o.estimatedStartDate);
+        const end = new Date(o.estimatedStopDate);
+        if (isNaN(start.getTime()) || isNaN(end.getTime())) return o.total;
+        const totalDays = Math.round((end.getTime() - start.getTime()) / 86400000) + 1;
+        if (totalDays <= 0) return o.total;
+        const [y, m] = month.split("-").map(Number);
+        const monthStart = new Date(y, m - 1, 1);
+        const monthEnd = new Date(y, m, 0);
+        const overlapStart = start > monthStart ? start : monthStart;
+        const overlapEnd = end < monthEnd ? end : monthEnd;
+        const overlapDays = Math.round((overlapEnd.getTime() - overlapStart.getTime()) / 86400000) + 1;
+        if (overlapDays <= 0) return 0;
+        return Math.round((o.total * overlapDays / totalDays) * 100) / 100;
+      }
+      return o.total;
+    };
+    const orderMatchesMonth = (o: typeof data.overdueActiveOrders[number]) => {
+      if (dateMode === "rental_period" && o.estimatedStartDate && o.estimatedStopDate) {
+        const start = new Date(o.estimatedStartDate);
+        const end = new Date(o.estimatedStopDate);
+        if (isNaN(start.getTime()) || isNaN(end.getTime())) return toMonthKey(o.orderDate) === month;
+        const [y, m] = month.split("-").map(Number);
+        const monthStart = new Date(y, m - 1, 1);
+        const monthEnd = new Date(y, m, 0);
+        return start <= monthEnd && end >= monthStart;
+      } else if (dateMode === "billing_date" && o.estimatedStartDate) {
+        return toMonthKey(o.estimatedStopDate || o.estimatedStartDate) === month;
+      } else {
+        return toMonthKey(o.orderDate) === month;
+      }
+    };
+    return data.overdueActiveOrders
       .filter(orderMatchesMonth)
       .map((o) => ({ ...o, allocatedAmount: computeAllocation(o) }))
       .sort((a, b) => b.allocatedAmount - a.allocatedAmount);
@@ -1787,75 +1842,97 @@ export default function RevenueProjectionPage({ entityId: entityIdProp, isEmbed,
                 </div>
               </CardHeader>
               <CardContent>
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Order #</TableHead>
-                      <TableHead>Customer</TableHead>
-                      <TableHead>Deal</TableHead>
-                      <TableHead>Description</TableHead>
-                      <TableHead>Rental Dates</TableHead>
-                      <TableHead className="text-right">Days Outstanding</TableHead>
-                      <TableHead className="text-right">Total</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Type</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {data.overdueActiveOrders.map((order) => (
-                      <TableRow key={order.orderId}>
-                        <TableCell className="font-medium">
-                          {order.orderNumber}
-                        </TableCell>
-                        <TableCell>{order.customer}</TableCell>
-                        <TableCell className="max-w-[150px] truncate">
-                          {order.deal}
-                        </TableCell>
-                        <TableCell className="max-w-[200px] truncate">
-                          {order.description}
-                        </TableCell>
-                        <TableCell className="text-muted-foreground whitespace-nowrap">
-                          {order.estimatedStartDate ? `${formatDate(order.estimatedStartDate)} – ${formatDate(order.estimatedStopDate)}` : "—"}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {(() => {
-                            if (!order.estimatedStopDate) return "—";
-                            const end = new Date(order.estimatedStopDate);
-                            const today = new Date();
-                            today.setHours(0, 0, 0, 0);
-                            end.setHours(0, 0, 0, 0);
-                            const days = Math.floor((today.getTime() - end.getTime()) / 86400000);
-                            return days > 0 ? days : "—";
-                          })()}
-                        </TableCell>
-                        <TableCell className="text-right font-medium tabular-nums">
-                          {formatCurrency(order.total)}
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant="outline">
-                            {order.status}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant="secondary">
-                            {EQUIPMENT_TYPE_LABELS[order.equipmentType] ||
-                              order.equipmentType}
-                          </Badge>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                    <TableRow className="border-t-2 font-semibold">
-                      <TableCell colSpan={6}>
-                        Total ({data.overdueActiveOrders.length} orders)
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {formatCurrency(data.overdueActiveOrders.reduce((s, o) => s + o.total, 0))}
-                      </TableCell>
-                      <TableCell />
-                      <TableCell />
-                    </TableRow>
-                  </TableBody>
-                </Table>
+                {filteredOverdueActiveOrders.length === 0 ? (
+                  <p className="text-muted-foreground py-8 text-center text-sm">
+                    No overdue active orders for this month.
+                  </p>
+                ) : (
+                  (() => {
+                    const showAllocation = unbilledMonthFilter !== "all" && dateMode === "rental_period";
+                    return (
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Order #</TableHead>
+                            <TableHead>Customer</TableHead>
+                            <TableHead>Deal</TableHead>
+                            <TableHead>Description</TableHead>
+                            <TableHead>Rental Dates</TableHead>
+                            <TableHead className="text-right">Days Outstanding</TableHead>
+                            {showAllocation && <TableHead className="text-right">Order Total</TableHead>}
+                            <TableHead className="text-right">{showAllocation ? "Allocated" : "Total"}</TableHead>
+                            <TableHead>Status</TableHead>
+                            <TableHead>Type</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {filteredOverdueActiveOrders.map((order) => (
+                            <TableRow key={order.orderId}>
+                              <TableCell className="font-medium">
+                                {order.orderNumber}
+                              </TableCell>
+                              <TableCell>{order.customer}</TableCell>
+                              <TableCell className="max-w-[150px] truncate">
+                                {order.deal}
+                              </TableCell>
+                              <TableCell className="max-w-[200px] truncate">
+                                {order.description}
+                              </TableCell>
+                              <TableCell className="text-muted-foreground whitespace-nowrap">
+                                {order.estimatedStartDate ? `${formatDate(order.estimatedStartDate)} – ${formatDate(order.estimatedStopDate)}` : "—"}
+                              </TableCell>
+                              <TableCell className="text-right tabular-nums">
+                                {(() => {
+                                  if (!order.estimatedStopDate) return "—";
+                                  const end = new Date(order.estimatedStopDate);
+                                  const today = new Date();
+                                  today.setHours(0, 0, 0, 0);
+                                  end.setHours(0, 0, 0, 0);
+                                  const days = Math.floor((today.getTime() - end.getTime()) / 86400000);
+                                  return days > 0 ? days : "—";
+                                })()}
+                              </TableCell>
+                              {showAllocation && (
+                                <TableCell className="text-right tabular-nums text-muted-foreground">
+                                  {formatCurrency(order.total)}
+                                </TableCell>
+                              )}
+                              <TableCell className="text-right font-medium tabular-nums">
+                                {formatCurrency(order.allocatedAmount)}
+                              </TableCell>
+                              <TableCell>
+                                <Badge variant="outline">
+                                  {order.status}
+                                </Badge>
+                              </TableCell>
+                              <TableCell>
+                                <Badge variant="secondary">
+                                  {EQUIPMENT_TYPE_LABELS[order.equipmentType] ||
+                                    order.equipmentType}
+                                </Badge>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                          <TableRow className="border-t-2 font-semibold">
+                            <TableCell colSpan={6}>
+                              Total {unbilledMonthFilter === "all" ? "Overdue Active" : `(${filteredOverdueActiveOrders.length} orders)`}
+                            </TableCell>
+                            {showAllocation && (
+                              <TableCell className="text-right tabular-nums text-muted-foreground">
+                                {formatCurrency(filteredOverdueActiveOrders.reduce((s, o) => s + o.total, 0))}
+                              </TableCell>
+                            )}
+                            <TableCell className="text-right tabular-nums">
+                              {formatCurrency(filteredOverdueActiveOrders.reduce((s, o) => s + o.allocatedAmount, 0))}
+                            </TableCell>
+                            <TableCell />
+                            <TableCell />
+                          </TableRow>
+                        </TableBody>
+                      </Table>
+                    );
+                  })()
+                )}
               </CardContent>
             </Card>
           )}
