@@ -81,6 +81,22 @@ export interface PipelineOrder {
   warehouse: string;
 }
 
+export interface UnbilledOrder {
+  orderId: string;
+  orderNumber: string;
+  customer: string;
+  deal: string;
+  description: string;
+  total: number;
+  status: string;
+  orderDate: string;
+  estimatedStartDate: string;
+  estimatedStopDate: string;
+  equipmentType: string;
+  warehouse: string;
+  daysOutstanding: number;
+}
+
 export interface PipelineQuote {
   quoteId: string;
   quoteNumber: string;
@@ -138,8 +154,9 @@ export interface RevenueProjectionResponse {
   monthlyData: MonthlyRevenue[];
   pipelineOrders: PipelineOrder[];
   pipelineQuotes: PipelineQuote[];
+  unbilledOrders: UnbilledOrder[];
+  unbilledRevenue: number;
   closedInvoices: ClosedInvoice[];
-  unbilledOrders: PipelineOrder[];
   equipmentBreakdown: EquipmentBreakdown[];
   dataAsOf: string;
   dateMode: DateMode;
@@ -599,30 +616,46 @@ export function processRevenueData(
     }))
     .sort((a, b) => b.total - a.total);
 
-  // --- Unbilled: COMPLETE orders with no matching invoice ---
-  const invoicedOrderNumbers = new Set(
-    validInvoices.map((inv) => inv.OrderNumber).filter(Boolean),
-  );
-  const unbilledOrders: PipelineOrder[] = vsOrders
+  // --- Unbilled orders: active orders past their final rental date without invoices ---
+  const invoicedOrderNumbers = new Set<string>();
+  for (const inv of [...closedInvoices, ...pendingInvoices]) {
+    const on = (inv.OrderNumber || "").trim();
+    if (on) invoicedOrderNumbers.add(on);
+  }
+
+  const todayMs = new Date().setHours(0, 0, 0, 0);
+  const unbilledOrders: UnbilledOrder[] = activeOrders
     .filter((o) => {
-      const status = (o.Status || "").toUpperCase();
-      return status === "COMPLETE" && !invoicedOrderNumbers.has(o.OrderNumber);
+      if ((o.Status || "").toUpperCase() !== "ACTIVE") return false;
+      const stopParts = parseDateParts(o.EstimatedStopDate);
+      if (!stopParts) return false;
+      const stopMs = new Date(stopParts.y, stopParts.m, stopParts.d).getTime();
+      if (stopMs >= todayMs) return false;
+      return !invoicedOrderNumbers.has((o.OrderNumber || "").trim());
     })
-    .map((o) => ({
-      orderId: o.OrderId,
-      orderNumber: o.OrderNumber,
-      customer: o.Customer,
-      deal: o.Deal || "",
-      description: o.Description || "",
-      total: toNum(o.Total),
-      status: o.Status,
-      orderDate: o.OrderDate,
-      estimatedStartDate: o.EstimatedStartDate || "",
-      estimatedStopDate: o.EstimatedStopDate || "",
-      equipmentType: classifyEquipmentType(o.Description || ""),
-      warehouse: o.Warehouse,
-    }))
-    .sort((a, b) => b.total - a.total);
+    .map((o) => {
+      const stopParts = parseDateParts(o.EstimatedStopDate)!;
+      const stopMs = new Date(stopParts.y, stopParts.m, stopParts.d).getTime();
+      const daysOutstanding = Math.floor((todayMs - stopMs) / 86400000);
+      return {
+        orderId: o.OrderId,
+        orderNumber: o.OrderNumber,
+        customer: o.Customer,
+        deal: o.Deal || "",
+        description: o.Description || "",
+        total: toNum(o.Total),
+        status: o.Status,
+        orderDate: o.OrderDate,
+        estimatedStartDate: o.EstimatedStartDate || "",
+        estimatedStopDate: o.EstimatedStopDate || "",
+        equipmentType: classifyEquipmentType(o.Description || ""),
+        warehouse: o.Warehouse,
+        daysOutstanding,
+      };
+    })
+    .sort((a, b) => b.daysOutstanding - a.daysOutstanding);
+
+  const unbilledRevenue = unbilledOrders.reduce((s, o) => s + o.total, 0);
 
   // --- Invoices table (closed + pending) ---
   const allDisplayInvoices = [...closedInvoices, ...pendingInvoices];
@@ -701,8 +734,9 @@ export function processRevenueData(
     monthlyData,
     pipelineOrders,
     pipelineQuotes,
-    closedInvoices: closedInvoiceRows,
     unbilledOrders,
+    unbilledRevenue,
+    closedInvoices: closedInvoiceRows,
     equipmentBreakdown,
     dataAsOf: new Date().toISOString(),
     dateMode,
