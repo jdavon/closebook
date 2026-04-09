@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -124,10 +124,16 @@ const EMPTY_TIER: RebateTier = {
   max_disc_studio: 0,
 };
 
-export default function RebateTrackerPage({ entityId: entityIdProp, isEmbed }: { entityId?: string; isEmbed?: boolean } = {}) {
+export default function RebateTrackerPage({ entityId: entityIdProp, isEmbed, embedKey }: { entityId?: string; isEmbed?: boolean; embedKey?: string } = {}) {
   const params = useParams();
   const router = useRouter();
   const entityId = entityIdProp || (params.entityId as string);
+
+  const apiFetch = useCallback((url: string, init: RequestInit = {}) => {
+    const headers: Record<string, string> = { "Content-Type": "application/json", ...(init.headers as Record<string, string> || {}) };
+    if (embedKey) headers["x-embed-key"] = embedKey;
+    return fetch(url, { ...init, headers });
+  }, [embedKey]);
 
   const [customers, setCustomers] = useState<RebateCustomer[]>([]);
   const [allTiers, setAllTiers] = useState<Record<string, RebateTier[]>>({});
@@ -169,9 +175,8 @@ export default function RebateTrackerPage({ entityId: entityIdProp, isEmbed }: {
   const loadData = useCallback(async () => {
     try {
       // Load config
-      const configRes = await fetch("/api/rebates", {
+      const configRes = await apiFetch("/api/rebates", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "get_config", entityId }),
       });
       const config = await configRes.json();
@@ -203,9 +208,8 @@ export default function RebateTrackerPage({ entityId: entityIdProp, isEmbed }: {
         setLoadingOrders(true);
         Promise.allSettled(
           commercialCustomers.map(async (c: RebateCustomer) => {
-            const res = await fetch("/api/rebates/sync", {
+            const res = await apiFetch("/api/rebates/sync", {
               method: "POST",
-              headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
                 action: "fetch_active_orders",
                 customerId: c.id,
@@ -232,18 +236,45 @@ export default function RebateTrackerPage({ entityId: entityIdProp, isEmbed }: {
     } finally {
       setLoading(false);
     }
-  }, [entityId]);
+  }, [entityId, apiFetch]);
 
   useEffect(() => {
     loadData();
   }, [loadData]);
 
+  // Auto-sync + calculate on mount in embed mode
+  const embedSyncDone = useRef(false);
+  useEffect(() => {
+    if (!isEmbed || embedSyncDone.current || !entityId) return;
+    embedSyncDone.current = true;
+    (async () => {
+      setSyncing(true);
+      try {
+        const syncRes = await apiFetch("/api/rebates/sync", {
+          method: "POST",
+          body: JSON.stringify({ action: "sync_all", entityId }),
+        });
+        const syncData = await syncRes.json();
+        if (syncData.success) {
+          await apiFetch("/api/rebates/calculate", {
+            method: "POST",
+            body: JSON.stringify({ action: "calculate_all", entityId }),
+          });
+          loadData();
+        }
+      } catch {
+        // Silent fail for auto-sync
+      } finally {
+        setSyncing(false);
+      }
+    })();
+  }, [isEmbed, entityId, apiFetch, loadData]);
+
   const handleSyncAll = async () => {
     setSyncing(true);
     try {
-      const res = await fetch("/api/rebates/sync", {
+      const res = await apiFetch("/api/rebates/sync", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "sync_all", entityId }),
       });
       const data = await res.json();
@@ -265,9 +296,8 @@ export default function RebateTrackerPage({ entityId: entityIdProp, isEmbed }: {
   const handleCalculateAll = async () => {
     setCalculating(true);
     try {
-      const res = await fetch("/api/rebates/calculate", {
+      const res = await apiFetch("/api/rebates/calculate", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "calculate_all", entityId }),
       });
       const data = await res.json();
@@ -288,9 +318,8 @@ export default function RebateTrackerPage({ entityId: entityIdProp, isEmbed }: {
     if (!rwSearchQuery.trim()) return;
     setRwSearching(true);
     try {
-      const res = await fetch("/api/rebates", {
+      const res = await apiFetch("/api/rebates", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "search_rw_customers",
           query: rwSearchQuery,
@@ -444,9 +473,8 @@ export default function RebateTrackerPage({ entityId: entityIdProp, isEmbed }: {
 
     setSaving(true);
     try {
-      const res = await fetch("/api/rebates", {
+      const res = await apiFetch("/api/rebates", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "upsert_customer",
           entityId,
@@ -480,9 +508,8 @@ export default function RebateTrackerPage({ entityId: entityIdProp, isEmbed }: {
         // Auto-trigger sync for new commercial customers (freelancers add invoices manually)
         if (!editingCustomer && data.customerId && formType !== "freelancer") {
           toast.info("Starting initial invoice sync...");
-          fetch("/api/rebates/sync", {
+          apiFetch("/api/rebates/sync", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               action: "sync_customer",
               entityId,
@@ -509,9 +536,8 @@ export default function RebateTrackerPage({ entityId: entityIdProp, isEmbed }: {
   const handleDeleteCustomer = async (customerId: string) => {
     if (!confirm("Delete this customer and all associated data?")) return;
     try {
-      const res = await fetch("/api/rebates", {
+      const res = await apiFetch("/api/rebates", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "delete_customer", customerId }),
       });
       const data = await res.json();

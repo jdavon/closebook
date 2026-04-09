@@ -11,12 +11,14 @@ import {
 } from "@/lib/utils/rebate-calculations";
 
 export async function POST(request: Request) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const embedKey = request.headers.get("x-embed-key");
+  const validEmbedKey = embedKey && process.env.EMBED_API_KEY && embedKey === process.env.EMBED_API_KEY;
+  if (!validEmbedKey) {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
   }
 
   const body = await request.json();

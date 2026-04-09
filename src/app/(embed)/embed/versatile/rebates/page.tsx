@@ -16,5 +16,5 @@ export default async function VersatileRebatesPage() {
     redirect("/login");
   }
 
-  return <RebatesEmbed entityId={versatile.id} />;
+  return <RebatesEmbed entityId={versatile.id} embedKey={process.env.EMBED_API_KEY || ""} />;
 }

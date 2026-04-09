@@ -3,12 +3,16 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 export async function POST(request: Request) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  let userId: string | null = null;
+  const embedKey = request.headers.get("x-embed-key");
+  const validEmbedKey = embedKey && process.env.EMBED_API_KEY && embedKey === process.env.EMBED_API_KEY;
+  if (!validEmbedKey) {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    userId = user.id;
   }
 
   const body = await request.json();
@@ -110,7 +114,7 @@ export async function POST(request: Request) {
         use_global_exclusions: customer.use_global_exclusions ?? true,
         contract_storage_path: customer.contract_storage_path,
         notes: customer.notes,
-        created_by: user.id,
+        created_by: userId,
       };
 
       let customerId = customer.id;
@@ -285,7 +289,7 @@ export async function POST(request: Request) {
         .update({
           is_paid: isPaid,
           paid_at: isPaid ? new Date().toISOString() : null,
-          paid_by: isPaid ? user.id : null,
+          paid_by: isPaid ? userId : null,
         })
         .eq("id", summaryId);
       if (error) return NextResponse.json({ error: error.message }, { status: 500 });
