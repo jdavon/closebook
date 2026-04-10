@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
+import { CurrencyInput } from "@/components/ui/currency-input";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -138,6 +139,18 @@ const US_STATES = [
 const OPENING_YEAR = 2025;
 const OPENING_MONTH = 12;
 const OPENING_LABEL = "12/31/2025";
+const OPENING_CUTOFF = "2025-12-31"; // ISO YYYY-MM-DD — safe for lexicographic compare
+
+// An asset has an opening balance worth editing only if it existed on or
+// before 12/31/2025 (i.e. acquired or placed in service by that date).
+function hasOpeningBalance(
+  acquisitionDate: string,
+  inServiceDate: string
+): boolean {
+  const acqOk = !!acquisitionDate && acquisitionDate.slice(0, 10) <= OPENING_CUTOFF;
+  const isOk = !!inServiceDate && inServiceDate.slice(0, 10) <= OPENING_CUTOFF;
+  return acqOk || isOk;
+}
 
 export default function AssetDetailPage() {
   const params = useParams();
@@ -338,7 +351,8 @@ export default function AssetDetailPage() {
     // If the opening balance changed, write a Dec-2025 override row as an
     // audit-trail marker and clear any stale non-manual entries from Jan 2026
     // onward so the next "Generate" picks up the new opening balance.
-    if (openingDirty) {
+    // Guard: only applies when the asset existed at the 12/31/2025 cutoff.
+    if (openingDirty && hasOpeningBalance(acquisitionDate, inServiceDate)) {
       const previousAccum = asset.book_accumulated_depreciation ?? 0;
       const { error: upsertError } = await supabase
         .from("fixed_asset_depreciation")
@@ -433,6 +447,8 @@ export default function AssetDetailPage() {
   if (!asset) return <p className="text-muted-foreground p-6">Asset not found</p>;
 
   const isDisposed = asset.status === "disposed";
+  const openingEligible = hasOpeningBalance(acquisitionDate, inServiceDate);
+  const openingLocked = isDisposed || !openingEligible;
   const taxBasis = asset.tax_cost_basis ?? asset.acquisition_cost;
   const assetAccounts = accounts.filter((a) => a.classification === "Asset");
   const expenseAccounts = accounts.filter((a) => a.classification === "Expense");
@@ -957,13 +973,12 @@ export default function AssetDetailPage() {
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="acquisitionCost">Acquisition Cost</Label>
-                  <Input
+                  <CurrencyInput
                     id="acquisitionCost"
-                    type="number"
-                    step="0.01"
                     value={acquisitionCost}
-                    onChange={(e) => handleAcquisitionCostChange(e.target.value)}
+                    onValueChange={handleAcquisitionCostChange}
                     disabled={isDisposed}
+                    className="tabular-nums"
                   />
                 </div>
                 <div className="space-y-2">
@@ -1010,13 +1025,12 @@ export default function AssetDetailPage() {
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="bookSalvage">Salvage Value</Label>
-                  <Input
+                  <CurrencyInput
                     id="bookSalvage"
-                    type="number"
-                    step="0.01"
                     value={bookSalvage}
-                    onChange={(e) => setBookSalvage(e.target.value)}
+                    onValueChange={setBookSalvage}
                     disabled={isDisposed}
+                    className="tabular-nums"
                   />
                 </div>
               </div>
@@ -1045,18 +1059,28 @@ export default function AssetDetailPage() {
                   </Badge>
                 </div>
 
+                {!openingEligible && !isDisposed && (
+                  <div className="rounded-lg border bg-muted/40 p-3">
+                    <p className="text-xs text-muted-foreground">
+                      Opening balance editing is unavailable — this asset was
+                      neither acquired nor placed in service on or before{" "}
+                      {OPENING_LABEL}, so it has no prior-period book balance
+                      to carry forward. Depreciation is calculated from the
+                      in-service date.
+                    </p>
+                  </div>
+                )}
+
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label htmlFor="bookAccumDepr">
                       Accumulated Depreciation (Book)
                     </Label>
-                    <Input
+                    <CurrencyInput
                       id="bookAccumDepr"
-                      type="number"
-                      step="0.01"
                       value={bookAccumDepr}
-                      onChange={(e) => handleAccumDeprChange(e.target.value)}
-                      disabled={isDisposed}
+                      onValueChange={handleAccumDeprChange}
+                      disabled={openingLocked}
                       className="tabular-nums"
                     />
                   </div>
@@ -1064,19 +1088,17 @@ export default function AssetDetailPage() {
                     <Label htmlFor="bookNetValue">
                       Net Book Value (Book)
                     </Label>
-                    <Input
+                    <CurrencyInput
                       id="bookNetValue"
-                      type="number"
-                      step="0.01"
                       value={bookNetValue}
-                      onChange={(e) => handleNetValueChange(e.target.value)}
-                      disabled={isDisposed}
+                      onValueChange={handleNetValueChange}
+                      disabled={openingLocked}
                       className="tabular-nums"
                     />
                   </div>
                 </div>
 
-                {openingDirty && !isDisposed && (
+                {openingDirty && !openingLocked && (
                   <div className="rounded-lg border border-amber-500/40 bg-amber-50 p-3 dark:bg-amber-950/30">
                     <p className="text-xs text-amber-900 dark:text-amber-200">
                       <strong>Pending opening-balance change.</strong> On save,
@@ -1089,12 +1111,14 @@ export default function AssetDetailPage() {
                   </div>
                 )}
 
-                <p className="text-xs text-muted-foreground">
-                  Edit either field — the other is derived automatically from{" "}
-                  <span className="font-mono">NBV = Cost − Accumulated</span>.
-                  Only accumulated depreciation is stored; NBV is computed by
-                  the database.
-                </p>
+                {openingEligible && (
+                  <p className="text-xs text-muted-foreground">
+                    Edit either field — the other is derived automatically from{" "}
+                    <span className="font-mono">NBV = Cost − Accumulated</span>.
+                    Only accumulated depreciation is stored; NBV is computed by
+                    the database.
+                  </p>
+                )}
               </div>
             </CardContent>
           </Card>
