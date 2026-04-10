@@ -131,6 +131,14 @@ const US_STATES = [
   "VA","WA","WV","WI","WY","DC",
 ];
 
+// Book opening-balance period. Depreciation schedules are generated from
+// Jan 2026 onward using `fixed_assets.book_accumulated_depreciation` as the
+// 12/31/2025 opening balance, so edits to NBV / Accum Depr are recorded as of
+// this period.
+const OPENING_YEAR = 2025;
+const OPENING_MONTH = 12;
+const OPENING_LABEL = "12/31/2025";
+
 export default function AssetDetailPage() {
   const params = useParams();
   const entityId = params.entityId as string;
@@ -170,6 +178,13 @@ export default function AssetDetailPage() {
   const [bookMethod, setBookMethod] = useState("");
   const [bookUsefulLife, setBookUsefulLife] = useState("");
   const [bookSalvage, setBookSalvage] = useState("");
+  // Opening-balance edits (as of 12/31/2025). NBV and Accum Depr are linked:
+  // book_net_value = acquisition_cost - book_accumulated_depreciation.
+  // Only book_accumulated_depreciation is persisted (book_net_value is a
+  // GENERATED column in Postgres).
+  const [bookAccumDepr, setBookAccumDepr] = useState("");
+  const [bookNetValue, setBookNetValue] = useState("");
+  const [openingDirty, setOpeningDirty] = useState(false);
 
   // Disposition
   const [disposeOpen, setDisposeOpen] = useState(false);
@@ -221,6 +236,9 @@ export default function AssetDetailPage() {
       setBookMethod(a.book_depreciation_method ?? "straight_line");
       setBookUsefulLife(a.book_useful_life_months?.toString() ?? "0");
       setBookSalvage(a.book_salvage_value?.toString() ?? "0");
+      setBookAccumDepr((a.book_accumulated_depreciation ?? 0).toFixed(2));
+      setBookNetValue((a.book_net_value ?? 0).toFixed(2));
+      setOpeningDirty(false);
     }
 
     setAccounts((accountsResult.data as Account[]) ?? []);
@@ -239,9 +257,47 @@ export default function AssetDetailPage() {
     loadData();
   }, [loadData]);
 
+  // Linked NBV / Accumulated Depreciation editors. Changing either recomputes
+  // the other using the pending acquisition cost (so edits remain consistent
+  // if the user is also adjusting cost in the same save).
+  function handleAccumDeprChange(value: string) {
+    setBookAccumDepr(value);
+    setOpeningDirty(true);
+    const cost = parseFloat(acquisitionCost) || 0;
+    const accum = parseFloat(value);
+    if (!Number.isNaN(accum)) {
+      setBookNetValue((cost - accum).toFixed(2));
+    }
+  }
+
+  function handleNetValueChange(value: string) {
+    setBookNetValue(value);
+    setOpeningDirty(true);
+    const cost = parseFloat(acquisitionCost) || 0;
+    const nbv = parseFloat(value);
+    if (!Number.isNaN(nbv)) {
+      setBookAccumDepr((cost - nbv).toFixed(2));
+    }
+  }
+
+  function handleAcquisitionCostChange(value: string) {
+    setAcquisitionCost(value);
+    // Rebalance NBV off the (unchanged) accumulated depreciation so the
+    // identity NBV = cost − accum still holds after editing cost.
+    const cost = parseFloat(value) || 0;
+    const accum = parseFloat(bookAccumDepr);
+    if (!Number.isNaN(accum)) {
+      setBookNetValue((cost - accum).toFixed(2));
+    }
+  }
+
   async function handleSave() {
     if (!asset) return;
     setSaving(true);
+
+    const parsedCost = parseFloat(acquisitionCost) || 0;
+    const parsedAccum = Math.round((parseFloat(bookAccumDepr) || 0) * 100) / 100;
+    const parsedNbv = Math.round((parsedCost - parsedAccum) * 100) / 100;
 
     const { error } = await supabase
       .from("fixed_assets")
@@ -261,11 +317,12 @@ export default function AssetDetailPage() {
         registration_expiry: registrationExpiry || null,
         vehicle_notes: vehicleNotes || null,
         acquisition_date: acquisitionDate,
-        acquisition_cost: parseFloat(acquisitionCost) || 0,
+        acquisition_cost: parsedCost,
         in_service_date: inServiceDate,
         book_depreciation_method: bookMethod || "straight_line",
         book_useful_life_months: parseInt(bookUsefulLife) || 0,
         book_salvage_value: parseFloat(bookSalvage) || 0,
+        book_accumulated_depreciation: parsedAccum,
         cost_account_id: costAccountId || null,
         accum_depr_account_id: accumDeprAccountId || null,
         depr_expense_account_id: deprExpenseAccountId || null,
@@ -274,10 +331,62 @@ export default function AssetDetailPage() {
 
     if (error) {
       toast.error(error.message);
+      setSaving(false);
+      return;
+    }
+
+    // If the opening balance changed, write a Dec-2025 override row as an
+    // audit-trail marker and clear any stale non-manual entries from Jan 2026
+    // onward so the next "Generate" picks up the new opening balance.
+    if (openingDirty) {
+      const previousAccum = asset.book_accumulated_depreciation ?? 0;
+      const { error: upsertError } = await supabase
+        .from("fixed_asset_depreciation")
+        .upsert(
+          {
+            fixed_asset_id: assetId,
+            period_year: OPENING_YEAR,
+            period_month: OPENING_MONTH,
+            book_depreciation: 0,
+            book_accumulated: parsedAccum,
+            book_net_value: parsedNbv,
+            tax_depreciation: 0,
+            tax_accumulated: asset.tax_accumulated_depreciation ?? 0,
+            tax_net_value:
+              (asset.tax_cost_basis ?? parsedCost) -
+              (asset.tax_accumulated_depreciation ?? 0),
+            is_manual_override: true,
+            notes: `Book opening balance edited as of ${OPENING_LABEL}. Previous accumulated: ${previousAccum.toFixed(2)}, new accumulated: ${parsedAccum.toFixed(2)}.`,
+          },
+          { onConflict: "fixed_asset_id,period_year,period_month" }
+        );
+
+      if (upsertError) {
+        toast.error(`Saved asset, but failed to log opening balance: ${upsertError.message}`);
+        setSaving(false);
+        loadData();
+        return;
+      }
+
+      // Clear stale calculated entries from Jan 2026 onward; manual overrides
+      // are preserved so prior adjustments remain.
+      await supabase
+        .from("fixed_asset_depreciation")
+        .delete()
+        .eq("fixed_asset_id", assetId)
+        .eq("is_manual_override", false)
+        .or(
+          `period_year.gt.${OPENING_YEAR},and(period_year.eq.${OPENING_YEAR},period_month.gt.${OPENING_MONTH})`
+        );
+
+      toast.success(
+        `Opening balance updated as of ${OPENING_LABEL}. Regenerate the depreciation schedule to roll forward.`
+      );
     } else {
       toast.success("Asset updated");
-      loadData();
     }
+
+    loadData();
     setSaving(false);
   }
 
@@ -853,7 +962,7 @@ export default function AssetDetailPage() {
                     type="number"
                     step="0.01"
                     value={acquisitionCost}
-                    onChange={(e) => setAcquisitionCost(e.target.value)}
+                    onChange={(e) => handleAcquisitionCostChange(e.target.value)}
                     disabled={isDisposed}
                   />
                 </div>
@@ -919,19 +1028,73 @@ export default function AssetDetailPage() {
                   </p>
                 </div>
               )}
-              <div className="grid grid-cols-2 gap-4 pt-2 border-t text-sm">
-                <div>
-                  <span className="text-muted-foreground">Accumulated Depreciation</span>
-                  <p className="font-medium tabular-nums">
-                    {formatCurrency(asset.book_accumulated_depreciation)}
-                  </p>
+
+              {/* Opening balance editor — as of 12/31/2025 */}
+              <div className="space-y-3 pt-4 border-t">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-sm font-semibold">Opening Balance</h3>
+                    <p className="text-xs text-muted-foreground">
+                      Book-basis carrying values carried forward from prior
+                      close. Depreciation schedules roll forward from this
+                      point.
+                    </p>
+                  </div>
+                  <Badge variant="outline" className="font-mono">
+                    As of {OPENING_LABEL}
+                  </Badge>
                 </div>
-                <div>
-                  <span className="text-muted-foreground">Net Book Value</span>
-                  <p className="font-medium tabular-nums">
-                    {formatCurrency(asset.book_net_value)}
-                  </p>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="bookAccumDepr">
+                      Accumulated Depreciation (Book)
+                    </Label>
+                    <Input
+                      id="bookAccumDepr"
+                      type="number"
+                      step="0.01"
+                      value={bookAccumDepr}
+                      onChange={(e) => handleAccumDeprChange(e.target.value)}
+                      disabled={isDisposed}
+                      className="tabular-nums"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="bookNetValue">
+                      Net Book Value (Book)
+                    </Label>
+                    <Input
+                      id="bookNetValue"
+                      type="number"
+                      step="0.01"
+                      value={bookNetValue}
+                      onChange={(e) => handleNetValueChange(e.target.value)}
+                      disabled={isDisposed}
+                      className="tabular-nums"
+                    />
+                  </div>
                 </div>
+
+                {openingDirty && !isDisposed && (
+                  <div className="rounded-lg border border-amber-500/40 bg-amber-50 p-3 dark:bg-amber-950/30">
+                    <p className="text-xs text-amber-900 dark:text-amber-200">
+                      <strong>Pending opening-balance change.</strong> On save,
+                      this will be recorded as the book opening balance as of{" "}
+                      {OPENING_LABEL}, any non-manual depreciation entries
+                      after that date will be cleared, and you'll need to
+                      regenerate the schedule from the Depreciation tab to roll
+                      forward.
+                    </p>
+                  </div>
+                )}
+
+                <p className="text-xs text-muted-foreground">
+                  Edit either field — the other is derived automatically from{" "}
+                  <span className="font-mono">NBV = Cost − Accumulated</span>.
+                  Only accumulated depreciation is stored; NBV is computed by
+                  the database.
+                </p>
               </div>
             </CardContent>
           </Card>
