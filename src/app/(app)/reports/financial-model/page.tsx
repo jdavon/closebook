@@ -252,18 +252,28 @@ export default function FinancialModelPage() {
     window.print();
   }
 
+  // Header company name reflects the active view. The API always sets
+  // organizationName on every scope, so we cannot rely on a generic fallback
+  // chain — we must key off `scope`. Local selections are preferred so the
+  // header updates immediately when the user changes scope, before the next
+  // fetch completes.
   const companyName =
-    data?.metadata.reportingEntityName ??
-    data?.metadata.organizationName ??
-    data?.metadata.entityName ??
-    "";
+    scope === "reporting_entity"
+      ? (reportingEntities.find((r) => r.id === selectedReportingEntityId)
+          ?.name ??
+          data?.metadata.reportingEntityName ??
+          "")
+      : scope === "entity"
+        ? (entities.find((e) => e.id === selectedEntityId)?.name ??
+            data?.metadata.entityName ??
+            "")
+        : (data?.metadata.organizationName ?? "");
 
-  const titlePrefix =
-    scope === "organization"
-      ? "Consolidated "
-      : scope === "reporting_entity"
-        ? `${reportingEntities.find((r) => r.id === selectedReportingEntityId)?.name ?? "Reporting Entity"} `
-        : "";
+  // Only the consolidated view still gets a "Consolidated" qualifier on the
+  // statement title. For reporting-entity and entity scopes, the name is
+  // already shown on the company-name line of the header, so prepending it
+  // again to the title would duplicate it.
+  const titlePrefix = scope === "organization" ? "Consolidated " : "";
 
   const incomeStatementData = data
     ? ebitdaOnly

@@ -50,6 +50,15 @@ export async function GET(request: Request) {
 
     const wb = XLSX.utils.book_new();
 
+    // Resolve the display name from the API response, scope-aware. The API
+    // returns whichever of these fields matches the active scope (it always
+    // sets organizationName, so we must check the more specific names first).
+    const scopeName: string =
+      metadata?.reportingEntityName ??
+      metadata?.entityName ??
+      metadata?.organizationName ??
+      "";
+
     // Helper that uses period keys directly (more reliable than label matching)
     function addSheet(
       sheetName: string,
@@ -58,8 +67,8 @@ export async function GET(request: Request) {
       const rows: (string | number | null)[][] = [];
 
       // Title
-      const titleLine = metadata?.organizationName
-        ? `${metadata.organizationName} — ${statement.title}`
+      const titleLine = scopeName
+        ? `${scopeName} — ${statement.title}`
         : statement.title;
       rows.push([titleLine]);
       rows.push([]);
@@ -140,14 +149,13 @@ export async function GET(request: Request) {
 
     const xlsxBuffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
 
-    const entityName =
-      metadata?.entityName ?? metadata?.organizationName ?? "financial";
+    const filenameBase = scopeName || "financial";
     const statementSuffix =
       statementsParam === "income-statement" ? "income_statement"
         : statementsParam === "balance-sheet" ? "balance_sheet"
         : statementsParam === "cash-flow" ? "cash_flow"
         : "statements";
-    const filename = `${entityName.replace(/[^a-zA-Z0-9]/g, "_")}_${statementSuffix}_${metadata?.startPeriod}_to_${metadata?.endPeriod}.xlsx`;
+    const filename = `${filenameBase.replace(/[^a-zA-Z0-9]/g, "_")}_${statementSuffix}_${metadata?.startPeriod}_to_${metadata?.endPeriod}.xlsx`;
 
     return new Response(xlsxBuffer, {
       headers: {
