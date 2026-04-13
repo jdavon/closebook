@@ -106,6 +106,46 @@ export async function POST(request: Request) {
       // Non-fatal — the main snapshot is already saved
     }
 
+    // Mirror into revenue_projection_snapshots so the Revenue Projection page's
+    // Trends chart picks up today's values without needing a manual Save Today click.
+    const now = new Date();
+    const periodYear = now.getFullYear();
+    const periodMonth = now.getMonth() + 1;
+    const projectionRows = [
+      { section_id: "revenue", projected_amount: result.currentMonthProjected },
+      { section_id: "pipeline", projected_amount: result.pipelineValue },
+      { section_id: "ytd", projected_amount: result.ytdRevenue },
+    ].map((r) => ({
+      entity_id: entityId,
+      period_year: periodYear,
+      period_month: periodMonth,
+      section_id: r.section_id,
+      projected_amount: r.projected_amount,
+      snapshot_date: today,
+      source: "cron",
+    }));
+
+    const { error: projErr } = await (
+      supabase as unknown as {
+        from: (t: string) => {
+          upsert: (
+            rows: unknown,
+            opts: { onConflict: string }
+          ) => Promise<{ error: { message: string } | null }>;
+        };
+      }
+    )
+      .from("revenue_projection_snapshots")
+      .upsert(projectionRows, {
+        onConflict:
+          "entity_id,period_year,period_month,section_id,snapshot_date",
+      });
+
+    if (projErr) {
+      console.error("Projection snapshot insert error:", projErr.message);
+      // Non-fatal — RW snapshot is already saved
+    }
+
     return NextResponse.json({
       success: true,
       entity: entityName,
