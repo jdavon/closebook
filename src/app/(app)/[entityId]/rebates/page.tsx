@@ -279,6 +279,10 @@ export default function RebateTrackerPage({ entityId: entityIdProp, isEmbed, emb
       });
       const data = await res.json();
       if (data.success) {
+        await apiFetch("/api/rebates/calculate", {
+          method: "POST",
+          body: JSON.stringify({ action: "calculate_all", entityId }),
+        });
         toast.success(
           `Synced ${data.results?.length || 0} customers from RentalWorks`,
         );
