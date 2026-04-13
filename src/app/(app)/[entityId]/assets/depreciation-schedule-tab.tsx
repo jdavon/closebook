@@ -19,9 +19,9 @@ import { toast } from "sonner";
 import { formatCurrency, getCurrentPeriod, getPeriodShortLabel } from "@/lib/utils/dates";
 import {
   generateDepreciationSchedule,
+  buildOpeningBalance,
   type AssetForDepreciation,
   type DepreciationEntry,
-  type ScheduleOpeningBalance,
 } from "@/lib/utils/depreciation";
 import {
   getReportingGroup,
@@ -55,11 +55,6 @@ interface AssetRow {
   bonus_depreciation_amount: number;
   status: string;
 }
-
-// Opening balance cutoff: Dec 2025 is the import/opening period.
-// Depreciation entries are only generated from Jan 2026 onward.
-const OPENING_YEAR = 2025;
-const OPENING_MONTH = 12;
 
 type ViewMode = "depreciation" | "remaining_life" | "net_book_value";
 
@@ -163,6 +158,7 @@ export function DepreciationScheduleTab({
 
   const [assets, setAssets] = useState<AssetRow[]>([]);
   const [rules, setRules] = useState<DepreciationRule[]>([]);
+  const [openingDate, setOpeningDate] = useState<string | null>(null);
 
   // Schedule data: assetId -> monthKey -> DepreciationEntry
   const [scheduleMap, setScheduleMap] = useState<
@@ -183,6 +179,14 @@ export function DepreciationScheduleTab({
     }
   }, [entityId]);
 
+  const loadSettings = useCallback(async () => {
+    const res = await fetch(`/api/assets/settings?entityId=${entityId}`);
+    if (res.ok) {
+      const data = await res.json();
+      setOpeningDate(data.rental_asset_opening_date);
+    }
+  }, [entityId]);
+
   const loadAssets = useCallback(async () => {
     const { data } = await supabase
       .from("fixed_assets")
@@ -196,7 +200,7 @@ export function DepreciationScheduleTab({
   }, [supabase, entityId]);
 
   const buildSchedules = useCallback(() => {
-    if (assets.length === 0 || months.length === 0) {
+    if (assets.length === 0 || months.length === 0 || !openingDate) {
       setScheduleMap({});
       return;
     }
@@ -214,13 +218,11 @@ export function DepreciationScheduleTab({
       const rule = group ? rulesMap.get(group) : undefined;
       const assetForCalc = resolveAssetForCalc(asset, rule, useCategoryRules);
 
-      // Generate from Jan 2026 using the imported opening balance (Dec 2025)
-      const opening: ScheduleOpeningBalance = {
-        fromYear: OPENING_YEAR,
-        fromMonth: OPENING_MONTH + 1, // Jan 2026
-        openingBookAccum: asset.book_accumulated_depreciation,
-        openingTaxAccum: asset.tax_accumulated_depreciation,
-      };
+      const opening = buildOpeningBalance(
+        openingDate,
+        asset.book_accumulated_depreciation,
+        asset.tax_accumulated_depreciation
+      );
 
       const schedule = generateDepreciationSchedule(
         assetForCalc,
@@ -237,16 +239,16 @@ export function DepreciationScheduleTab({
     }
 
     setScheduleMap(map);
-  }, [assets, rules, months, customClasses, useCategoryRules]);
+  }, [assets, rules, months, customClasses, useCategoryRules, openingDate]);
 
   useEffect(() => {
     async function init() {
       setLoading(true);
-      await Promise.all([loadAssets(), loadRules()]);
+      await Promise.all([loadAssets(), loadRules(), loadSettings()]);
       setLoading(false);
     }
     init();
-  }, [loadAssets, loadRules]);
+  }, [loadAssets, loadRules, loadSettings]);
 
   useEffect(() => {
     if (!loading) {
@@ -277,7 +279,7 @@ export function DepreciationScheduleTab({
 
   // Regenerate all schedules through current period and save to DB
   async function handleGenerateAll() {
-    if (assets.length === 0) return;
+    if (assets.length === 0 || !openingDate) return;
     setGenerating(true);
 
     const rulesMap = new Map<string, DepreciationRule>();
@@ -293,13 +295,11 @@ export function DepreciationScheduleTab({
       const rule = group ? rulesMap.get(group) : undefined;
       const assetForCalc = resolveAssetForCalc(asset, rule);
 
-      // Generate from Jan 2026 using the imported opening balance
-      const opening: ScheduleOpeningBalance = {
-        fromYear: OPENING_YEAR,
-        fromMonth: OPENING_MONTH + 1,
-        openingBookAccum: asset.book_accumulated_depreciation,
-        openingTaxAccum: asset.tax_accumulated_depreciation,
-      };
+      const opening = buildOpeningBalance(
+        openingDate,
+        asset.book_accumulated_depreciation,
+        asset.tax_accumulated_depreciation
+      );
 
       const schedule = generateDepreciationSchedule(
         assetForCalc,

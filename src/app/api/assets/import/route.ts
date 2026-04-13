@@ -3,6 +3,8 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import {
   generateDepreciationSchedule,
+  buildOpeningBalance,
+  parseOpeningDate,
   type AssetForDepreciation,
 } from "@/lib/utils/depreciation";
 import { getCurrentPeriod } from "@/lib/utils/dates";
@@ -67,6 +69,23 @@ export async function POST(request: NextRequest) {
       { status: 400 }
     );
   }
+
+  // Fetch entity's opening balance date setting
+  const { data: entityRow, error: entityErr } = await supabase
+    .from("entities")
+    .select("rental_asset_opening_date")
+    .eq("id", entityId)
+    .single();
+
+  if (entityErr || !entityRow) {
+    return NextResponse.json(
+      { error: "Entity not found" },
+      { status: 404 }
+    );
+  }
+
+  const openingDateIso = entityRow.rental_asset_opening_date;
+  const openingPeriod = parseOpeningDate(openingDateIso);
 
   // Pre-fetch existing assets by asset_tag for this entity so we can detect updates
   const tagsInImport = rows
@@ -221,7 +240,29 @@ export async function POST(request: NextRequest) {
       (userBookAccumDepr !== null && !isNaN(userBookAccumDepr)) ||
       (userTaxAccumDepr !== null && !isNaN(userTaxAccumDepr));
 
-    if (hasUserOverride) {
+    const deprInput: AssetForDepreciation = {
+      acquisition_cost: acquisitionCost,
+      in_service_date: row.in_service_date,
+      book_useful_life_months: bookUsefulLifeMonths,
+      book_salvage_value: bookSalvageValue,
+      book_depreciation_method: bookMethod,
+      tax_cost_basis: taxCostBasis,
+      tax_depreciation_method: taxMethod,
+      tax_useful_life_months: taxUsefulLifeMonths,
+      section_179_amount: section179,
+      bonus_depreciation_amount: bonusDepr,
+    };
+
+    // An asset placed in service on or before the opening date is an "existing"
+    // asset at opening: imported accumulated depreciation (if any) is anchored
+    // to the opening period and the schedule rolls forward from there.
+    // Assets placed in service after the opening date are post-opening additions;
+    // their depreciation is generated from the in-service date forward.
+    const inService = new Date(row.in_service_date);
+    const openingDateObj = new Date(openingDateIso);
+    const isExistingAtOpening = inService <= openingDateObj;
+
+    if (isExistingAtOpening && hasUserOverride) {
       const finalBookAccum =
         userBookAccumDepr !== null && !isNaN(userBookAccumDepr)
           ? userBookAccumDepr
@@ -232,18 +273,11 @@ export async function POST(request: NextRequest) {
           : 0;
       const effectiveTaxBasis = taxCostBasis ?? acquisitionCost;
 
-      await supabase
-        .from("fixed_assets")
-        .update({
-          book_accumulated_depreciation: finalBookAccum,
-          tax_accumulated_depreciation: finalTaxAccum,
-        })
-        .eq("id", assetId);
-
+      // 1. Write the opening balance row anchored at the opening period.
       await supabase.from("fixed_asset_depreciation").insert({
         fixed_asset_id: assetId,
-        period_year: currentPeriod.year,
-        period_month: currentPeriod.month,
+        period_year: openingPeriod.year,
+        period_month: openingPeriod.month,
         book_depreciation: 0,
         book_accumulated: finalBookAccum,
         book_net_value:
@@ -252,21 +286,57 @@ export async function POST(request: NextRequest) {
         tax_accumulated: finalTaxAccum,
         tax_net_value:
           Math.round((effectiveTaxBasis - finalTaxAccum) * 100) / 100,
+        notes: "Opening balance",
       });
-    } else {
-      const deprInput: AssetForDepreciation = {
-        acquisition_cost: acquisitionCost,
-        in_service_date: row.in_service_date,
-        book_useful_life_months: bookUsefulLifeMonths,
-        book_salvage_value: bookSalvageValue,
-        book_depreciation_method: bookMethod,
-        tax_cost_basis: taxCostBasis,
-        tax_depreciation_method: taxMethod,
-        tax_useful_life_months: taxUsefulLifeMonths,
-        section_179_amount: section179,
-        bonus_depreciation_amount: bonusDepr,
-      };
 
+      // 2. Generate post-opening schedule through the current period.
+      const opening = buildOpeningBalance(
+        openingDateIso,
+        finalBookAccum,
+        finalTaxAccum
+      );
+
+      const schedule = generateDepreciationSchedule(
+        deprInput,
+        currentPeriod.year,
+        currentPeriod.month,
+        opening
+      );
+
+      if (schedule.length > 0) {
+        const deprEntries = schedule.map((entry) => ({
+          fixed_asset_id: assetId,
+          period_year: entry.period_year,
+          period_month: entry.period_month,
+          book_depreciation: entry.book_depreciation,
+          book_accumulated: entry.book_accumulated,
+          book_net_value: entry.book_net_value,
+          tax_depreciation: entry.tax_depreciation,
+          tax_accumulated: entry.tax_accumulated,
+          tax_net_value: entry.tax_net_value,
+        }));
+
+        await supabase.from("fixed_asset_depreciation").insert(deprEntries);
+
+        const lastEntry = schedule[schedule.length - 1];
+        await supabase
+          .from("fixed_assets")
+          .update({
+            book_accumulated_depreciation: lastEntry.book_accumulated,
+            tax_accumulated_depreciation: lastEntry.tax_accumulated,
+          })
+          .eq("id", assetId);
+      } else {
+        // No forward periods to generate — just sync the header with opening.
+        await supabase
+          .from("fixed_assets")
+          .update({
+            book_accumulated_depreciation: finalBookAccum,
+            tax_accumulated_depreciation: finalTaxAccum,
+          })
+          .eq("id", assetId);
+      }
+    } else {
       const schedule = generateDepreciationSchedule(
         deprInput,
         currentPeriod.year,

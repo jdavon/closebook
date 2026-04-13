@@ -90,6 +90,7 @@ import { SoldTab } from "./sold-tab";
 import { ClassSettings } from "./class-settings";
 import { DepreciationScheduleTab } from "./depreciation-schedule-tab";
 import { DepreciationRulesSettings } from "./depreciation-rules-settings";
+import { RegisterSettings } from "./register-settings";
 
 interface FixedAsset {
   id: string;
@@ -100,11 +101,21 @@ interface FixedAsset {
   vehicle_model: string | null;
   vehicle_class: string | null;
   vin: string | null;
+  acquisition_date: string;
   in_service_date: string;
   acquisition_cost: number;
+  book_accumulated_depreciation: number;
+  tax_cost_basis: number | null;
+  tax_accumulated_depreciation: number;
   book_net_value: number;
   tax_net_value: number;
   status: string;
+  disposed_date: string | null;
+}
+
+interface AsOfSnapshot {
+  book_accumulated: number;
+  tax_accumulated: number;
 }
 
 interface FullAssetData {
@@ -142,6 +153,10 @@ export default function AssetsPage() {
   const [masterTypeFilter, setMasterTypeFilter] = useState<string>("all");
   const [reportingGroupFilter, setReportingGroupFilter] = useState<string>("all");
   const [searchQuery, setSearchQuery] = useState("");
+  const [asOfDate, setAsOfDate] = useState<string>("");
+  const [asOfSnapshots, setAsOfSnapshots] = useState<
+    Record<string, AsOfSnapshot>
+  >({});
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -150,6 +165,8 @@ export default function AssetsPage() {
   const [customClasses, setCustomClasses] = useState<VehicleClassification[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [deprRulesOpen, setDeprRulesOpen] = useState(false);
+  const [registerSettingsOpen, setRegisterSettingsOpen] = useState(false);
+  const [openingDate, setOpeningDate] = useState<string | null>(null);
 
   const loadCustomClasses = useCallback(async () => {
     const res = await fetch(`/api/assets/classes?entityId=${entityId}`);
@@ -159,9 +176,18 @@ export default function AssetsPage() {
     }
   }, [entityId]);
 
+  const loadRegisterSettings = useCallback(async () => {
+    const res = await fetch(`/api/assets/settings?entityId=${entityId}`);
+    if (res.ok) {
+      const data = await res.json();
+      setOpeningDate(data.rental_asset_opening_date ?? null);
+    }
+  }, [entityId]);
+
   useEffect(() => {
     loadCustomClasses();
-  }, [loadCustomClasses]);
+    loadRegisterSettings();
+  }, [loadCustomClasses, loadRegisterSettings]);
 
   // Sold Vehicle dialog state
   const [soldOpen, setSoldOpen] = useState(false);
@@ -176,63 +202,182 @@ export default function AssetsPage() {
 
   const loadAssets = useCallback(async () => {
     setLoading(true);
+    // When an as-of date is active we need every asset regardless of its live
+    // status — a currently-disposed asset may still have been active at the
+    // as-of date, and a currently-active asset may not have existed yet.
+    const effectiveStatus = asOfDate ? "all" : statusFilter;
+
     let query = supabase
       .from("fixed_assets")
       .select(
-        "id, asset_name, asset_tag, vehicle_year, vehicle_make, vehicle_model, vehicle_class, vin, in_service_date, acquisition_cost, book_net_value, tax_net_value, status"
+        "id, asset_name, asset_tag, vehicle_year, vehicle_make, vehicle_model, vehicle_class, vin, acquisition_date, in_service_date, acquisition_cost, book_accumulated_depreciation, tax_cost_basis, tax_accumulated_depreciation, book_net_value, tax_net_value, status, disposed_date"
       )
       .eq("entity_id", entityId)
       .order("asset_name")
       .range(0, 2999);
 
-    if (statusFilter && statusFilter !== "all") {
-      query = query.eq("status", statusFilter);
+    if (effectiveStatus && effectiveStatus !== "all") {
+      query = query.eq("status", effectiveStatus);
     }
 
     const { data } = await query;
     setAssets((data as unknown as FixedAsset[]) ?? []);
     setLoading(false);
-  }, [supabase, entityId, statusFilter]);
+  }, [supabase, entityId, statusFilter, asOfDate]);
+
+  // Fetch depreciation snapshot for the as-of date. For each asset we keep the
+  // latest depreciation entry with period ≤ as-of month, giving us book/tax
+  // accumulated at that point in time.
+  const loadAsOfSnapshot = useCallback(async () => {
+    if (!asOfDate || assets.length === 0) {
+      setAsOfSnapshots({});
+      return;
+    }
+    const [yStr, mStr] = asOfDate.split("-");
+    const asOfYear = Number(yStr);
+    const asOfMonth = Number(mStr);
+    const ids = assets.map((a) => a.id);
+
+    const { data } = await supabase
+      .from("fixed_asset_depreciation")
+      .select("fixed_asset_id, period_year, period_month, book_accumulated, tax_accumulated")
+      .in("fixed_asset_id", ids)
+      .or(
+        `period_year.lt.${asOfYear},and(period_year.eq.${asOfYear},period_month.lte.${asOfMonth})`
+      )
+      .range(0, 99999);
+
+    const latest = new Map<
+      string,
+      { period_year: number; period_month: number; book: number; tax: number }
+    >();
+    for (const e of data ?? []) {
+      const existing = latest.get(e.fixed_asset_id);
+      if (
+        !existing ||
+        e.period_year > existing.period_year ||
+        (e.period_year === existing.period_year &&
+          e.period_month > existing.period_month)
+      ) {
+        latest.set(e.fixed_asset_id, {
+          period_year: e.period_year,
+          period_month: e.period_month,
+          book: Number(e.book_accumulated),
+          tax: Number(e.tax_accumulated),
+        });
+      }
+    }
+    const snap: Record<string, AsOfSnapshot> = {};
+    for (const [id, v] of latest.entries()) {
+      snap[id] = { book_accumulated: v.book, tax_accumulated: v.tax };
+    }
+    setAsOfSnapshots(snap);
+  }, [asOfDate, assets, supabase]);
 
   useEffect(() => {
     loadAssets();
   }, [loadAssets]);
 
-  const filteredAssets = assets.filter((a) => {
-    // Master type filter
-    if (masterTypeFilter !== "all") {
-      const mt = getMasterType(a.vehicle_class, customClasses);
-      if (mt !== masterTypeFilter) return false;
-    }
+  useEffect(() => {
+    loadAsOfSnapshot();
+  }, [loadAsOfSnapshot]);
 
-    // Reporting group filter
-    if (reportingGroupFilter !== "all") {
-      const rg = getReportingGroup(a.vehicle_class, customClasses);
-      if (rg !== reportingGroupFilter) return false;
-    }
+  // Project each asset through the as-of date lens. Returns the asset's
+  // effective status, book/tax NBV, and accumulated depreciation at that
+  // point in time. When no as-of date is set, returns the live values.
+  const projectAsset = useCallback(
+    (a: FixedAsset): FixedAsset & { _excluded?: boolean } => {
+      if (!asOfDate) return a;
 
-    // Search filter
-    if (searchQuery) {
-      const q = searchQuery.toLowerCase();
-      const name = a.asset_name.toLowerCase();
-      const vin = (a.vin ?? "").toLowerCase();
-      const desc = `${a.vehicle_year ?? ""} ${a.vehicle_make ?? ""} ${a.vehicle_model ?? ""}`.toLowerCase();
-      const classification = getVehicleClassification(a.vehicle_class, customClasses);
-      const classInfo = classification
-        ? `${classification.className} ${classification.reportingGroup}`.toLowerCase()
-        : "";
-      if (
-        !name.includes(q) &&
-        !vin.includes(q) &&
-        !desc.includes(q) &&
-        !classInfo.includes(q)
-      ) {
-        return false;
+      const asOf = asOfDate;
+
+      // Asset hadn't been acquired yet → exclude entirely
+      if (a.acquisition_date && a.acquisition_date > asOf) {
+        return { ...a, _excluded: true };
       }
-    }
 
-    return true;
-  });
+      // Determine effective status: if disposed after as-of, treat as active
+      let effectiveStatus = a.status;
+      if (a.status === "disposed") {
+        if (!a.disposed_date || a.disposed_date > asOf) {
+          effectiveStatus = "active";
+        }
+      }
+
+      // Depreciation snapshot at as-of
+      const snap = asOfSnapshots[a.id];
+      if (!snap) {
+        // No entry ≤ as-of → asset was in-service but not yet depreciated to
+        // that period. Treat as zero accumulated depreciation at as-of.
+        return {
+          ...a,
+          status: effectiveStatus,
+          book_accumulated_depreciation: 0,
+          tax_accumulated_depreciation: 0,
+          book_net_value: a.acquisition_cost,
+          tax_net_value: a.tax_cost_basis ?? a.acquisition_cost,
+        };
+      }
+
+      const taxBasis = a.tax_cost_basis ?? a.acquisition_cost;
+      return {
+        ...a,
+        status: effectiveStatus,
+        book_accumulated_depreciation: snap.book_accumulated,
+        tax_accumulated_depreciation: snap.tax_accumulated,
+        book_net_value:
+          Math.round((a.acquisition_cost - snap.book_accumulated) * 100) / 100,
+        tax_net_value:
+          Math.round((taxBasis - snap.tax_accumulated) * 100) / 100,
+      };
+    },
+    [asOfDate, asOfSnapshots]
+  );
+
+  const filteredAssets = assets
+    .map(projectAsset)
+    .filter((a) => !a._excluded)
+    .filter((a) => {
+      // Status filter (applied after as-of projection so the filter matches
+      // the displayed status, not the stored one)
+      if (asOfDate && statusFilter !== "all") {
+        if (a.status !== statusFilter) return false;
+      }
+
+      // Master type filter
+      if (masterTypeFilter !== "all") {
+        const mt = getMasterType(a.vehicle_class, customClasses);
+        if (mt !== masterTypeFilter) return false;
+      }
+
+      // Reporting group filter
+      if (reportingGroupFilter !== "all") {
+        const rg = getReportingGroup(a.vehicle_class, customClasses);
+        if (rg !== reportingGroupFilter) return false;
+      }
+
+      // Search filter
+      if (searchQuery) {
+        const q = searchQuery.toLowerCase();
+        const name = a.asset_name.toLowerCase();
+        const vin = (a.vin ?? "").toLowerCase();
+        const desc = `${a.vehicle_year ?? ""} ${a.vehicle_make ?? ""} ${a.vehicle_model ?? ""}`.toLowerCase();
+        const classification = getVehicleClassification(a.vehicle_class, customClasses);
+        const classInfo = classification
+          ? `${classification.className} ${classification.reportingGroup}`.toLowerCase()
+          : "";
+        if (
+          !name.includes(q) &&
+          !vin.includes(q) &&
+          !desc.includes(q) &&
+          !classInfo.includes(q)
+        ) {
+          return false;
+        }
+      }
+
+      return true;
+    });
 
   const allFilteredSelected =
     filteredAssets.length > 0 &&
@@ -433,6 +578,24 @@ export default function AssetsPage() {
           <p className="text-muted-foreground">
             Vehicle asset register with book and tax basis tracking
           </p>
+          {openingDate && (
+            <button
+              type="button"
+              onClick={() => setRegisterSettingsOpen(true)}
+              className="mt-1 inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <span>
+                Opening balance as of{" "}
+                <span className="font-medium">
+                  {new Date(openingDate + "T00:00:00").toLocaleDateString(
+                    "en-US",
+                    { year: "numeric", month: "long", day: "numeric" }
+                  )}
+                </span>
+              </span>
+              <span className="underline">change</span>
+            </button>
+          )}
         </div>
         <div className="flex items-center gap-2">
           {selectedIds.size > 0 && (
@@ -469,12 +632,23 @@ export default function AssetsPage() {
             <Settings className="mr-2 h-4 w-4" />
             Edit Settings
           </Button>
-          <Link href={`/${entityId}/assets/import`}>
-            <Button variant="outline">
-              <Upload className="mr-2 h-4 w-4" />
-              Import Wizard
-            </Button>
-          </Link>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline">
+                <Upload className="mr-2 h-4 w-4" />
+                Import
+                <ChevronDownIcon className="ml-2 h-3.5 w-3.5 opacity-50" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <Link href={`/${entityId}/assets/import`}>
+                <DropdownMenuItem>Import Assets</DropdownMenuItem>
+              </Link>
+              <Link href={`/${entityId}/assets/import-disposals`}>
+                <DropdownMenuItem>Import Disposals</DropdownMenuItem>
+              </Link>
+            </DropdownMenuContent>
+          </DropdownMenu>
           <Button
             className="bg-green-600 hover:bg-green-700 text-white"
             onClick={() => setSoldOpen(true)}
@@ -584,7 +758,44 @@ export default function AssetsPage() {
             <SelectItem value="inactive">Inactive</SelectItem>
           </SelectContent>
         </Select>
+        <div className="flex items-center gap-1 ml-auto">
+          <span className="text-xs text-muted-foreground whitespace-nowrap">
+            As of:
+          </span>
+          <Input
+            type="date"
+            value={asOfDate}
+            onChange={(e) => setAsOfDate(e.target.value)}
+            className="w-[160px]"
+            placeholder="Live"
+          />
+          {asOfDate && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setAsOfDate("")}
+              className="h-9 px-2 text-muted-foreground"
+            >
+              Clear
+            </Button>
+          )}
+        </div>
       </div>
+
+      {asOfDate && (
+        <div className="rounded-md border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+          Showing register state as of{" "}
+          <span className="font-medium text-foreground">
+            {new Date(asOfDate + "T00:00:00").toLocaleDateString("en-US", {
+              year: "numeric",
+              month: "long",
+              day: "numeric",
+            })}
+          </span>
+          . Disposals after this date are ignored; assets acquired after this
+          date are excluded.
+        </div>
+      )}
 
       {/* Asset Table */}
       <Card>
@@ -961,6 +1172,13 @@ export default function AssetsPage() {
         onOpenChange={setDeprRulesOpen}
         onRulesChanged={() => {}}
         customClasses={customClasses}
+      />
+
+      <RegisterSettings
+        entityId={entityId}
+        open={registerSettingsOpen}
+        onOpenChange={setRegisterSettingsOpen}
+        onSaved={(newDate) => setOpeningDate(newDate)}
       />
     </div>
   );

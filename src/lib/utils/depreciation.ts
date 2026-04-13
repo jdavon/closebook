@@ -201,14 +201,49 @@ function calculateMacrsMonthly(
 /**
  * Options for generating a depreciation schedule with an opening balance.
  * When provided, entries are only emitted from `fromYear/fromMonth` onward,
- * and accumulated depreciation starts from the opening values (e.g. imported
- * balances as of Dec 2025) rather than recalculating from the in-service date.
+ * and accumulated depreciation starts from the opening values (imported
+ * balances as of the opening date) rather than recalculating from the
+ * in-service date. `fromYear/fromMonth` represents the first emitted period —
+ * typically the month *after* the opening balance cutoff.
  */
 export interface ScheduleOpeningBalance {
   fromYear: number;
   fromMonth: number;
   openingBookAccum: number;
   openingTaxAccum: number;
+}
+
+/**
+ * Parse an ISO opening date (YYYY-MM-DD) into its year and month components
+ * without timezone shift.
+ */
+export function parseOpeningDate(isoDate: string): {
+  year: number;
+  month: number;
+} {
+  const parts = isoDate.split("T")[0].split("-");
+  return {
+    year: parseInt(parts[0], 10),
+    month: parseInt(parts[1], 10),
+  };
+}
+
+/**
+ * Build a ScheduleOpeningBalance anchored to the given opening date. Entries
+ * are emitted starting the month *after* the opening date.
+ */
+export function buildOpeningBalance(
+  openingDateIso: string,
+  openingBookAccum: number,
+  openingTaxAccum: number
+): ScheduleOpeningBalance {
+  const { year, month } = parseOpeningDate(openingDateIso);
+  return {
+    fromYear: year,
+    fromMonth: month + 1,
+    openingBookAccum,
+    openingTaxAccum,
+  };
 }
 
 // Generate full depreciation schedule from in-service date through target period

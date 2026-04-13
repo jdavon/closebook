@@ -24,8 +24,8 @@ import { ArrowLeft, RefreshCw } from "lucide-react";
 import { formatCurrency, getPeriodShortLabel, getCurrentPeriod } from "@/lib/utils/dates";
 import {
   generateDepreciationSchedule,
+  buildOpeningBalance,
   type AssetForDepreciation,
-  type ScheduleOpeningBalance,
 } from "@/lib/utils/depreciation";
 
 interface DepreciationRow {
@@ -41,10 +41,6 @@ interface DepreciationRow {
   is_manual_override: boolean;
   notes: string | null;
 }
-
-// Opening balance cutoff
-const OPENING_YEAR = 2025;
-const OPENING_MONTH = 12;
 
 interface AssetSummary {
   id: string;
@@ -73,11 +69,12 @@ export default function DepreciationSchedulePage() {
 
   const [asset, setAsset] = useState<AssetSummary | null>(null);
   const [entries, setEntries] = useState<DepreciationRow[]>([]);
+  const [openingDate, setOpeningDate] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
 
   const loadData = useCallback(async () => {
-    const [assetResult, entriesResult] = await Promise.all([
+    const [assetResult, entriesResult, settingsResult] = await Promise.all([
       supabase
         .from("fixed_assets")
         .select(
@@ -91,19 +88,25 @@ export default function DepreciationSchedulePage() {
         .eq("fixed_asset_id", assetId)
         .order("period_year")
         .order("period_month"),
+      fetch(`/api/assets/settings?entityId=${entityId}`).then((r) =>
+        r.ok ? r.json() : null
+      ),
     ]);
 
     setAsset(assetResult.data as unknown as AssetSummary);
     setEntries((entriesResult.data as unknown as DepreciationRow[]) ?? []);
+    if (settingsResult?.rental_asset_opening_date) {
+      setOpeningDate(settingsResult.rental_asset_opening_date);
+    }
     setLoading(false);
-  }, [supabase, assetId]);
+  }, [supabase, assetId, entityId]);
 
   useEffect(() => {
     loadData();
   }, [loadData]);
 
   async function handleGenerateThroughCurrent() {
-    if (!asset) return;
+    if (!asset || !openingDate) return;
     setGenerating(true);
 
     const currentPeriod = getCurrentPeriod();
@@ -121,13 +124,11 @@ export default function DepreciationSchedulePage() {
       bonus_depreciation_amount: asset.bonus_depreciation_amount,
     };
 
-    // Generate from Jan 2026 using the imported opening balance
-    const opening: ScheduleOpeningBalance = {
-      fromYear: OPENING_YEAR,
-      fromMonth: OPENING_MONTH + 1,
-      openingBookAccum: asset.book_accumulated_depreciation,
-      openingTaxAccum: asset.tax_accumulated_depreciation,
-    };
+    const opening = buildOpeningBalance(
+      openingDate,
+      asset.book_accumulated_depreciation,
+      asset.tax_accumulated_depreciation
+    );
 
     const schedule = generateDepreciationSchedule(
       assetForCalc,
