@@ -193,12 +193,35 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
   const supabase = createClient();
   const now = new Date();
 
-  // Default range: Jan 2026 → current month
-  const [startYear, setStartYear] = useState(2026);
+  // Default range: month after opening balance → current month. Set once on
+  // mount from the entity setting so the user can still adjust the pickers.
+  const [startYear, setStartYear] = useState(now.getFullYear());
   const [startMonth, setStartMonth] = useState(1);
   const [endYear, setEndYear] = useState(now.getFullYear());
   const [endMonth, setEndMonth] = useState(now.getMonth() + 1);
   const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/assets/settings?entityId=${entityId}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (cancelled || !data?.rental_asset_opening_date) return;
+        const [y, m] = data.rental_asset_opening_date.split("-").map(Number);
+        let nextY = y;
+        let nextM = m + 1;
+        if (nextM > 12) {
+          nextM = 1;
+          nextY++;
+        }
+        setStartYear(nextY);
+        setStartMonth(nextM);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [entityId]);
 
   const [rollForwardData, setRollForwardData] = useState<
     Record<string, MonthlyRollForward[]>

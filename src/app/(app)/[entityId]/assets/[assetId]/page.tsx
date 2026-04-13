@@ -132,24 +132,29 @@ const US_STATES = [
   "VA","WA","WV","WI","WY","DC",
 ];
 
-// Book opening-balance period. Depreciation schedules are generated from
-// Jan 2026 onward using `fixed_assets.book_accumulated_depreciation` as the
-// 12/31/2025 opening balance, so edits to NBV / Accum Depr are recorded as of
-// this period.
-const OPENING_YEAR = 2025;
-const OPENING_MONTH = 12;
-const OPENING_LABEL = "12/31/2025";
-const OPENING_CUTOFF = "2025-12-31"; // ISO YYYY-MM-DD — safe for lexicographic compare
-
 // An asset has an opening balance worth editing only if it existed on or
-// before 12/31/2025 (i.e. acquired or placed in service by that date).
+// before the register's opening cutoff (acquired or placed in service by
+// that date).
 function hasOpeningBalance(
   acquisitionDate: string,
-  inServiceDate: string
+  inServiceDate: string,
+  openingCutoff: string
 ): boolean {
-  const acqOk = !!acquisitionDate && acquisitionDate.slice(0, 10) <= OPENING_CUTOFF;
-  const isOk = !!inServiceDate && inServiceDate.slice(0, 10) <= OPENING_CUTOFF;
+  if (!openingCutoff) return false;
+  const acqOk = !!acquisitionDate && acquisitionDate.slice(0, 10) <= openingCutoff;
+  const isOk = !!inServiceDate && inServiceDate.slice(0, 10) <= openingCutoff;
   return acqOk || isOk;
+}
+
+function formatOpeningLabel(isoDate: string): string {
+  if (!isoDate) return "";
+  const d = new Date(isoDate + "T00:00:00");
+  if (isNaN(d.getTime())) return isoDate;
+  return d.toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
 }
 
 export default function AssetDetailPage() {
@@ -162,6 +167,7 @@ export default function AssetDetailPage() {
   const [asset, setAsset] = useState<FixedAssetData | null>(null);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [customClasses, setCustomClasses] = useState<VehicleClassification[]>([]);
+  const [openingDate, setOpeningDate] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -191,10 +197,10 @@ export default function AssetDetailPage() {
   const [bookMethod, setBookMethod] = useState("");
   const [bookUsefulLife, setBookUsefulLife] = useState("");
   const [bookSalvage, setBookSalvage] = useState("");
-  // Opening-balance edits (as of 12/31/2025). NBV and Accum Depr are linked:
-  // book_net_value = acquisition_cost - book_accumulated_depreciation.
-  // Only book_accumulated_depreciation is persisted (book_net_value is a
-  // GENERATED column in Postgres).
+  // Opening-balance edits (anchored to the entity's opening cutoff). NBV and
+  // Accum Depr are linked: book_net_value = acquisition_cost -
+  // book_accumulated_depreciation. Only book_accumulated_depreciation is
+  // persisted (book_net_value is a GENERATED column in Postgres).
   const [bookAccumDepr, setBookAccumDepr] = useState("");
   const [bookNetValue, setBookNetValue] = useState("");
   const [openingDirty, setOpeningDirty] = useState(false);
@@ -256,11 +262,19 @@ export default function AssetDetailPage() {
 
     setAccounts((accountsResult.data as Account[]) ?? []);
 
-    // Load custom classes
-    const res = await fetch(`/api/assets/classes?entityId=${entityId}`);
-    if (res.ok) {
-      const rows: CustomVehicleClassRow[] = await res.json();
+    // Load custom classes and register settings in parallel
+    const [classesRes, settingsRes] = await Promise.all([
+      fetch(`/api/assets/classes?entityId=${entityId}`),
+      fetch(`/api/assets/settings?entityId=${entityId}`),
+    ]);
+
+    if (classesRes.ok) {
+      const rows: CustomVehicleClassRow[] = await classesRes.json();
       setCustomClasses(customRowsToClassifications(rows));
+    }
+    if (settingsRes.ok) {
+      const data = await settingsRes.json();
+      setOpeningDate(data.rental_asset_opening_date ?? "");
     }
 
     setLoading(false);
@@ -348,19 +362,28 @@ export default function AssetDetailPage() {
       return;
     }
 
-    // If the opening balance changed, write a Dec-2025 override row as an
-    // audit-trail marker and clear any stale non-manual entries from Jan 2026
-    // onward so the next "Generate" picks up the new opening balance.
-    // Guard: only applies when the asset existed at the 12/31/2025 cutoff.
-    if (openingDirty && hasOpeningBalance(acquisitionDate, inServiceDate)) {
+    // If the opening balance changed, write an override row at the opening
+    // period as an audit-trail marker, and clear any stale non-manual entries
+    // after the opening date so the next "Generate" picks up the new opening.
+    // Guard: only applies when the asset existed at the opening cutoff.
+    const openingCutoff = openingDate;
+    const openingLabel = formatOpeningLabel(openingDate);
+    if (
+      openingDirty &&
+      openingCutoff &&
+      hasOpeningBalance(acquisitionDate, inServiceDate, openingCutoff)
+    ) {
+      const [yStr, mStr] = openingCutoff.split("-");
+      const openingYear = Number(yStr);
+      const openingMonth = Number(mStr);
       const previousAccum = asset.book_accumulated_depreciation ?? 0;
       const { error: upsertError } = await supabase
         .from("fixed_asset_depreciation")
         .upsert(
           {
             fixed_asset_id: assetId,
-            period_year: OPENING_YEAR,
-            period_month: OPENING_MONTH,
+            period_year: openingYear,
+            period_month: openingMonth,
             book_depreciation: 0,
             book_accumulated: parsedAccum,
             book_net_value: parsedNbv,
@@ -370,7 +393,7 @@ export default function AssetDetailPage() {
               (asset.tax_cost_basis ?? parsedCost) -
               (asset.tax_accumulated_depreciation ?? 0),
             is_manual_override: true,
-            notes: `Book opening balance edited as of ${OPENING_LABEL}. Previous accumulated: ${previousAccum.toFixed(2)}, new accumulated: ${parsedAccum.toFixed(2)}.`,
+            notes: `Book opening balance edited as of ${openingLabel}. Previous accumulated: ${previousAccum.toFixed(2)}, new accumulated: ${parsedAccum.toFixed(2)}.`,
           },
           { onConflict: "fixed_asset_id,period_year,period_month" }
         );
@@ -382,19 +405,19 @@ export default function AssetDetailPage() {
         return;
       }
 
-      // Clear stale calculated entries from Jan 2026 onward; manual overrides
-      // are preserved so prior adjustments remain.
+      // Clear stale calculated entries after the opening period; manual
+      // overrides are preserved so prior adjustments remain.
       await supabase
         .from("fixed_asset_depreciation")
         .delete()
         .eq("fixed_asset_id", assetId)
         .eq("is_manual_override", false)
         .or(
-          `period_year.gt.${OPENING_YEAR},and(period_year.eq.${OPENING_YEAR},period_month.gt.${OPENING_MONTH})`
+          `period_year.gt.${openingYear},and(period_year.eq.${openingYear},period_month.gt.${openingMonth})`
         );
 
       toast.success(
-        `Opening balance updated as of ${OPENING_LABEL}. Regenerate the depreciation schedule to roll forward.`
+        `Opening balance updated as of ${openingLabel}. Regenerate the depreciation schedule to roll forward.`
       );
     } else {
       toast.success("Asset updated");
@@ -447,7 +470,12 @@ export default function AssetDetailPage() {
   if (!asset) return <p className="text-muted-foreground p-6">Asset not found</p>;
 
   const isDisposed = asset.status === "disposed";
-  const openingEligible = hasOpeningBalance(acquisitionDate, inServiceDate);
+  const openingLabel = formatOpeningLabel(openingDate);
+  const openingEligible = hasOpeningBalance(
+    acquisitionDate,
+    inServiceDate,
+    openingDate
+  );
   const openingLocked = isDisposed || !openingEligible;
   const taxBasis = asset.tax_cost_basis ?? asset.acquisition_cost;
   const assetAccounts = accounts.filter((a) => a.classification === "Asset");
@@ -1043,7 +1071,7 @@ export default function AssetDetailPage() {
                 </div>
               )}
 
-              {/* Opening balance editor — as of 12/31/2025 */}
+              {/* Opening balance editor — anchored to the entity's opening cutoff */}
               <div className="space-y-3 pt-4 border-t">
                 <div className="flex items-center justify-between">
                   <div>
@@ -1055,7 +1083,7 @@ export default function AssetDetailPage() {
                     </p>
                   </div>
                   <Badge variant="outline" className="font-mono">
-                    As of {OPENING_LABEL}
+                    As of {openingLabel}
                   </Badge>
                 </div>
 
@@ -1064,7 +1092,7 @@ export default function AssetDetailPage() {
                     <p className="text-xs text-muted-foreground">
                       Opening balance editing is unavailable — this asset was
                       neither acquired nor placed in service on or before{" "}
-                      {OPENING_LABEL}, so it has no prior-period book balance
+                      {openingLabel}, so it has no prior-period book balance
                       to carry forward. Depreciation is calculated from the
                       in-service date.
                     </p>
@@ -1103,7 +1131,7 @@ export default function AssetDetailPage() {
                     <p className="text-xs text-amber-900 dark:text-amber-200">
                       <strong>Pending opening-balance change.</strong> On save,
                       this will be recorded as the book opening balance as of{" "}
-                      {OPENING_LABEL}, any non-manual depreciation entries
+                      {openingLabel}, any non-manual depreciation entries
                       after that date will be cleared, and you'll need to
                       regenerate the schedule from the Depreciation tab to roll
                       forward.
