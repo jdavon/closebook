@@ -24,11 +24,13 @@ import { toast } from "sonner";
 import {
   VEHICLE_CLASSIFICATIONS,
   getAllClasses,
+  getReportingGroup,
   customRowsToClassifications,
   type VehicleClassification,
   type CustomVehicleClassRow,
 } from "@/lib/utils/vehicle-classification";
 import type { VehicleClass } from "@/lib/types/database";
+import type { DepreciationRule } from "../depreciation-rules-settings";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -68,6 +70,8 @@ interface AssetRow {
   _id: string;
   _errors: Partial<Record<FieldKey, string>>;
   _prevAutoName?: string;
+  _prevAutoLife?: string;
+  _prevAutoSalvage?: string;
   asset_tag: string;
   asset_name: string;
   vehicle_class: string;
@@ -304,8 +308,8 @@ function createEmptyRow(): AssetRow {
     acquisition_cost: "",
     in_service_date: "",
     book_depreciation_method: "straight_line",
-    book_useful_life_months: "60",
-    book_salvage_value: "0",
+    book_useful_life_months: "",
+    book_salvage_value: "",
     tax_cost_basis: "",
     tax_depreciation_method: "macrs_5",
     tax_useful_life_months: "",
@@ -315,6 +319,63 @@ function createEmptyRow(): AssetRow {
     tax_accumulated_depreciation: "",
     status: "active",
   };
+}
+
+/**
+ * Apply depreciation rule defaults based on the row's vehicle class. Only
+ * overwrites the useful-life and salvage fields when they're blank or still
+ * match the previously auto-applied value (so manual edits are preserved).
+ * Leaves fields blank when there is no matching class or no rule.
+ */
+function applyClassDefaults(
+  row: AssetRow,
+  rules: DepreciationRule[],
+  customClasses: VehicleClassification[]
+): AssetRow {
+  const next = { ...row };
+  const group = row.vehicle_class
+    ? getReportingGroup(row.vehicle_class, customClasses)
+    : null;
+  const rule = group ? rules.find((r) => r.reporting_group === group) : null;
+
+  // Useful life
+  const lifeLocked =
+    !!next.book_useful_life_months &&
+    next.book_useful_life_months !== next._prevAutoLife;
+  if (!lifeLocked) {
+    if (rule?.book_useful_life_months && rule.book_useful_life_months > 0) {
+      const v = String(rule.book_useful_life_months);
+      next.book_useful_life_months = v;
+      next._prevAutoLife = v;
+    } else {
+      next.book_useful_life_months = "";
+      next._prevAutoLife = "";
+    }
+  }
+
+  // Salvage value — derived from acquisition_cost × salvage_pct
+  const salvageLocked =
+    !!next.book_salvage_value &&
+    next.book_salvage_value !== next._prevAutoSalvage;
+  if (!salvageLocked) {
+    const cost = parseFloat(next.acquisition_cost);
+    if (
+      rule?.book_salvage_pct != null &&
+      rule.book_salvage_pct >= 0 &&
+      !isNaN(cost) &&
+      cost > 0
+    ) {
+      const salvage = Math.round(cost * (rule.book_salvage_pct / 100) * 100) / 100;
+      const v = String(salvage);
+      next.book_salvage_value = v;
+      next._prevAutoSalvage = v;
+    } else {
+      next.book_salvage_value = "";
+      next._prevAutoSalvage = "";
+    }
+  }
+
+  return next;
 }
 
 function parseDateValue(value: unknown): string {
@@ -452,8 +513,9 @@ export default function AssetImportWizardPage() {
   const [results, setResults] = useState<ImportResults | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
   const [customClasses, setCustomClasses] = useState<VehicleClassification[]>([]);
+  const [rules, setRules] = useState<DepreciationRule[]>([]);
 
-  // Fetch custom vehicle classes for this entity
+  // Fetch custom vehicle classes and depreciation rules for this entity
   useEffect(() => {
     fetch(`/api/assets/classes?entityId=${entityId}`)
       .then((r) => r.json())
@@ -461,6 +523,13 @@ export default function AssetImportWizardPage() {
         if (Array.isArray(data)) {
           setCustomClasses(customRowsToClassifications(data));
         }
+      })
+      .catch(() => {});
+
+    fetch(`/api/assets/depreciation-rules?entityId=${entityId}`)
+      .then((r) => r.json())
+      .then((data: DepreciationRule[]) => {
+        if (Array.isArray(data)) setRules(data);
       })
       .catch(() => {});
   }, [entityId]);
@@ -540,11 +609,17 @@ export default function AssetImportWizardPage() {
         if (hm.book_depreciation_method) row.book_depreciation_method = resolveBookMethod(raw[hm.book_depreciation_method]);
         if (hm.book_useful_life_months) {
           const v = raw[hm.book_useful_life_months];
-          row.book_useful_life_months = typeof v === "number" ? String(Math.round(v)) : String(v ?? "").replace(/[^0-9]/g, "") || "60";
+          row.book_useful_life_months =
+            typeof v === "number"
+              ? String(Math.round(v))
+              : String(v ?? "").replace(/[^0-9]/g, "");
         }
         if (hm.book_salvage_value) {
           const v = raw[hm.book_salvage_value];
-          row.book_salvage_value = typeof v === "number" ? String(v) : String(v ?? "").replace(/[$,\s]/g, "") || "0";
+          row.book_salvage_value =
+            typeof v === "number"
+              ? String(v)
+              : String(v ?? "").replace(/[$,\s]/g, "");
         }
         if (hm.tax_cost_basis) {
           const v = raw[hm.tax_cost_basis];
@@ -593,9 +668,13 @@ export default function AssetImportWizardPage() {
           row.asset_name = (parts as string[]).join(" ");
         }
 
+        // Apply class-based depreciation rule defaults where fields weren't
+        // explicitly imported (blank useful life / salvage value).
+        const withDefaults = applyClassDefaults(row, rules, customClasses);
+
         // Validate
-        row._errors = validateRow(row);
-        return row;
+        withDefaults._errors = validateRow(withDefaults);
+        return withDefaults;
       });
 
       setRows(parsed);
@@ -713,7 +792,7 @@ export default function AssetImportWizardPage() {
   function handleCellChange(rowIdx: number, colKey: FieldKey, value: string) {
     setRows((prev) => {
       const updated = [...prev];
-      const row = { ...updated[rowIdx] };
+      let row = { ...updated[rowIdx] };
       row[colKey] = value;
       // Auto-update asset name
       if (colKey === "vehicle_year" || colKey === "vehicle_make" || colKey === "vehicle_model") {
@@ -727,6 +806,11 @@ export default function AssetImportWizardPage() {
       // Auto-copy acq date to in-service if in-service is empty
       if (colKey === "acquisition_date" && !row.in_service_date) {
         row.in_service_date = value;
+      }
+      // When class or acquisition cost changes, reapply depreciation-rule
+      // defaults so useful life / salvage track the reporting group's rule.
+      if (colKey === "vehicle_class" || colKey === "acquisition_cost") {
+        row = applyClassDefaults(row, rules, customClasses);
       }
       // Re-validate
       row._errors = validateRow(row);
@@ -795,8 +879,6 @@ export default function AssetImportWizardPage() {
         const val = String(row[col.key] ?? "");
         if (col.key === "book_depreciation_method" && val === "straight_line") return false;
         if (col.key === "tax_depreciation_method" && val === "macrs_5") return false;
-        if (col.key === "book_useful_life_months" && val === "60") return false;
-        if (col.key === "book_salvage_value" && val === "0") return false;
         if (col.key === "section_179_amount" && val === "0") return false;
         if (col.key === "bonus_depreciation_amount" && val === "0") return false;
         if (col.key === "status" && val === "active") return false;
