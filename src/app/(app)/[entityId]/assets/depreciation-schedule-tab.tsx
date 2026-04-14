@@ -110,12 +110,11 @@ interface EffectiveValues {
 /**
  * Resolve the effective useful life / salvage / method for an asset.
  *
- * Reporting-group rules are the default — schedules, end dates, and remaining
- * life are all calculated from the rule when one exists. An asset is treated
- * as overriding the rule only when its stored value is non-zero and different
- * from what the rule would produce. This way assets whose stored values were
- * left at zero (salvage) or match the rule already (useful life) display
- * rule-driven values; truly asset-specific values still win.
+ * The reporting-group rule is authoritative for display and schedule calc
+ * whenever a rule exists. If no rule exists, fall back to the asset's stored
+ * values. The `isOverride` flags flag informational divergence — when the
+ * asset's stored value differs from the rule — so the UI can show a marker,
+ * but the calculation itself still uses the rule.
  */
 function resolveEffectiveValues(
   asset: AssetRow,
@@ -142,30 +141,23 @@ function resolveEffectiveValues(
   let salvageIsOverride = false;
 
   if (ruleUL != null && ruleUL > 0) {
+    usefulLife = ruleUL;
+    ulFromRule = true;
     if (assetUL && assetUL > 0 && assetUL !== ruleUL) {
-      usefulLife = assetUL;
       ulIsOverride = true;
-    } else {
-      usefulLife = ruleUL;
-      ulFromRule = true;
     }
   }
 
   if (ruleSalvage != null) {
+    salvageValue = ruleSalvage;
+    salvageFromRule = true;
     if (assetSalvage > 0 && Math.abs(assetSalvage - ruleSalvage) > 0.01) {
-      salvageValue = assetSalvage;
       salvageIsOverride = true;
-    } else {
-      salvageValue = ruleSalvage;
-      salvageFromRule = true;
     }
   }
 
   if (ruleMethod) {
-    if (!assetMethod || assetMethod === ruleMethod) {
-      method = ruleMethod;
-    }
-    // else: asset's method stays (silent override — not surfaced in UI yet)
+    method = ruleMethod;
   }
 
   return {
@@ -515,10 +507,9 @@ export function DepreciationScheduleTab({
 
   // Effective useful life display for asset info column
   function getEffectiveUL(asset: AssetRow): string {
-    const { usefulLife, ulFromRule, ulIsOverride } = resolveEffective(asset);
+    const { usefulLife, ulFromRule } = resolveEffective(asset);
     if (usefulLife && usefulLife > 0) {
-      const suffix = ulFromRule ? "*" : ulIsOverride ? "†" : "";
-      return `${usefulLife} mo${suffix}`;
+      return `${usefulLife} mo${ulFromRule ? "*" : ""}`;
     }
     return "---";
   }
@@ -544,10 +535,9 @@ export function DepreciationScheduleTab({
   }
 
   function getEffectiveSalvage(asset: AssetRow): string {
-    const { salvageValue, salvageFromRule, salvageIsOverride } = resolveEffective(asset);
+    const { salvageValue, salvageFromRule } = resolveEffective(asset);
     if (salvageValue > 0) {
-      const suffix = salvageFromRule ? "*" : salvageIsOverride ? "†" : "";
-      return `${formatCurrency(salvageValue)}${suffix}`;
+      return `${formatCurrency(salvageValue)}${salvageFromRule ? "*" : ""}`;
     }
     return "$0.00";
   }
@@ -653,7 +643,7 @@ export function DepreciationScheduleTab({
       {/* Legend for group rules */}
       {rules.length > 0 && (
         <p className="text-xs text-muted-foreground">
-          * = value from reporting group rule · † = asset-specific override (does not follow the rule)
+          * = value from reporting group rule
         </p>
       )}
 
