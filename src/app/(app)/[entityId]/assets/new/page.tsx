@@ -33,6 +33,7 @@ import {
   getVehicleClassification,
   getClassesGroupedByMasterType,
   getClassLabel,
+  isMasterTypeEditable,
   customRowsToClassifications,
   type VehicleClassification,
   type CustomVehicleClassRow,
@@ -78,9 +79,11 @@ export default function NewAssetPage() {
   const [licensePlate, setLicensePlate] = useState("");
   const [licenseState, setLicenseState] = useState("");
   const [vehicleClass, setVehicleClass] = useState<string>("");
+  const [masterTypeOverride, setMasterTypeOverride] = useState<string>("");
 
   // Derive reporting group and master type from class selection
   const classification = vehicleClass ? getVehicleClassification(vehicleClass, customClasses) : null;
+  const masterTypeCanEdit = isMasterTypeEditable(vehicleClass, customClasses);
   const [mileage, setMileage] = useState("");
   const [titleNumber, setTitleNumber] = useState("");
   const [registrationExpiry, setRegistrationExpiry] = useState("");
@@ -167,6 +170,11 @@ export default function NewAssetPage() {
         license_state: licenseState || null,
         mileage_at_acquisition: mileage ? parseInt(mileage) : null,
         vehicle_class: vehicleClass || null,
+        master_type_override: masterTypeCanEdit
+          ? masterTypeOverride === "Vehicle" || masterTypeOverride === "Trailer"
+            ? masterTypeOverride
+            : null
+          : null,
         title_number: titleNumber || null,
         registration_expiry: registrationExpiry || null,
         vehicle_notes: vehicleNotes || null,
@@ -327,7 +335,12 @@ export default function NewAssetPage() {
                     <Label htmlFor="vehicleClass">Vehicle Class</Label>
                     <Select
                       value={vehicleClass}
-                      onValueChange={(v) => setVehicleClass(v)}
+                      onValueChange={(v) => {
+                        setVehicleClass(v);
+                        if (!isMasterTypeEditable(v, customClasses)) {
+                          setMasterTypeOverride("");
+                        }
+                      }}
                     >
                       <SelectTrigger id="vehicleClass">
                         <SelectValue placeholder="Select class..." />
@@ -358,12 +371,37 @@ export default function NewAssetPage() {
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label>Master Type</Label>
-                    <Input
-                      value={classification?.masterType ?? "---"}
-                      disabled
-                      className="bg-muted"
-                    />
+                    <Label>
+                      Master Type
+                      {masterTypeCanEdit && (
+                        <span className="ml-1 text-xs text-muted-foreground font-normal">
+                          (override — class has no default)
+                        </span>
+                      )}
+                    </Label>
+                    {masterTypeCanEdit ? (
+                      <Select
+                        value={masterTypeOverride || ""}
+                        onValueChange={(v) =>
+                          setMasterTypeOverride(v === "__none__" ? "" : v)
+                        }
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select master type..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__none__">— None —</SelectItem>
+                          <SelectItem value="Vehicle">Vehicle</SelectItem>
+                          <SelectItem value="Trailer">Trailer</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      <Input
+                        value={classification?.masterType ?? "---"}
+                        disabled
+                        className="bg-muted"
+                      />
+                    )}
                   </div>
                 </div>
 
