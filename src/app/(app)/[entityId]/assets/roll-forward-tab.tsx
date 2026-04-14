@@ -107,6 +107,8 @@ function computeRollForward(
   assets: AssetRecord[],
   deprEntries: DeprEntry[],
   months: { year: number; month: number }[],
+  openingYear: number,
+  openingMonth: number,
   resolveGLGroup?: (asset: AssetRecord) => string | null
 ): MonthlyRollForward[] {
   // Filter assets to this group, using resolver if provided
@@ -153,6 +155,40 @@ function computeRollForward(
   const result: MonthlyRollForward[] = [];
 
   for (const { year, month } of months) {
+    // Opening-period snapshot: this is the as-of date the register was loaded
+    // against. There is no pre-opening history to roll forward, so we just
+    // display the loaded-in cost + accumulated. Beginning equals ending;
+    // no additions/disposals/depreciation are attributed to this month.
+    if (year === openingYear && month === openingMonth) {
+      const heldAtOpening = groupAssets.filter(
+        (a) => isInServiceBy(a, year, month) && !isDisposedBy(a, year, month)
+      );
+      const snapshotCost = heldAtOpening.reduce(
+        (s, a) => s + Number(a.acquisition_cost),
+        0
+      );
+      let snapshotAccum = 0;
+      for (const a of heldAtOpening) {
+        const entry = deprByAssetMonth[a.id]?.[monthKey(year, month)];
+        if (entry) snapshotAccum += Number(entry.book_accumulated);
+      }
+      result.push({
+        year,
+        month,
+        beginningCost: snapshotCost,
+        additionsCost: 0,
+        disposalsCost: 0,
+        endingCost: snapshotCost,
+        beginningAccum: snapshotAccum,
+        depreciation: 0,
+        disposalsAccum: 0,
+        endingAccum: snapshotAccum,
+        beginningNbv: snapshotCost - snapshotAccum,
+        endingNbv: snapshotCost - snapshotAccum,
+      });
+      continue;
+    }
+
     const { year: py, month: pm } = prevPeriod(year, month);
 
     // Held at start of month = in service by end of prior month, not yet disposed
@@ -243,6 +279,10 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
   const [endYear, setEndYear] = useState(now.getFullYear());
   const [endMonth, setEndMonth] = useState(now.getMonth() + 1);
   const [loading, setLoading] = useState(true);
+  // Opening period — roll-forward cannot go earlier than this and the first
+  // column at this period is rendered as an as-of snapshot.
+  const [openingYear, setOpeningYear] = useState<number | null>(null);
+  const [openingMonth, setOpeningMonth] = useState<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -251,6 +291,8 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
       .then((data) => {
         if (cancelled || !data?.rental_asset_opening_date) return;
         const [y, m] = data.rental_asset_opening_date.split("-").map(Number);
+        setOpeningYear(y);
+        setOpeningMonth(m);
         let nextY = y;
         let nextM = m + 1;
         if (nextM > 12) {
@@ -265,6 +307,30 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
       cancelled = true;
     };
   }, [entityId]);
+
+  // Clamp any start selection so it never goes before the opening period.
+  function handleStartYearChange(y: number) {
+    let newY = y;
+    let newM = startMonth;
+    if (openingYear != null && openingMonth != null) {
+      if (newY < openingYear) newY = openingYear;
+      if (newY === openingYear && newM < openingMonth) newM = openingMonth;
+    }
+    setStartYear(newY);
+    setStartMonth(newM);
+  }
+  function handleStartMonthChange(m: number) {
+    let newM = m;
+    if (
+      openingYear != null &&
+      openingMonth != null &&
+      startYear === openingYear &&
+      newM < openingMonth
+    ) {
+      newM = openingMonth;
+    }
+    setStartMonth(newM);
+  }
 
   const [rollForwardData, setRollForwardData] = useState<
     Record<string, MonthlyRollForward[]>
@@ -322,6 +388,12 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
 
     const months = generateMonthRange(startYear, startMonth, endYear, endMonth);
 
+    // Opening period — snapshot column in computeRollForward. Defaults to a
+    // sentinel (year 0) when not yet loaded, so no month matches and all
+    // months fall through to normal roll-forward logic.
+    const openY = openingYear ?? 0;
+    const openM = openingMonth ?? 0;
+
     const data: Record<string, MonthlyRollForward[]> = {};
     for (const group of GL_ACCOUNT_GROUPS) {
       data[group.key] = computeRollForward(
@@ -329,19 +401,49 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
         assets,
         allDepr,
         months,
+        openY,
+        openM,
         resolveGLGroup
       );
     }
     setRollForwardData(data);
     setLoading(false);
-  }, [supabase, entityId, startYear, startMonth, endYear, endMonth]);
+  }, [
+    supabase,
+    entityId,
+    startYear,
+    startMonth,
+    endYear,
+    endMonth,
+    openingYear,
+    openingMonth,
+  ]);
 
   useEffect(() => {
     loadData();
   }, [loadData]);
 
   const months = generateMonthRange(startYear, startMonth, endYear, endMonth);
-  const years = Array.from({ length: 5 }, (_, i) => now.getFullYear() - i + 1);
+  // Year list — omit anything before the opening year so the user can't
+  // pick a pre-opening range. Falls back to the default window when the
+  // opening period hasn't loaded yet.
+  const allYears = Array.from(
+    { length: 5 },
+    (_, i) => now.getFullYear() - i + 1
+  );
+  const years = openingYear
+    ? allYears.filter((y) => y >= openingYear).sort((a, b) => a - b)
+    : allYears;
+  // Months available for the Start picker when the selected Start year
+  // equals the opening year — can't pick a month before the opening month.
+  const startMonthOptions =
+    openingYear != null &&
+    openingMonth != null &&
+    startYear === openingYear
+      ? MONTHS_FULL.map((m, i) => ({ value: i + 1, label: m })).filter(
+          (o) => o.value >= openingMonth
+        )
+      : MONTHS_FULL.map((m, i) => ({ value: i + 1, label: m }));
 
   interface RowDef {
     key: keyof MonthlyRollForward | "sep";
@@ -374,22 +476,22 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
           <span className="text-sm font-medium">From:</span>
           <Select
             value={String(startMonth)}
-            onValueChange={(v) => setStartMonth(Number(v))}
+            onValueChange={(v) => handleStartMonthChange(Number(v))}
           >
             <SelectTrigger className="w-[130px]">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {MONTHS_FULL.map((m, i) => (
-                <SelectItem key={i + 1} value={String(i + 1)}>
-                  {m}
+              {startMonthOptions.map((o) => (
+                <SelectItem key={o.value} value={String(o.value)}>
+                  {o.label}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
           <Select
             value={String(startYear)}
-            onValueChange={(v) => setStartYear(Number(v))}
+            onValueChange={(v) => handleStartYearChange(Number(v))}
           >
             <SelectTrigger className="w-[90px]">
               <SelectValue />
