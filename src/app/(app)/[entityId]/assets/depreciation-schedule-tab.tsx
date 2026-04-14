@@ -12,8 +12,6 @@ import {
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Label } from "@/components/ui/label";
 import { RefreshCw, Calculator } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency, getCurrentPeriod, getPeriodShortLabel } from "@/lib/utils/dates";
@@ -99,38 +97,100 @@ function parseISODate(dateStr: string): { year: number; month: number } {
   return { year: parseInt(parts[0], 10), month: parseInt(parts[1], 10) };
 }
 
-/** Apply group rules as fallback when asset lacks depreciation params */
-function resolveAssetForCalc(
+interface EffectiveValues {
+  usefulLife: number;
+  salvageValue: number;
+  method: string;
+  ulFromRule: boolean;
+  salvageFromRule: boolean;
+  ulIsOverride: boolean;
+  salvageIsOverride: boolean;
+}
+
+/**
+ * Resolve the effective useful life / salvage / method for an asset.
+ *
+ * Reporting-group rules are the default — schedules, end dates, and remaining
+ * life are all calculated from the rule when one exists. An asset is treated
+ * as overriding the rule only when its stored value is non-zero and different
+ * from what the rule would produce. This way assets whose stored values were
+ * left at zero (salvage) or match the rule already (useful life) display
+ * rule-driven values; truly asset-specific values still win.
+ */
+function resolveEffectiveValues(
   asset: AssetRow,
-  rule: DepreciationRule | undefined,
-  forceCategoryRules?: boolean
-): AssetForDepreciation {
-  let usefulLife = asset.book_useful_life_months;
-  let salvageValue = asset.book_salvage_value;
-  let method = asset.book_depreciation_method;
+  rule: DepreciationRule | undefined
+): EffectiveValues {
+  const assetUL = asset.book_useful_life_months;
+  const assetSalvage = asset.book_salvage_value;
+  const assetMethod = asset.book_depreciation_method;
 
-  const shouldApplyRule = forceCategoryRules
-    ? !!rule
-    : rule && (!usefulLife || usefulLife <= 0);
+  const ruleUL = rule?.book_useful_life_months ?? null;
+  const ruleSalvagePct = rule?.book_salvage_pct ?? null;
+  const ruleSalvage =
+    ruleSalvagePct != null && ruleSalvagePct >= 0
+      ? Math.round(asset.acquisition_cost * (ruleSalvagePct / 100) * 100) / 100
+      : null;
+  const ruleMethod = rule?.book_depreciation_method;
 
-  if (shouldApplyRule && rule) {
-    if (rule.book_useful_life_months && rule.book_useful_life_months > 0) {
-      usefulLife = rule.book_useful_life_months;
-    }
-    if (rule.book_salvage_pct != null && rule.book_salvage_pct >= 0) {
-      salvageValue = Math.round(asset.acquisition_cost * (rule.book_salvage_pct / 100) * 100) / 100;
-    }
-    if (rule.book_depreciation_method) {
-      method = rule.book_depreciation_method;
+  let usefulLife = assetUL;
+  let salvageValue = assetSalvage;
+  let method = assetMethod;
+  let ulFromRule = false;
+  let salvageFromRule = false;
+  let ulIsOverride = false;
+  let salvageIsOverride = false;
+
+  if (ruleUL != null && ruleUL > 0) {
+    if (assetUL && assetUL > 0 && assetUL !== ruleUL) {
+      usefulLife = assetUL;
+      ulIsOverride = true;
+    } else {
+      usefulLife = ruleUL;
+      ulFromRule = true;
     }
   }
 
+  if (ruleSalvage != null) {
+    if (assetSalvage > 0 && Math.abs(assetSalvage - ruleSalvage) > 0.01) {
+      salvageValue = assetSalvage;
+      salvageIsOverride = true;
+    } else {
+      salvageValue = ruleSalvage;
+      salvageFromRule = true;
+    }
+  }
+
+  if (ruleMethod) {
+    if (!assetMethod || assetMethod === ruleMethod) {
+      method = ruleMethod;
+    }
+    // else: asset's method stays (silent override — not surfaced in UI yet)
+  }
+
+  return {
+    usefulLife,
+    salvageValue,
+    method,
+    ulFromRule,
+    salvageFromRule,
+    ulIsOverride,
+    salvageIsOverride,
+  };
+}
+
+/** Build AssetForDepreciation from effective (rule-driven unless overridden) values. */
+function resolveAssetForCalc(
+  asset: AssetRow,
+  rule: DepreciationRule | undefined
+): AssetForDepreciation {
+  const eff = resolveEffectiveValues(asset, rule);
   return {
     acquisition_cost: asset.acquisition_cost,
     in_service_date: asset.in_service_date,
-    book_useful_life_months: usefulLife,
-    book_salvage_value: salvageValue,
-    book_depreciation_method: method,
+    book_useful_life_months: eff.usefulLife,
+    book_salvage_value: eff.salvageValue,
+    book_depreciation_method: eff.method,
     tax_cost_basis: asset.tax_cost_basis,
     tax_depreciation_method: asset.tax_depreciation_method,
     tax_useful_life_months: asset.tax_useful_life_months,
@@ -152,7 +212,6 @@ export function DepreciationScheduleTab({
   const [endYear, setEndYear] = useState(now.getFullYear());
   const [endMonth, setEndMonth] = useState(now.getMonth() + 1);
   const [viewMode, setViewMode] = useState<ViewMode>("depreciation");
-  const [useCategoryRules, setUseCategoryRules] = useState(false);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
 
@@ -216,7 +275,7 @@ export function DepreciationScheduleTab({
     for (const asset of assets) {
       const group = getReportingGroup(asset.vehicle_class, customClasses);
       const rule = group ? rulesMap.get(group) : undefined;
-      const assetForCalc = resolveAssetForCalc(asset, rule, useCategoryRules);
+      const assetForCalc = resolveAssetForCalc(asset, rule);
 
       const opening = buildOpeningBalance(
         openingDate,
@@ -239,7 +298,7 @@ export function DepreciationScheduleTab({
     }
 
     setScheduleMap(map);
-  }, [assets, rules, months, customClasses, useCategoryRules, openingDate]);
+  }, [assets, rules, months, customClasses, openingDate]);
 
   useEffect(() => {
     async function init() {
@@ -373,33 +432,16 @@ export function DepreciationScheduleTab({
     buildSchedules();
   }
 
-  /** Resolve the effective UL/salvage/method for display, respecting the toggle */
+  /**
+   * Resolve the effective UL/salvage/method for display. Rule-driven by
+   * default; asset values win only when they explicitly diverge.
+   */
   function resolveEffective(asset: AssetRow) {
     const group = getReportingGroup(asset.vehicle_class, customClasses);
     const rulesMap = new Map<string, DepreciationRule>();
     for (const r of rules) rulesMap.set(r.reporting_group, r);
     const rule = group ? rulesMap.get(group) : undefined;
-
-    let usefulLife = asset.book_useful_life_months;
-    let salvageValue = asset.book_salvage_value;
-    let fromRule = false;
-
-    const shouldApply = useCategoryRules
-      ? !!rule
-      : rule && (!usefulLife || usefulLife <= 0);
-
-    if (shouldApply && rule) {
-      if (rule.book_useful_life_months && rule.book_useful_life_months > 0) {
-        usefulLife = rule.book_useful_life_months;
-        fromRule = true;
-      }
-      if (rule.book_salvage_pct != null && rule.book_salvage_pct >= 0) {
-        salvageValue = Math.round(asset.acquisition_cost * (rule.book_salvage_pct / 100) * 100) / 100;
-        fromRule = true;
-      }
-    }
-
-    return { usefulLife, salvageValue, fromRule };
+    return resolveEffectiveValues(asset, rule);
   }
 
   function getCellValue(
@@ -473,9 +515,10 @@ export function DepreciationScheduleTab({
 
   // Effective useful life display for asset info column
   function getEffectiveUL(asset: AssetRow): string {
-    const { usefulLife, fromRule } = resolveEffective(asset);
+    const { usefulLife, ulFromRule, ulIsOverride } = resolveEffective(asset);
     if (usefulLife && usefulLife > 0) {
-      return `${usefulLife} mo${fromRule ? "*" : ""}`;
+      const suffix = ulFromRule ? "*" : ulIsOverride ? "†" : "";
+      return `${usefulLife} mo${suffix}`;
     }
     return "---";
   }
@@ -501,9 +544,10 @@ export function DepreciationScheduleTab({
   }
 
   function getEffectiveSalvage(asset: AssetRow): string {
-    const { salvageValue, fromRule } = resolveEffective(asset);
+    const { salvageValue, salvageFromRule, salvageIsOverride } = resolveEffective(asset);
     if (salvageValue > 0) {
-      return `${formatCurrency(salvageValue)}${fromRule ? "*" : ""}`;
+      const suffix = salvageFromRule ? "*" : salvageIsOverride ? "†" : "";
+      return `${formatCurrency(salvageValue)}${suffix}`;
     }
     return "$0.00";
   }
@@ -580,13 +624,6 @@ export function DepreciationScheduleTab({
         </div>
 
         <div className="flex items-center gap-4 ml-auto">
-          <label className="flex items-center gap-2 cursor-pointer">
-            <Checkbox
-              checked={useCategoryRules}
-              onCheckedChange={(checked) => setUseCategoryRules(!!checked)}
-            />
-            <span className="text-sm whitespace-nowrap">Use Category Rules</span>
-          </label>
           <Select
             value={viewMode}
             onValueChange={(v) => setViewMode(v as ViewMode)}
@@ -616,7 +653,7 @@ export function DepreciationScheduleTab({
       {/* Legend for group rules */}
       {rules.length > 0 && (
         <p className="text-xs text-muted-foreground">
-          * = value derived from reporting group rule (asset has no direct assumption)
+          * = value from reporting group rule · † = asset-specific override (does not follow the rule)
         </p>
       )}
 
