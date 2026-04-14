@@ -79,6 +79,7 @@ interface AssetRow {
   book_accumulated_depreciation: number;
   book_net_value: number;
   status: string;
+  disposed_date: string | null;
   cost_account_id: string | null;
   accum_depr_account_id: string | null;
   master_type_override: string | null;
@@ -222,11 +223,27 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
     const { data: assetsData } = await supabase
       .from("fixed_assets")
       .select(
-        "id, asset_name, asset_tag, vehicle_class, in_service_date, acquisition_cost, book_useful_life_months, book_salvage_value, book_depreciation_method, book_accumulated_depreciation, book_net_value, status, cost_account_id, accum_depr_account_id, master_type_override"
+        "id, asset_name, asset_tag, vehicle_class, in_service_date, acquisition_cost, book_useful_life_months, book_salvage_value, book_depreciation_method, book_accumulated_depreciation, book_net_value, status, disposed_date, cost_account_id, accum_depr_account_id, master_type_override"
       )
       .eq("entity_id", entityId);
 
-    const assets = (assetsData ?? []) as AssetRow[];
+    const allAssetsRaw = (assetsData ?? []) as AssetRow[];
+
+    // Reconciliation is an as-of view: only include assets that existed and
+    // were still held at the end of the selected period. Filter out assets
+    // acquired after the period (future purchases) and assets disposed on or
+    // before the period's last day (already sold by the reporting date).
+    const periodLastDay = (() => {
+      const d = new Date(periodYear, periodMonth, 0); // day 0 = last day of prior
+      return d.toISOString().split("T")[0];
+    })();
+    const assets = allAssetsRaw.filter((a) => {
+      const isd = a.in_service_date?.slice(0, 10) ?? null;
+      if (!isd || isd > periodLastDay) return false;
+      const dd = a.disposed_date?.slice(0, 10) ?? null;
+      if (a.status === "disposed" && dd && dd <= periodLastDay) return false;
+      return true;
+    });
 
     // 5. Fetch depreciation entries for this period
     const assetIds = assets.map((a) => a.id);
