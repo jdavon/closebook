@@ -2105,8 +2105,8 @@ function AccrualSchedule({
 }) {
   const [expandedMonth, setExpandedMonth] = useState<string | null>(null);
 
-  // Only show months that have any billed / earned / unbilled-earned activity
-  const activeMonths = monthlyData.filter((m) => m.billed > 0 || m.earned > 0 || m.unbilledEarned > 0);
+  // Only show months that have any billed / earned / unbilled-earned / pending activity
+  const activeMonths = monthlyData.filter((m) => m.billed > 0 || m.earned > 0 || m.unbilledEarned > 0 || m.pending > 0);
 
   // Build a lookup from the full monthlyData array so we can find the prior month
   const monthIndex = new Map<string, MonthlyRevenue>();
@@ -2119,12 +2119,13 @@ function AccrualSchedule({
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
   };
 
-  // Compute per-month derived amounts once for reuse in reversal lookup
+  // Compute per-month derived amounts once for reuse in reversal lookup.
+  // Pending invoices (NEW/APPROVED in RW) accrue at 100% — no discount applied.
   const derivedByMonth = new Map<string, { totalAccrual: number; totalDeferral: number; unbilledDiscount: number; unbilledNet: number }>();
   for (const m of monthlyData) {
     const unbilledDiscount = Math.round(m.unbilledEarned * (1 - realizationRate) * 100) / 100;
     const unbilledNet = Math.round(m.unbilledEarned * realizationRate * 100) / 100;
-    const totalAccrual = Math.round((m.accrued + unbilledNet) * 100) / 100;
+    const totalAccrual = Math.round((m.accrued + unbilledNet + m.pending) * 100) / 100;
     derivedByMonth.set(m.month, {
       totalAccrual,
       totalDeferral: m.deferred,
@@ -2169,10 +2170,20 @@ function AccrualSchedule({
       .sort((a, b) => b.amountInMonth - a.amountInMonth);
   }, [expandedMonth, unbilledEarnedLines]);
 
+  // Pending invoices (NEW/APPROVED) for the expanded month — grouped by invoice date
+  const pendingForExpanded = useMemo(() => {
+    if (!expandedMonth) return [];
+    return closedInvoices
+      .filter((inv) => (inv.status === "NEW" || inv.status === "APPROVED"))
+      .filter((inv) => getMonthKey(inv.invoiceDate) === expandedMonth)
+      .sort((a, b) => b.subTotal - a.subTotal);
+  }, [expandedMonth, closedInvoices]);
+
   const totals = scheduleRows.reduce(
     (acc, m) => ({
       billed: acc.billed + m.billed,
       earned: acc.earned + m.earned,
+      pending: acc.pending + m.pending,
       unbilledEarned: acc.unbilledEarned + m.unbilledEarned,
       unbilledDiscount: acc.unbilledDiscount + m.unbilledDiscount,
       unbilledNet: acc.unbilledNet + m.unbilledNet,
@@ -2182,7 +2193,7 @@ function AccrualSchedule({
       reversalDeferred: acc.reversalDeferred + m.reversalDeferred,
       netRevenueImpact: acc.netRevenueImpact + m.netRevenueImpact,
     }),
-    { billed: 0, earned: 0, unbilledEarned: 0, unbilledDiscount: 0, unbilledNet: 0, totalAccrual: 0, totalDeferral: 0, reversalAccrued: 0, reversalDeferred: 0, netRevenueImpact: 0 },
+    { billed: 0, earned: 0, pending: 0, unbilledEarned: 0, unbilledDiscount: 0, unbilledNet: 0, totalAccrual: 0, totalDeferral: 0, reversalAccrued: 0, reversalDeferred: 0, netRevenueImpact: 0 },
   );
 
   const ratePct = Math.round(realizationRate * 1000) / 10;  // e.g. 70.0
@@ -2219,6 +2230,7 @@ function AccrualSchedule({
                     <TableHead>Month</TableHead>
                     <TableHead className="text-right">Billed</TableHead>
                     <TableHead className="text-right">Earned</TableHead>
+                    <TableHead className="text-right">Pending</TableHead>
                     <TableHead className="text-right border-l border-gray-200">UB Gross</TableHead>
                     <TableHead className="text-right">Discount</TableHead>
                     <TableHead className="text-right">UB Net</TableHead>
@@ -2251,6 +2263,9 @@ function AccrualSchedule({
                           <TableCell className="text-right tabular-nums">
                             {formatCurrency(m.earned)}
                           </TableCell>
+                          <TableCell className="text-right tabular-nums text-sky-700">
+                            {m.pending > 0 ? formatCurrency(m.pending) : "—"}
+                          </TableCell>
                           <TableCell className="text-right tabular-nums border-l border-gray-200 text-muted-foreground">
                             {m.unbilledEarned > 0 ? formatCurrency(m.unbilledEarned) : "—"}
                           </TableCell>
@@ -2279,7 +2294,7 @@ function AccrualSchedule({
                         {/* Expanded invoice detail */}
                         {isExpanded && (
                           <TableRow>
-                            <TableCell colSpan={12} className="p-0 bg-muted/30">
+                            <TableCell colSpan={13} className="p-0 bg-muted/30">
                               <div className="px-4 py-3">
                                 <h5 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
                                   Invoice Detail — {m.label} ({invoiceDetails.length} invoices)
@@ -2362,6 +2377,61 @@ function AccrualSchedule({
                                         </TableRow>
                                       </TableBody>
                                     </Table>
+                                  </div>
+                                )}
+
+                                {/* Pending Invoices (NEW/APPROVED in RW, not yet in QB) */}
+                                {pendingForExpanded.length > 0 && (
+                                  <div className="mt-4">
+                                    <h5 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
+                                      Pending RW Invoices — {m.label} ({pendingForExpanded.length} invoices at 100%, not yet in QuickBooks)
+                                    </h5>
+                                    <div className="overflow-x-auto rounded border bg-white">
+                                      <Table>
+                                        <TableHeader>
+                                          <TableRow>
+                                            <TableHead>Invoice #</TableHead>
+                                            <TableHead>Status</TableHead>
+                                            <TableHead>Customer</TableHead>
+                                            <TableHead>Description</TableHead>
+                                            <TableHead>Invoice Date</TableHead>
+                                            <TableHead>Billing Period</TableHead>
+                                            <TableHead className="text-right">Amount</TableHead>
+                                          </TableRow>
+                                        </TableHeader>
+                                        <TableBody>
+                                          {pendingForExpanded.map((inv) => (
+                                            <TableRow key={inv.invoiceId}>
+                                              <TableCell className="font-medium text-xs">{inv.invoiceNumber}</TableCell>
+                                              <TableCell className="text-xs">
+                                                <Badge variant="secondary" className="bg-sky-100 text-sky-800 text-[10px] px-1.5 py-0">{inv.status}</Badge>
+                                              </TableCell>
+                                              <TableCell className="text-xs">{inv.customer}</TableCell>
+                                              <TableCell className="text-xs max-w-[160px] truncate">{inv.orderDescription}</TableCell>
+                                              <TableCell className="text-muted-foreground text-xs whitespace-nowrap">
+                                                {formatDate(inv.invoiceDate)}
+                                              </TableCell>
+                                              <TableCell className="text-muted-foreground text-xs whitespace-nowrap">
+                                                {inv.billingStartDate || inv.billingEndDate
+                                                  ? `${formatDate(inv.billingStartDate)} – ${formatDate(inv.billingEndDate)}`
+                                                  : "—"}
+                                              </TableCell>
+                                              <TableCell className="text-right tabular-nums text-xs font-medium text-sky-700">
+                                                {formatCurrency(inv.subTotal)}
+                                              </TableCell>
+                                            </TableRow>
+                                          ))}
+                                          <TableRow className="border-t-2 font-semibold">
+                                            <TableCell colSpan={6} className="text-xs">
+                                              Total ({pendingForExpanded.length} invoices) — accrues at 100%
+                                            </TableCell>
+                                            <TableCell className="text-right tabular-nums text-xs font-medium text-sky-700">
+                                              {formatCurrency(pendingForExpanded.reduce((s, i) => s + i.subTotal, 0))}
+                                            </TableCell>
+                                          </TableRow>
+                                        </TableBody>
+                                      </Table>
+                                    </div>
                                   </div>
                                 )}
 
@@ -2450,6 +2520,9 @@ function AccrualSchedule({
                     </TableCell>
                     <TableCell className="text-right tabular-nums">
                       {formatCurrency(totals.earned)}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums text-sky-700">
+                      {totals.pending > 0 ? formatCurrency(totals.pending) : "—"}
                     </TableCell>
                     <TableCell className="text-right tabular-nums border-l border-gray-200 text-muted-foreground">
                       {totals.unbilledEarned > 0 ? formatCurrency(totals.unbilledEarned) : "—"}
@@ -2618,6 +2691,32 @@ function AccrualSchedule({
                                       <TableCell className="text-right tabular-nums">—</TableCell>
                                       <TableCell className="text-right tabular-nums font-medium text-teal-700">
                                         {formatCurrency(m.accrued)}
+                                      </TableCell>
+                                    </TableRow>
+                                  </>
+                                )}
+                                {m.pending > 0 && (
+                                  <>
+                                    <TableRow>
+                                      <TableCell className="text-muted-foreground">{++lineNum}</TableCell>
+                                      <TableCell className="font-medium">Unbilled Receivables (Asset)</TableCell>
+                                      <TableCell className="text-muted-foreground text-sm">
+                                        Pending RW invoices not yet synced to QuickBooks — {m.label}
+                                      </TableCell>
+                                      <TableCell className="text-right tabular-nums font-medium text-teal-700">
+                                        {formatCurrency(m.pending)}
+                                      </TableCell>
+                                      <TableCell className="text-right tabular-nums">—</TableCell>
+                                    </TableRow>
+                                    <TableRow>
+                                      <TableCell className="text-muted-foreground">{++lineNum}</TableCell>
+                                      <TableCell className="font-medium">Rental Revenue (Income)</TableCell>
+                                      <TableCell className="text-muted-foreground text-sm">
+                                        Pending invoices at 100% (no realization discount) — {m.label}
+                                      </TableCell>
+                                      <TableCell className="text-right tabular-nums">—</TableCell>
+                                      <TableCell className="text-right tabular-nums font-medium text-teal-700">
+                                        {formatCurrency(m.pending)}
                                       </TableCell>
                                     </TableRow>
                                   </>
@@ -3398,6 +3497,7 @@ function AccrualTab({
         rate={rate}
         monthlyData={monthlyData}
         unbilledEarnedLines={unbilledEarnedLines}
+        pendingInvoices={closedInvoices.filter((inv) => inv.status === "NEW" || inv.status === "APPROVED")}
         closedPeriodKeys={closedPeriodKeys}
         onClosed={loadCloses}
       />
@@ -3522,7 +3622,7 @@ function RealizationRateCard({
 }
 
 interface CloseLinePreview {
-  lineType: "unbilled_earned" | "timing_accrual" | "timing_deferral";
+  lineType: "unbilled_earned" | "timing_accrual" | "timing_deferral" | "pending_invoice";
   orderNumber?: string;
   invoiceNumber?: string;
   customer?: string;
@@ -3540,6 +3640,7 @@ function CloseMonthSection({
   rate,
   monthlyData,
   unbilledEarnedLines,
+  pendingInvoices,
   closedPeriodKeys,
   onClosed,
 }: {
@@ -3547,6 +3648,7 @@ function CloseMonthSection({
   rate: number;
   monthlyData: MonthlyRevenue[];
   unbilledEarnedLines: UnbilledEarnedLine[];
+  pendingInvoices: ClosedInvoice[];
   closedPeriodKeys: Set<string>;
   onClosed: () => void;
 }) {
@@ -3558,7 +3660,7 @@ function CloseMonthSection({
 
   const candidateMonths = useMemo(() => {
     return monthlyData
-      .filter((m) => m.billed > 0 || m.earned > 0 || m.unbilledEarned > 0)
+      .filter((m) => m.billed > 0 || m.earned > 0 || m.unbilledEarned > 0 || m.pending > 0)
       .filter((m) => !closedPeriodKeys.has(m.month))
       .sort((a, b) => b.month.localeCompare(a.month));
   }, [monthlyData, closedPeriodKeys]);
@@ -3611,6 +3713,26 @@ function CloseMonthSection({
       });
     }
 
+    // Pending RW invoices — 100% face value, no realization discount
+    const pendingForMonth = pendingInvoices.filter(
+      (inv) => (inv.status === "NEW" || inv.status === "APPROVED") && getMonthKey(inv.invoiceDate) === selectedMonth,
+    );
+    for (const inv of pendingForMonth) {
+      lines.push({
+        lineType: "pending_invoice",
+        invoiceNumber: inv.invoiceNumber,
+        orderNumber: inv.orderNumber || undefined,
+        customer: inv.customer,
+        orderDescription: inv.orderDescription,
+        rentalStartDate: inv.billingStartDate ? inv.billingStartDate.slice(0, 10) : undefined,
+        rentalEndDate: inv.billingEndDate ? inv.billingEndDate.slice(0, 10) : undefined,
+        grossAmount: inv.subTotal,
+        realizationRateApplied: 1,
+        expectedDiscount: 0,
+        netAmount: inv.subTotal,
+      });
+    }
+
     const ubForMonth = unbilledEarnedLines.filter((l) => l.month === selectedMonth);
     for (const ln of ubForMonth) {
       const discount = Math.round(ln.amountInMonth * (1 - rate) * 100) / 100;
@@ -3629,16 +3751,17 @@ function CloseMonthSection({
       });
     }
     return lines;
-  }, [selectedMonth, monthlyData, unbilledEarnedLines, rate]);
+  }, [selectedMonth, monthlyData, unbilledEarnedLines, pendingInvoices, rate]);
 
   const previewTotals = previewLines.reduce(
     (acc, l) => ({
       gross: acc.gross + (l.lineType === "timing_deferral" ? 0 : l.grossAmount),
       discount: acc.discount + l.expectedDiscount,
-      netAccrual: acc.netAccrual + (l.lineType === "timing_accrual" || l.lineType === "unbilled_earned" ? l.netAmount : 0),
+      netAccrual: acc.netAccrual + (l.lineType === "timing_accrual" || l.lineType === "unbilled_earned" || l.lineType === "pending_invoice" ? l.netAmount : 0),
       netDeferral: acc.netDeferral + (l.lineType === "timing_deferral" ? l.netAmount : 0),
+      pending: acc.pending + (l.lineType === "pending_invoice" ? l.netAmount : 0),
     }),
-    { gross: 0, discount: 0, netAccrual: 0, netDeferral: 0 },
+    { gross: 0, discount: 0, netAccrual: 0, netDeferral: 0, pending: 0 },
   );
 
   const submitClose = async () => {
@@ -3792,6 +3915,7 @@ function CloseMonthSection({
                   <TableBody>
                     {(() => {
                       const timing = previewLines.filter(l => l.lineType === "timing_accrual").reduce((s, l) => s + l.netAmount, 0);
+                      const pendingTotal = previewLines.filter(l => l.lineType === "pending_invoice").reduce((s, l) => s + l.netAmount, 0);
                       const unbilledGross = previewLines.filter(l => l.lineType === "unbilled_earned").reduce((s, l) => s + l.grossAmount, 0);
                       const unbilledNet = previewLines.filter(l => l.lineType === "unbilled_earned").reduce((s, l) => s + l.netAmount, 0);
                       const discount = previewLines.filter(l => l.lineType === "unbilled_earned").reduce((s, l) => s + l.expectedDiscount, 0);
@@ -3810,6 +3934,22 @@ function CloseMonthSection({
                                 <TableCell className="text-sm text-muted-foreground">Timing accrual — {selectedLabel}</TableCell>
                                 <TableCell className="text-right">—</TableCell>
                                 <TableCell className="text-right tabular-nums font-medium">{formatCurrency(timing)}</TableCell>
+                              </TableRow>
+                            </>
+                          )}
+                          {pendingTotal > 0 && (
+                            <>
+                              <TableRow>
+                                <TableCell className="font-medium">Unbilled Receivables (Asset)</TableCell>
+                                <TableCell className="text-sm text-muted-foreground">Pending RW invoices (not yet in QuickBooks) — {selectedLabel}</TableCell>
+                                <TableCell className="text-right tabular-nums font-medium">{formatCurrency(pendingTotal)}</TableCell>
+                                <TableCell className="text-right">—</TableCell>
+                              </TableRow>
+                              <TableRow>
+                                <TableCell className="font-medium">Rental Revenue (Income)</TableCell>
+                                <TableCell className="text-sm text-muted-foreground">Pending invoices at 100% — {selectedLabel}</TableCell>
+                                <TableCell className="text-right">—</TableCell>
+                                <TableCell className="text-right tabular-nums font-medium">{formatCurrency(pendingTotal)}</TableCell>
                               </TableRow>
                             </>
                           )}
@@ -3883,10 +4023,13 @@ function CloseMonthSection({
                       <TableRow key={idx}>
                         <TableCell className="text-xs">
                           <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
-                            {l.lineType === "unbilled_earned" ? "UB Earned" : l.lineType === "timing_accrual" ? "Timing Acc" : "Timing Def"}
+                            {l.lineType === "unbilled_earned" ? "UB Earned"
+                              : l.lineType === "timing_accrual" ? "Timing Acc"
+                              : l.lineType === "timing_deferral" ? "Timing Def"
+                              : "Pending Inv"}
                           </Badge>
                         </TableCell>
-                        <TableCell className="text-xs font-medium">{l.orderNumber ?? "—"}</TableCell>
+                        <TableCell className="text-xs font-medium">{l.invoiceNumber ?? l.orderNumber ?? "—"}</TableCell>
                         <TableCell className="text-xs">{l.customer ?? "—"}</TableCell>
                         <TableCell className="text-xs max-w-[220px] truncate">{l.orderDescription ?? "—"}</TableCell>
                         <TableCell className="text-right text-xs tabular-nums">{formatCurrency(l.grossAmount)}</TableCell>

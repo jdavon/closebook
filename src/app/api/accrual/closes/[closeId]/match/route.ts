@@ -45,25 +45,25 @@ export async function POST(
     // Pull current RW data
     const { invoices } = await fetchRentalWorksRevenueData();
 
-    // Index closed invoices by order number
+    // Index closed invoices by order number AND by invoice number
     const CLOSED = new Set(["CLOSED", "PROCESSED"]);
     const invoicesByOrder = new Map<string, Array<{ number: string; date: string; subTotal: number }>>();
+    const invoicesByNumber = new Map<string, { number: string; date: string; subTotal: number }>();
     for (const inv of invoices) {
       const status = (inv.Status || "").toUpperCase();
       if (!CLOSED.has(status)) continue;
-      if (!inv.OrderNumber) continue;
-      if (!invoicesByOrder.has(inv.OrderNumber)) {
-        invoicesByOrder.set(inv.OrderNumber, []);
-      }
-      invoicesByOrder.get(inv.OrderNumber)!.push({
+      const entry = {
         number: inv.InvoiceNumber,
         date: inv.InvoiceDate,
         subTotal: Number(inv.InvoiceSubTotal) || 0,
-      });
+      };
+      if (inv.OrderNumber) {
+        if (!invoicesByOrder.has(inv.OrderNumber)) invoicesByOrder.set(inv.OrderNumber, []);
+        invoicesByOrder.get(inv.OrderNumber)!.push(entry);
+      }
+      if (inv.InvoiceNumber) invoicesByNumber.set(inv.InvoiceNumber, entry);
     }
 
-    // For each unresolved line, check if we now have a matching closed invoice
-    // issued ON OR AFTER the close_as_of_date (anything before was already in the snapshot).
     const closeAsOfMs = new Date(period.close_as_of_date).getTime();
     let matchedCount = 0;
     const updates: Array<{
@@ -77,22 +77,42 @@ export async function POST(
     }> = [];
 
     for (const line of lines) {
+      // Pending invoices match by invoice_number (same RW invoice transitioning
+      // from NEW/APPROVED to CLOSED). No close-date filter — we want the invoice
+      // even if CLOSED before the close date (it just finalized post-lock).
+      if (line.line_type === "pending_invoice") {
+        if (!line.invoice_number) continue;
+        const match = invoicesByNumber.get(line.invoice_number);
+        if (!match) continue;
+        const actual = match.subTotal;
+        const variance = Math.round((actual - line.net_amount) * 100) / 100;
+        updates.push({
+          id: line.id,
+          matched_invoice_number: match.number,
+          matched_invoice_date: match.date.slice(0, 10),
+          actual_invoice_subtotal: Math.round(actual * 100) / 100,
+          variance_amount: variance,
+          line_status: "invoiced",
+          resolved_at: new Date().toISOString(),
+        });
+        matchedCount += 1;
+        continue;
+      }
+
+      // Unbilled earned: match by order_number against CLOSED invoices issued
+      // on or after the close_as_of_date (anything before was already in the snapshot).
       if (!line.order_number) continue;
       const matches = invoicesByOrder.get(line.order_number);
       if (!matches || matches.length === 0) continue;
 
-      // Only match invoices dated on or after the close date (subsequent to close)
       const newMatches = matches.filter((inv) => {
         const t = new Date(inv.date).getTime();
         return !isNaN(t) && t >= closeAsOfMs;
       });
       if (newMatches.length === 0) continue;
 
-      // Use the sum of new matches' subtotals — one order can have multiple invoices
       const actualTotal = newMatches.reduce((s, m) => s + m.subTotal, 0);
       const variance = Math.round((actualTotal - line.net_amount) * 100) / 100;
-
-      // Pick the earliest invoice for display
       const earliest = newMatches.sort((a, b) => a.date.localeCompare(b.date))[0];
 
       updates.push({
