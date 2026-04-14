@@ -210,6 +210,9 @@ export function DepreciationScheduleTab({
   const [assets, setAssets] = useState<AssetRow[]>([]);
   const [rules, setRules] = useState<DepreciationRule[]>([]);
   const [openingDate, setOpeningDate] = useState<string | null>(null);
+  const [openingBalances, setOpeningBalances] = useState<
+    Record<string, { book: number; tax: number }>
+  >({});
 
   // Schedule data: assetId -> monthKey -> DepreciationEntry
   const [scheduleMap, setScheduleMap] = useState<
@@ -250,6 +253,39 @@ export function DepreciationScheduleTab({
     setAssets((data as unknown as AssetRow[]) ?? []);
   }, [supabase, entityId]);
 
+  // Opening balances live on the subledger row at the opening period — NOT
+  // on the asset header (which drifts to the latest accumulated as schedules
+  // are regenerated). Always read the opening value from this row so
+  // regenerations don't compound.
+  const loadOpeningBalances = useCallback(
+    async (assetIds: string[], openingIso: string) => {
+      if (assetIds.length === 0) {
+        setOpeningBalances({});
+        return;
+      }
+      const [oy, om] = openingIso.split("-").map(Number);
+      const map: Record<string, { book: number; tax: number }> = {};
+      const BATCH = 100;
+      for (let i = 0; i < assetIds.length; i += BATCH) {
+        const batch = assetIds.slice(i, i + BATCH);
+        const { data } = await supabase
+          .from("fixed_asset_depreciation")
+          .select("fixed_asset_id, book_accumulated, tax_accumulated")
+          .in("fixed_asset_id", batch)
+          .eq("period_year", oy)
+          .eq("period_month", om);
+        for (const r of data ?? []) {
+          map[r.fixed_asset_id] = {
+            book: Number(r.book_accumulated) || 0,
+            tax: Number(r.tax_accumulated) || 0,
+          };
+        }
+      }
+      setOpeningBalances(map);
+    },
+    [supabase]
+  );
+
   const buildSchedules = useCallback(() => {
     if (assets.length === 0 || months.length === 0 || !openingDate) {
       setScheduleMap({});
@@ -269,10 +305,11 @@ export function DepreciationScheduleTab({
       const rule = group ? rulesMap.get(group) : undefined;
       const assetForCalc = resolveAssetForCalc(asset, rule);
 
+      const stored = openingBalances[asset.id];
       const opening = buildOpeningBalance(
         openingDate,
-        asset.book_accumulated_depreciation,
-        asset.tax_accumulated_depreciation
+        stored ? stored.book : 0,
+        stored ? stored.tax : 0
       );
 
       const schedule = generateDepreciationSchedule(
@@ -290,7 +327,7 @@ export function DepreciationScheduleTab({
     }
 
     setScheduleMap(map);
-  }, [assets, rules, months, customClasses, openingDate]);
+  }, [assets, rules, months, customClasses, openingDate, openingBalances]);
 
   useEffect(() => {
     async function init() {
@@ -300,6 +337,16 @@ export function DepreciationScheduleTab({
     }
     init();
   }, [loadAssets, loadRules, loadSettings]);
+
+  // Whenever the assets list or opening date changes, refresh the cached
+  // opening-balance rows for those assets.
+  useEffect(() => {
+    if (!openingDate || assets.length === 0) return;
+    loadOpeningBalances(
+      assets.map((a) => a.id),
+      openingDate
+    );
+  }, [assets, openingDate, loadOpeningBalances]);
 
   useEffect(() => {
     if (!loading) {
@@ -346,10 +393,14 @@ export function DepreciationScheduleTab({
       const rule = group ? rulesMap.get(group) : undefined;
       const assetForCalc = resolveAssetForCalc(asset, rule);
 
+      // Read the opening balance from the subledger row (marked manual on
+      // import), not from the asset header. The header holds the latest
+      // accumulated, which drifts as schedules are regenerated.
+      const stored = openingBalances[asset.id];
       const opening = buildOpeningBalance(
         openingDate,
-        asset.book_accumulated_depreciation,
-        asset.tax_accumulated_depreciation
+        stored ? stored.book : 0,
+        stored ? stored.tax : 0
       );
 
       const schedule = generateDepreciationSchedule(

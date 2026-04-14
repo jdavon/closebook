@@ -280,6 +280,10 @@ export async function POST(request: NextRequest) {
       const effectiveTaxBasis = taxCostBasis ?? acquisitionCost;
 
       // 1. Write the opening balance row anchored at the opening period.
+      // is_manual_override=true prevents it from being deleted by the
+      // Generate All Schedules delete-non-manual sweep, so the subledger
+      // value at the opening date stays pinned to the imported figure
+      // across regenerations.
       await supabase.from("fixed_asset_depreciation").insert({
         fixed_asset_id: assetId,
         period_year: openingPeriod.year,
@@ -292,6 +296,7 @@ export async function POST(request: NextRequest) {
         tax_accumulated: finalTaxAccum,
         tax_net_value:
           Math.round((effectiveTaxBasis - finalTaxAccum) * 100) / 100,
+        is_manual_override: true,
         notes: "Opening balance",
       });
 

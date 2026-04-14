@@ -124,10 +124,17 @@ export default function DepreciationSchedulePage() {
       bonus_depreciation_amount: asset.bonus_depreciation_amount,
     };
 
+    // Read the opening balance from the subledger row at the opening
+    // period (marked manual on import), not from the asset header. The
+    // header holds the latest accumulated and drifts as schedules regen.
+    const [oy, om] = openingDate.split("-").map(Number);
+    const openingRow = entries.find(
+      (e) => e.period_year === oy && e.period_month === om
+    );
     const opening = buildOpeningBalance(
       openingDate,
-      asset.book_accumulated_depreciation,
-      asset.tax_accumulated_depreciation
+      openingRow ? Number(openingRow.book_accumulated) : 0,
+      openingRow ? Number(openingRow.tax_accumulated) : 0
     );
 
     const schedule = generateDepreciationSchedule(
