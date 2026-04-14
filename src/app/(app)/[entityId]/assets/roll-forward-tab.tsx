@@ -10,6 +10,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { formatCurrency } from "@/lib/utils/dates";
 import {
   GL_ACCOUNT_GROUPS,
@@ -38,6 +44,7 @@ interface RollForwardTabProps {
 interface AssetRecord {
   id: string;
   asset_name: string;
+  asset_tag: string | null;
   vehicle_class: string | null;
   acquisition_cost: number;
   in_service_date: string;
@@ -53,6 +60,13 @@ interface AssetRecord {
   disposed_date: string | null;
   cost_account_id: string | null;
   master_type_override: string | null;
+}
+
+interface AssetContribution {
+  id: string;
+  name: string;
+  tag: string | null;
+  amount: number;
 }
 
 interface MonthlyRollForward {
@@ -71,6 +85,10 @@ interface MonthlyRollForward {
   // Net book value (derived)
   beginningNbv: number;
   endingNbv: number;
+  // Per-asset contributors for hover breakdowns on Additions / Disposals rows.
+  additionsAssets: AssetContribution[];
+  disposalsCostAssets: AssetContribution[];
+  disposalsAccumAssets: AssetContribution[];
 }
 
 const MONTH_LABELS = [
@@ -226,6 +244,9 @@ function computeRollForward(
         endingAccum: snapshotAccum,
         beginningNbv: snapshotCost - snapshotAccum,
         endingNbv: snapshotCost - snapshotAccum,
+        additionsAssets: [],
+        disposalsCostAssets: [],
+        disposalsAccumAssets: [],
       });
       continue;
     }
@@ -240,17 +261,17 @@ function computeRollForward(
       (s, a) => s + Number(a.acquisition_cost),
       0
     );
-    const additionsAssets = groupAssets.filter((a) =>
+    const monthAdditions = groupAssets.filter((a) =>
       isInServiceIn(a, year, month)
     );
-    const additionsCost = additionsAssets.reduce(
+    const additionsCost = monthAdditions.reduce(
       (s, a) => s + Number(a.acquisition_cost),
       0
     );
-    const disposalsAssets = heldAtStart.filter((a) =>
+    const monthDisposals = heldAtStart.filter((a) =>
       isDisposedIn(a, year, month)
     );
-    const disposalsCost = disposalsAssets.reduce(
+    const disposalsCost = monthDisposals.reduce(
       (s, a) => s + Number(a.acquisition_cost),
       0
     );
@@ -267,13 +288,41 @@ function computeRollForward(
       if (entry) depreciation += entry.book_depreciation;
     }
     let disposalsAccum = 0;
-    for (const a of disposalsAssets) {
-      disposalsAccum += accumAt(a, year, month);
+    const disposalsAccumAssets: AssetContribution[] = [];
+    for (const a of monthDisposals) {
+      const amount = accumAt(a, year, month);
+      disposalsAccum += amount;
+      disposalsAccumAssets.push({
+        id: a.id,
+        name: a.asset_name,
+        tag: a.asset_tag,
+        amount,
+      });
     }
     const endingAccum = beginningAccum + depreciation - disposalsAccum;
 
     const beginningNbv = beginningCost - beginningAccum;
     const endingNbv = endingCost - endingAccum;
+
+    // Sort contributors largest-first so the biggest movers show up top in the
+    // hover breakdown.
+    const additionsAssetsContrib: AssetContribution[] = monthAdditions
+      .map((a) => ({
+        id: a.id,
+        name: a.asset_name,
+        tag: a.asset_tag,
+        amount: Number(a.acquisition_cost),
+      }))
+      .sort((a, b) => b.amount - a.amount);
+    const disposalsCostAssets: AssetContribution[] = monthDisposals
+      .map((a) => ({
+        id: a.id,
+        name: a.asset_name,
+        tag: a.asset_tag,
+        amount: Number(a.acquisition_cost),
+      }))
+      .sort((a, b) => b.amount - a.amount);
+    disposalsAccumAssets.sort((a, b) => b.amount - a.amount);
 
     result.push({
       year,
@@ -288,6 +337,9 @@ function computeRollForward(
       endingAccum,
       beginningNbv,
       endingNbv,
+      additionsAssets: additionsAssetsContrib,
+      disposalsCostAssets,
+      disposalsAccumAssets,
     });
   }
 
@@ -384,7 +436,7 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
     const { data: assetsData } = await supabase
       .from("fixed_assets")
       .select(
-        "id, asset_name, vehicle_class, acquisition_cost, in_service_date, book_useful_life_months, book_salvage_value, book_depreciation_method, tax_cost_basis, tax_depreciation_method, tax_useful_life_months, section_179_amount, bonus_depreciation_amount, status, disposed_date, cost_account_id, master_type_override"
+        "id, asset_name, asset_tag, vehicle_class, acquisition_cost, in_service_date, book_useful_life_months, book_salvage_value, book_depreciation_method, tax_cost_basis, tax_depreciation_method, tax_useful_life_months, section_179_amount, bonus_depreciation_amount, status, disposed_date, cost_account_id, master_type_override"
       )
       .eq("entity_id", entityId);
     const assets = (assetsData ?? []) as AssetRecord[];
@@ -528,17 +580,36 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
     /** Wrap positive values in parens without coloring — for contra-asset balances. */
     paren?: boolean;
     separator?: boolean;
+    /** When set, hover the cell to see per-asset contributors for that month. */
+    contributorsKey?:
+      | "additionsAssets"
+      | "disposalsCostAssets"
+      | "disposalsAccumAssets";
   }
 
   const ROW_LABELS: RowDef[] = [
     { key: "beginningCost", label: "Beginning Cost" },
-    { key: "additionsCost", label: "+ Additions" },
-    { key: "disposalsCost", label: "− Disposals", negative: true },
+    {
+      key: "additionsCost",
+      label: "+ Additions",
+      contributorsKey: "additionsAssets",
+    },
+    {
+      key: "disposalsCost",
+      label: "− Disposals",
+      negative: true,
+      contributorsKey: "disposalsCostAssets",
+    },
     { key: "endingCost", label: "Ending Cost", bold: true },
     { key: "sep", label: "", separator: true },
     { key: "beginningAccum", label: "Beginning Accum. Depreciation", negative: true },
     { key: "depreciation", label: "+ Depreciation", paren: true },
-    { key: "disposalsAccum", label: "− Disposals Accum.", negative: true },
+    {
+      key: "disposalsAccum",
+      label: "− Disposals Accum.",
+      negative: true,
+      contributorsKey: "disposalsAccumAssets",
+    },
     { key: "endingAccum", label: "Ending Accum. Depreciation", bold: true },
     { key: "sep", label: "", separator: true },
     { key: "beginningNbv", label: "Beginning NBV" },
@@ -546,6 +617,7 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
   ];
 
   return (
+    <TooltipProvider delayDuration={150}>
     <div className="space-y-6">
       {/* Date Range Selector */}
       <div className="flex items-center gap-4 flex-wrap">
@@ -659,7 +731,7 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
                             </tr>
                           );
                         }
-                        const { key, label, bold, negative, paren } = rowDef;
+                        const { key, label, bold, negative, paren, contributorsKey } = rowDef;
                         const wrap = negative || paren;
                         return (
                           <tr
@@ -684,15 +756,72 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
                                   ? `(${formatCurrency(value)})`
                                   : formatCurrency(0)
                                 : formatCurrency(value);
+                              const contributors = contributorsKey
+                                ? row[contributorsKey]
+                                : undefined;
+                              const tdClassName = `text-right py-2 px-3 tabular-nums whitespace-nowrap ${
+                                bold ? "font-semibold" : ""
+                              } ${negative && value > 0 ? "text-red-600" : ""} ${
+                                contributors && contributors.length > 0
+                                  ? "cursor-help underline decoration-dotted decoration-muted-foreground/50 underline-offset-4"
+                                  : ""
+                              }`;
+                              if (contributors && contributors.length > 0) {
+                                return (
+                                  <td key={idx} className={tdClassName}>
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
+                                        <span>{displayValue}</span>
+                                      </TooltipTrigger>
+                                      <TooltipContent
+                                        side="top"
+                                        className="max-w-[360px] p-0 bg-popover text-popover-foreground border shadow-md"
+                                      >
+                                        <div className="px-3 py-2 border-b text-xs font-medium">
+                                          {label.replace(/^[+\−]\s*/, "")} —{" "}
+                                          {MONTH_LABELS[row.month - 1]} {row.year}
+                                        </div>
+                                        <div className="max-h-[260px] overflow-y-auto">
+                                          <table className="w-full text-xs tabular-nums">
+                                            <tbody>
+                                              {contributors.map((c) => (
+                                                <tr
+                                                  key={c.id}
+                                                  className="border-b border-border/50 last:border-0"
+                                                >
+                                                  <td className="px-3 py-1.5 pr-4">
+                                                    {c.tag ? (
+                                                      <span className="text-muted-foreground mr-1">
+                                                        {c.tag}
+                                                      </span>
+                                                    ) : null}
+                                                    <span>{c.name}</span>
+                                                  </td>
+                                                  <td className="px-3 py-1.5 text-right whitespace-nowrap">
+                                                    {formatCurrency(c.amount)}
+                                                  </td>
+                                                </tr>
+                                              ))}
+                                            </tbody>
+                                            <tfoot>
+                                              <tr className="border-t font-semibold">
+                                                <td className="px-3 py-1.5">
+                                                  Total
+                                                </td>
+                                                <td className="px-3 py-1.5 text-right whitespace-nowrap">
+                                                  {formatCurrency(value)}
+                                                </td>
+                                              </tr>
+                                            </tfoot>
+                                          </table>
+                                        </div>
+                                      </TooltipContent>
+                                    </Tooltip>
+                                  </td>
+                                );
+                              }
                               return (
-                                <td
-                                  key={idx}
-                                  className={`text-right py-2 px-3 tabular-nums whitespace-nowrap ${
-                                    bold ? "font-semibold" : ""
-                                  } ${
-                                    negative && value > 0 ? "text-red-600" : ""
-                                  }`}
-                                >
+                                <td key={idx} className={tdClassName}>
                                   {displayValue}
                                 </td>
                               );
@@ -709,5 +838,6 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
         })
       )}
     </div>
+    </TooltipProvider>
   );
 }
