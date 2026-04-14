@@ -167,6 +167,57 @@ function resolveAssetForCalc(
   };
 }
 
+/**
+ * Collapse month-grained roll-forward rows into one-per-year totals. The first
+ * month of each year supplies the beginning balances; the last month supplies
+ * the ending balances; flows (additions / disposals / depreciation) and
+ * contributor lists accumulate across the year.
+ */
+function aggregateByYear(
+  monthly: MonthlyRollForward[]
+): MonthlyRollForward[] {
+  const buckets = new Map<number, MonthlyRollForward[]>();
+  for (const m of monthly) {
+    const list = buckets.get(m.year);
+    if (list) list.push(m);
+    else buckets.set(m.year, [m]);
+  }
+  const result: MonthlyRollForward[] = [];
+  const orderedYears = Array.from(buckets.keys()).sort((a, b) => a - b);
+  for (const year of orderedYears) {
+    const items = buckets.get(year)!;
+    const first = items[0];
+    const last = items[items.length - 1];
+    const sumBy = (key: keyof MonthlyRollForward) =>
+      items.reduce((s, i) => s + (i[key] as number), 0);
+    const concat = <K extends "additionsAssets" | "disposalsCostAssets" | "disposalsAccumAssets">(
+      key: K
+    ): AssetContribution[] =>
+      items.flatMap((i) => i[key]).sort((a, b) => b.amount - a.amount);
+
+    result.push({
+      year,
+      // Use December as the tooltip/header anchor for yearly rows. The caller
+      // formats based on viewMode, so the specific month here is inert.
+      month: 12,
+      beginningCost: first.beginningCost,
+      additionsCost: sumBy("additionsCost"),
+      disposalsCost: sumBy("disposalsCost"),
+      endingCost: last.endingCost,
+      beginningAccum: first.beginningAccum,
+      depreciation: sumBy("depreciation"),
+      disposalsAccum: sumBy("disposalsAccum"),
+      endingAccum: last.endingAccum,
+      beginningNbv: first.beginningNbv,
+      endingNbv: last.endingNbv,
+      additionsAssets: concat("additionsAssets"),
+      disposalsCostAssets: concat("disposalsCostAssets"),
+      disposalsAccumAssets: concat("disposalsAccumAssets"),
+    });
+  }
+  return result;
+}
+
 function computeRollForward(
   group: GLAccountGroup,
   assets: AssetRecord[],
@@ -354,6 +405,7 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
   const [startMonth, setStartMonth] = useState(1);
   const [endYear, setEndYear] = useState(now.getFullYear());
   const [endMonth, setEndMonth] = useState(now.getMonth() + 1);
+  const [viewMode, setViewMode] = useState<"monthly" | "yearly">("monthly");
   const [loading, setLoading] = useState(true);
   const [openingYear, setOpeningYear] = useState<number | null>(null);
   const [openingMonth, setOpeningMonth] = useState<number | null>(null);
@@ -464,7 +516,27 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
       );
     };
 
-    const months = generateMonthRange(startYear, startMonth, endYear, endMonth);
+    // In yearly mode the month pickers are hidden; the range always covers
+    // full calendar years, clamped to the opening month on the first year and
+    // to the current month on the ongoing year so we don't materialize empty
+    // future months.
+    const nowYear = now.getFullYear();
+    const nowMonth = now.getMonth() + 1;
+    const effStartMonth =
+      viewMode === "yearly"
+        ? openingYear != null &&
+          openingMonth != null &&
+          startYear === openingYear
+          ? openingMonth
+          : 1
+        : startMonth;
+    const effEndMonth =
+      viewMode === "yearly"
+        ? endYear === nowYear
+          ? nowMonth
+          : 12
+        : endMonth;
+    const months = generateMonthRange(startYear, effStartMonth, endYear, effEndMonth);
     const openY = openingYear ?? 0;
     const openM = openingMonth ?? 0;
 
@@ -525,7 +597,7 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
 
     const data: Record<string, MonthlyRollForward[]> = {};
     for (const group of GL_ACCOUNT_GROUPS) {
-      data[group.key] = computeRollForward(
+      const monthly = computeRollForward(
         group,
         assets,
         scheduleMap,
@@ -535,9 +607,11 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
         openM,
         resolveGLGroup
       );
+      data[group.key] = viewMode === "yearly" ? aggregateByYear(monthly) : monthly;
     }
     setRollForwardData(data);
     setLoading(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     supabase,
     entityId,
@@ -545,6 +619,7 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
     startMonth,
     endYear,
     endMonth,
+    viewMode,
     openingYear,
     openingMonth,
     openingDate,
@@ -554,7 +629,36 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
     loadData();
   }, [loadData]);
 
-  const months = generateMonthRange(startYear, startMonth, endYear, endMonth);
+  // Mirror loadData's effective month window for the rendered column set.
+  const effStartMonth =
+    viewMode === "yearly"
+      ? openingYear != null &&
+        openingMonth != null &&
+        startYear === openingYear
+        ? openingMonth
+        : 1
+      : startMonth;
+  const effEndMonth =
+    viewMode === "yearly"
+      ? endYear === now.getFullYear()
+        ? now.getMonth() + 1
+        : 12
+      : endMonth;
+  const monthsRaw = generateMonthRange(
+    startYear,
+    effStartMonth,
+    endYear,
+    effEndMonth
+  );
+  // In yearly mode, compress months to one column per year so the header
+  // lines up with the aggregated data coming out of loadData.
+  const months =
+    viewMode === "yearly"
+      ? Array.from(new Set(monthsRaw.map((m) => m.year))).map((y) => ({
+          year: y,
+          month: 12,
+        }))
+      : monthsRaw;
   const allYears = Array.from(
     { length: 5 },
     (_, i) => now.getFullYear() - i + 1
@@ -623,21 +727,23 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
       <div className="flex items-center gap-4 flex-wrap">
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium">From:</span>
-          <Select
-            value={String(startMonth)}
-            onValueChange={(v) => handleStartMonthChange(Number(v))}
-          >
-            <SelectTrigger className="w-[130px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {startMonthOptions.map((o) => (
-                <SelectItem key={o.value} value={String(o.value)}>
-                  {o.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          {viewMode === "monthly" && (
+            <Select
+              value={String(startMonth)}
+              onValueChange={(v) => handleStartMonthChange(Number(v))}
+            >
+              <SelectTrigger className="w-[130px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {startMonthOptions.map((o) => (
+                  <SelectItem key={o.value} value={String(o.value)}>
+                    {o.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
           <Select
             value={String(startYear)}
             onValueChange={(v) => handleStartYearChange(Number(v))}
@@ -656,21 +762,23 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
         </div>
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium">To:</span>
-          <Select
-            value={String(endMonth)}
-            onValueChange={(v) => setEndMonth(Number(v))}
-          >
-            <SelectTrigger className="w-[130px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {MONTHS_FULL.map((m, i) => (
-                <SelectItem key={i + 1} value={String(i + 1)}>
-                  {m}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          {viewMode === "monthly" && (
+            <Select
+              value={String(endMonth)}
+              onValueChange={(v) => setEndMonth(Number(v))}
+            >
+              <SelectTrigger className="w-[130px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {MONTHS_FULL.map((m, i) => (
+                  <SelectItem key={i + 1} value={String(i + 1)}>
+                    {m}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
           <Select
             value={String(endYear)}
             onValueChange={(v) => setEndYear(Number(v))}
@@ -684,6 +792,21 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
                   {y}
                 </SelectItem>
               ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="flex items-center gap-2 ml-auto">
+          <span className="text-sm font-medium">View:</span>
+          <Select
+            value={viewMode}
+            onValueChange={(v) => setViewMode(v as "monthly" | "yearly")}
+          >
+            <SelectTrigger className="w-[120px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="monthly">Monthly</SelectItem>
+              <SelectItem value="yearly">Yearly</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -714,7 +837,9 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
                             key={monthKey(year, month)}
                             className="text-right py-2 px-3 min-w-[120px] font-medium whitespace-nowrap"
                           >
-                            {MONTH_LABELS[month - 1]} {year}
+                            {viewMode === "yearly"
+                              ? String(year)
+                              : `${MONTH_LABELS[month - 1]} ${year}`}
                           </th>
                         ))}
                       </tr>
@@ -779,7 +904,9 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
                                       >
                                         <div className="px-3 py-2 border-b text-xs font-medium">
                                           {label.replace(/^[+\−]\s*/, "")} —{" "}
-                                          {MONTH_LABELS[row.month - 1]} {row.year}
+                                          {viewMode === "yearly"
+                                            ? String(row.year)
+                                            : `${MONTH_LABELS[row.month - 1]} ${row.year}`}
                                         </div>
                                         <div className="max-h-[260px] overflow-y-auto">
                                           <table className="w-full text-xs tabular-nums">
