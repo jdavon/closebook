@@ -5021,6 +5021,177 @@ export type Database = {
         }
         Relationships: []
       }
+      entity_accrual_config: {
+        Row: {
+          id: string
+          entity_id: string
+          realization_rate: number
+          notes: string | null
+          created_at: string
+          updated_at: string
+          updated_by: string | null
+        }
+        Insert: {
+          id?: string
+          entity_id: string
+          realization_rate?: number
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Update: {
+          id?: string
+          entity_id?: string
+          realization_rate?: number
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Relationships: []
+      }
+      accrual_close_periods: {
+        Row: {
+          id: string
+          entity_id: string
+          period_year: number
+          period_month: number
+          close_as_of_date: string
+          realization_rate_used: number
+          gross_unbilled_earned: number
+          expected_discount: number
+          net_unbilled_earned: number
+          timing_accrual: number
+          timing_deferral: number
+          total_net_accrual: number
+          total_net_deferral: number
+          line_count: number
+          notes: string | null
+          closed_at: string
+          closed_by: string | null
+          status: string
+        }
+        Insert: {
+          id?: string
+          entity_id: string
+          period_year: number
+          period_month: number
+          close_as_of_date: string
+          realization_rate_used: number
+          gross_unbilled_earned?: number
+          expected_discount?: number
+          net_unbilled_earned?: number
+          timing_accrual?: number
+          timing_deferral?: number
+          total_net_accrual?: number
+          total_net_deferral?: number
+          line_count?: number
+          notes?: string | null
+          closed_at?: string
+          closed_by?: string | null
+          status?: string
+        }
+        Update: {
+          id?: string
+          entity_id?: string
+          period_year?: number
+          period_month?: number
+          close_as_of_date?: string
+          realization_rate_used?: number
+          gross_unbilled_earned?: number
+          expected_discount?: number
+          net_unbilled_earned?: number
+          timing_accrual?: number
+          timing_deferral?: number
+          total_net_accrual?: number
+          total_net_deferral?: number
+          line_count?: number
+          notes?: string | null
+          closed_at?: string
+          closed_by?: string | null
+          status?: string
+        }
+        Relationships: []
+      }
+      accrual_close_lines: {
+        Row: {
+          id: string
+          close_period_id: string
+          entity_id: string
+          line_type: string
+          order_number: string | null
+          invoice_number: string | null
+          customer: string | null
+          order_description: string | null
+          rental_start_date: string | null
+          rental_end_date: string | null
+          gross_amount: number
+          realization_rate_applied: number
+          expected_discount: number
+          net_amount: number
+          matched_invoice_number: string | null
+          matched_invoice_date: string | null
+          actual_invoice_subtotal: number | null
+          variance_amount: number | null
+          line_status: string
+          resolved_at: string | null
+          resolved_by: string | null
+          writeoff_notes: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          close_period_id: string
+          entity_id: string
+          line_type: string
+          order_number?: string | null
+          invoice_number?: string | null
+          customer?: string | null
+          order_description?: string | null
+          rental_start_date?: string | null
+          rental_end_date?: string | null
+          gross_amount: number
+          realization_rate_applied: number
+          expected_discount?: number
+          net_amount: number
+          matched_invoice_number?: string | null
+          matched_invoice_date?: string | null
+          actual_invoice_subtotal?: number | null
+          variance_amount?: number | null
+          line_status?: string
+          resolved_at?: string | null
+          resolved_by?: string | null
+          writeoff_notes?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          close_period_id?: string
+          entity_id?: string
+          line_type?: string
+          order_number?: string | null
+          invoice_number?: string | null
+          customer?: string | null
+          order_description?: string | null
+          rental_start_date?: string | null
+          rental_end_date?: string | null
+          gross_amount?: number
+          realization_rate_applied?: number
+          expected_discount?: number
+          net_amount?: number
+          matched_invoice_number?: string | null
+          matched_invoice_date?: string | null
+          actual_invoice_subtotal?: number | null
+          variance_amount?: number | null
+          line_status?: string
+          resolved_at?: string | null
+          resolved_by?: string | null
+          writeoff_notes?: string | null
+          created_at?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never

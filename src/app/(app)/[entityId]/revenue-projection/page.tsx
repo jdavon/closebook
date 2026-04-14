@@ -21,6 +21,24 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   DollarSign,
   TrendingUp,
@@ -52,7 +70,9 @@ import {
   type RWInvoiceRow,
   type RWOrderRow,
   type RWQuoteRow,
+  type UnbilledEarnedLine,
 } from "@/lib/utils/revenue-projection";
+import { Lock, Unlock, Percent } from "lucide-react";
 import {
   ComposedChart,
   BarChart,
@@ -1965,7 +1985,12 @@ export default function RevenueProjectionPage({ entityId: entityIdProp, isEmbed,
                   <strong>Note:</strong> The accrual schedule always uses <strong>Invoice Date</strong> mode to compare billed vs. earned revenue, regardless of the date view selected above.
                 </div>
               )}
-              <AccrualSchedule monthlyData={accrualData.monthlyData} closedInvoices={accrualData.closedInvoices} />
+              <AccrualTab
+                entityId={entityId}
+                monthlyData={accrualData.monthlyData}
+                closedInvoices={accrualData.closedInvoices}
+                unbilledEarnedLines={accrualData.unbilledEarnedLines ?? []}
+              />
             </>
           ) : (
             <p className="text-muted-foreground py-8 text-center text-sm">Loading accrual data…</p>
@@ -2067,11 +2092,21 @@ function getInvoiceDetailsForMonth(invoices: ClosedInvoice[], monthKey: string):
 
 // ─── AccrualSchedule Component ──────────────────────────────────────────────
 
-function AccrualSchedule({ monthlyData, closedInvoices }: { monthlyData: MonthlyRevenue[]; closedInvoices: ClosedInvoice[] }) {
+function AccrualSchedule({
+  monthlyData,
+  closedInvoices,
+  unbilledEarnedLines = [],
+  realizationRate = 1,
+}: {
+  monthlyData: MonthlyRevenue[];
+  closedInvoices: ClosedInvoice[];
+  unbilledEarnedLines?: UnbilledEarnedLine[];
+  realizationRate?: number;
+}) {
   const [expandedMonth, setExpandedMonth] = useState<string | null>(null);
 
-  // Only show months that have any billed or earned activity
-  const activeMonths = monthlyData.filter((m) => m.billed > 0 || m.earned > 0);
+  // Only show months that have any billed / earned / unbilled-earned activity
+  const activeMonths = monthlyData.filter((m) => m.billed > 0 || m.earned > 0 || m.unbilledEarned > 0);
 
   // Build a lookup from the full monthlyData array so we can find the prior month
   const monthIndex = new Map<string, MonthlyRevenue>();
@@ -2084,15 +2119,35 @@ function AccrualSchedule({ monthlyData, closedInvoices }: { monthlyData: Monthly
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
   };
 
+  // Compute per-month derived amounts once for reuse in reversal lookup
+  const derivedByMonth = new Map<string, { totalAccrual: number; totalDeferral: number; unbilledDiscount: number; unbilledNet: number }>();
+  for (const m of monthlyData) {
+    const unbilledDiscount = Math.round(m.unbilledEarned * (1 - realizationRate) * 100) / 100;
+    const unbilledNet = Math.round(m.unbilledEarned * realizationRate * 100) / 100;
+    const totalAccrual = Math.round((m.accrued + unbilledNet) * 100) / 100;
+    derivedByMonth.set(m.month, {
+      totalAccrual,
+      totalDeferral: m.deferred,
+      unbilledDiscount,
+      unbilledNet,
+    });
+  }
+
   // For each active month, compute reversal (from prior month) and net
   const scheduleRows = activeMonths.map((m) => {
     const priorKey = getPriorMonthKey(m.month);
     const prior = monthIndex.get(priorKey);
-    const reversalAccrued = prior?.accrued ?? 0;
-    const reversalDeferred = prior?.deferred ?? 0;
-    const netRevenueImpact = (m.accrued - m.deferred) - (reversalAccrued - reversalDeferred);
+    const priorDerived = derivedByMonth.get(priorKey);
+    const reversalAccrued = priorDerived?.totalAccrual ?? 0;
+    const reversalDeferred = priorDerived?.totalDeferral ?? 0;
+    const curDerived = derivedByMonth.get(m.month)!;
+    const netRevenueImpact = (curDerived.totalAccrual - curDerived.totalDeferral) - (reversalAccrued - reversalDeferred);
     return {
       ...m,
+      unbilledDiscount: curDerived.unbilledDiscount,
+      unbilledNet: curDerived.unbilledNet,
+      totalAccrual: curDerived.totalAccrual,
+      totalDeferral: curDerived.totalDeferral,
       reversalAccrued,
       reversalDeferred,
       netRevenueImpact,
@@ -2106,28 +2161,49 @@ function AccrualSchedule({ monthlyData, closedInvoices }: { monthlyData: Monthly
     return getInvoiceDetailsForMonth(closedInvoices, expandedMonth);
   }, [expandedMonth, closedInvoices]);
 
+  // Unbilled earned lines for the expanded month
+  const unbilledLinesForExpanded = useMemo(() => {
+    if (!expandedMonth) return [];
+    return unbilledEarnedLines
+      .filter((l) => l.month === expandedMonth)
+      .sort((a, b) => b.amountInMonth - a.amountInMonth);
+  }, [expandedMonth, unbilledEarnedLines]);
+
   const totals = scheduleRows.reduce(
     (acc, m) => ({
       billed: acc.billed + m.billed,
       earned: acc.earned + m.earned,
-      accrued: acc.accrued + m.accrued,
-      deferred: acc.deferred + m.deferred,
+      unbilledEarned: acc.unbilledEarned + m.unbilledEarned,
+      unbilledDiscount: acc.unbilledDiscount + m.unbilledDiscount,
+      unbilledNet: acc.unbilledNet + m.unbilledNet,
+      totalAccrual: acc.totalAccrual + m.totalAccrual,
+      totalDeferral: acc.totalDeferral + m.totalDeferral,
       reversalAccrued: acc.reversalAccrued + m.reversalAccrued,
       reversalDeferred: acc.reversalDeferred + m.reversalDeferred,
       netRevenueImpact: acc.netRevenueImpact + m.netRevenueImpact,
     }),
-    { billed: 0, earned: 0, accrued: 0, deferred: 0, reversalAccrued: 0, reversalDeferred: 0, netRevenueImpact: 0 },
+    { billed: 0, earned: 0, unbilledEarned: 0, unbilledDiscount: 0, unbilledNet: 0, totalAccrual: 0, totalDeferral: 0, reversalAccrued: 0, reversalDeferred: 0, netRevenueImpact: 0 },
   );
+
+  const ratePct = Math.round(realizationRate * 1000) / 10;  // e.g. 70.0
 
   return (
     <>
       {/* Monthly Summary Table */}
       <Card>
         <CardHeader>
-          <CardTitle>Accrual & Deferral Schedule</CardTitle>
-          <CardDescription>
-            Monthly earned vs billed revenue with prior-month reversals — click a row to see invoice detail
-          </CardDescription>
+          <div className="flex items-start justify-between">
+            <div>
+              <CardTitle>Accrual & Deferral Schedule</CardTitle>
+              <CardDescription>
+                Monthly earned vs billed revenue with prior-month reversals — click a row to see invoice + unbilled-order detail
+              </CardDescription>
+            </div>
+            <Badge variant="secondary" className="font-mono">
+              <Percent className="mr-1 h-3 w-3" />
+              Realization rate: {ratePct}%
+            </Badge>
+          </div>
         </CardHeader>
         <CardContent>
           {scheduleRows.length === 0 ? (
@@ -2143,11 +2219,14 @@ function AccrualSchedule({ monthlyData, closedInvoices }: { monthlyData: Monthly
                     <TableHead>Month</TableHead>
                     <TableHead className="text-right">Billed</TableHead>
                     <TableHead className="text-right">Earned</TableHead>
-                    <TableHead className="text-right border-l border-gray-200">Reverse Accrual</TableHead>
-                    <TableHead className="text-right">Reverse Deferral</TableHead>
+                    <TableHead className="text-right border-l border-gray-200">UB Gross</TableHead>
+                    <TableHead className="text-right">Discount</TableHead>
+                    <TableHead className="text-right">UB Net</TableHead>
+                    <TableHead className="text-right border-l border-gray-200">Rev Accrual</TableHead>
+                    <TableHead className="text-right">Rev Deferral</TableHead>
                     <TableHead className="text-right border-l border-gray-200">New Accrual</TableHead>
                     <TableHead className="text-right">New Deferral</TableHead>
-                    <TableHead className="text-right border-l border-gray-200">Net Revenue Adj.</TableHead>
+                    <TableHead className="text-right border-l border-gray-200">Net Rev Adj.</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -2172,6 +2251,15 @@ function AccrualSchedule({ monthlyData, closedInvoices }: { monthlyData: Monthly
                           <TableCell className="text-right tabular-nums">
                             {formatCurrency(m.earned)}
                           </TableCell>
+                          <TableCell className="text-right tabular-nums border-l border-gray-200 text-muted-foreground">
+                            {m.unbilledEarned > 0 ? formatCurrency(m.unbilledEarned) : "—"}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums text-rose-500">
+                            {m.unbilledDiscount > 0 ? `(${formatCurrency(m.unbilledDiscount)})` : "—"}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums text-teal-600">
+                            {m.unbilledNet > 0 ? formatCurrency(m.unbilledNet) : "—"}
+                          </TableCell>
                           <TableCell className="text-right tabular-nums text-rose-600 border-l border-gray-200">
                             {m.reversalAccrued > 0 ? `(${formatCurrency(m.reversalAccrued)})` : "—"}
                           </TableCell>
@@ -2179,10 +2267,10 @@ function AccrualSchedule({ monthlyData, closedInvoices }: { monthlyData: Monthly
                             {m.reversalDeferred > 0 ? `(${formatCurrency(m.reversalDeferred)})` : "—"}
                           </TableCell>
                           <TableCell className="text-right tabular-nums text-teal-700 border-l border-gray-200">
-                            {m.accrued > 0 ? formatCurrency(m.accrued) : "—"}
+                            {m.totalAccrual > 0 ? formatCurrency(m.totalAccrual) : "—"}
                           </TableCell>
                           <TableCell className="text-right tabular-nums text-amber-700">
-                            {m.deferred > 0 ? formatCurrency(m.deferred) : "—"}
+                            {m.totalDeferral > 0 ? formatCurrency(m.totalDeferral) : "—"}
                           </TableCell>
                           <TableCell className={`text-right tabular-nums font-medium border-l border-gray-200 ${m.netRevenueImpact > 0 ? "text-teal-700" : m.netRevenueImpact < 0 ? "text-amber-700" : ""}`}>
                             {m.netRevenueImpact === 0 ? "—" : formatCurrency(m.netRevenueImpact)}
@@ -2191,7 +2279,7 @@ function AccrualSchedule({ monthlyData, closedInvoices }: { monthlyData: Monthly
                         {/* Expanded invoice detail */}
                         {isExpanded && (
                           <TableRow>
-                            <TableCell colSpan={9} className="p-0 bg-muted/30">
+                            <TableCell colSpan={12} className="p-0 bg-muted/30">
                               <div className="px-4 py-3">
                                 <h5 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
                                   Invoice Detail — {m.label} ({invoiceDetails.length} invoices)
@@ -2276,6 +2364,77 @@ function AccrualSchedule({ monthlyData, closedInvoices }: { monthlyData: Monthly
                                     </Table>
                                   </div>
                                 )}
+
+                                {/* Unbilled Earned Orders for this month */}
+                                {unbilledLinesForExpanded.length > 0 && (
+                                  <div className="mt-4">
+                                    <h5 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
+                                      Unbilled Earned — {m.label} ({unbilledLinesForExpanded.length} orders at {ratePct}% rate)
+                                    </h5>
+                                    <div className="overflow-x-auto rounded border bg-white">
+                                      <Table>
+                                        <TableHeader>
+                                          <TableRow>
+                                            <TableHead>Order #</TableHead>
+                                            <TableHead>Customer</TableHead>
+                                            <TableHead>Description</TableHead>
+                                            <TableHead>Rental Period</TableHead>
+                                            <TableHead className="text-right">Order Total</TableHead>
+                                            <TableHead className="text-right">Billed</TableHead>
+                                            <TableHead className="text-right">UB Gross (Mo.)</TableHead>
+                                            <TableHead className="text-right">Discount</TableHead>
+                                            <TableHead className="text-right">UB Net</TableHead>
+                                          </TableRow>
+                                        </TableHeader>
+                                        <TableBody>
+                                          {unbilledLinesForExpanded.map((ln) => {
+                                            const discount = Math.round(ln.amountInMonth * (1 - realizationRate) * 100) / 100;
+                                            const net = Math.round(ln.amountInMonth * realizationRate * 100) / 100;
+                                            return (
+                                              <TableRow key={`${ln.orderNumber}-${ln.month}`}>
+                                                <TableCell className="font-medium text-xs">{ln.orderNumber}</TableCell>
+                                                <TableCell className="text-xs">{ln.customer}</TableCell>
+                                                <TableCell className="text-xs max-w-[160px] truncate">{ln.orderDescription}</TableCell>
+                                                <TableCell className="text-muted-foreground text-xs whitespace-nowrap">
+                                                  {formatDate(ln.rentalStartDate)} – {formatDate(ln.rentalEndDate)}
+                                                </TableCell>
+                                                <TableCell className="text-right tabular-nums text-xs text-muted-foreground">
+                                                  {formatCurrency(ln.orderTotal)}
+                                                </TableCell>
+                                                <TableCell className="text-right tabular-nums text-xs text-muted-foreground">
+                                                  {ln.billedAgainstOrder > 0 ? formatCurrency(ln.billedAgainstOrder) : "—"}
+                                                </TableCell>
+                                                <TableCell className="text-right tabular-nums text-xs">
+                                                  {formatCurrency(ln.amountInMonth)}
+                                                </TableCell>
+                                                <TableCell className="text-right tabular-nums text-xs text-rose-500">
+                                                  {discount > 0 ? `(${formatCurrency(discount)})` : "—"}
+                                                </TableCell>
+                                                <TableCell className="text-right tabular-nums text-xs font-medium text-teal-700">
+                                                  {formatCurrency(net)}
+                                                </TableCell>
+                                              </TableRow>
+                                            );
+                                          })}
+                                          <TableRow className="border-t-2 font-semibold">
+                                            <TableCell colSpan={6} className="text-xs">
+                                              Total ({unbilledLinesForExpanded.length} orders)
+                                            </TableCell>
+                                            <TableCell className="text-right tabular-nums text-xs">
+                                              {formatCurrency(unbilledLinesForExpanded.reduce((s, l) => s + l.amountInMonth, 0))}
+                                            </TableCell>
+                                            <TableCell className="text-right tabular-nums text-xs text-rose-500">
+                                              ({formatCurrency(unbilledLinesForExpanded.reduce((s, l) => s + l.amountInMonth * (1 - realizationRate), 0))})
+                                            </TableCell>
+                                            <TableCell className="text-right tabular-nums text-xs font-medium text-teal-700">
+                                              {formatCurrency(unbilledLinesForExpanded.reduce((s, l) => s + l.amountInMonth * realizationRate, 0))}
+                                            </TableCell>
+                                          </TableRow>
+                                        </TableBody>
+                                      </Table>
+                                    </div>
+                                  </div>
+                                )}
                               </div>
                             </TableCell>
                           </TableRow>
@@ -2292,6 +2451,15 @@ function AccrualSchedule({ monthlyData, closedInvoices }: { monthlyData: Monthly
                     <TableCell className="text-right tabular-nums">
                       {formatCurrency(totals.earned)}
                     </TableCell>
+                    <TableCell className="text-right tabular-nums border-l border-gray-200 text-muted-foreground">
+                      {totals.unbilledEarned > 0 ? formatCurrency(totals.unbilledEarned) : "—"}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums text-rose-500">
+                      {totals.unbilledDiscount > 0 ? `(${formatCurrency(totals.unbilledDiscount)})` : "—"}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums text-teal-600">
+                      {totals.unbilledNet > 0 ? formatCurrency(totals.unbilledNet) : "—"}
+                    </TableCell>
                     <TableCell className="text-right tabular-nums text-rose-600 border-l border-gray-200">
                       {totals.reversalAccrued > 0 ? `(${formatCurrency(totals.reversalAccrued)})` : "—"}
                     </TableCell>
@@ -2299,10 +2467,10 @@ function AccrualSchedule({ monthlyData, closedInvoices }: { monthlyData: Monthly
                       {totals.reversalDeferred > 0 ? `(${formatCurrency(totals.reversalDeferred)})` : "—"}
                     </TableCell>
                     <TableCell className="text-right tabular-nums text-teal-700 border-l border-gray-200">
-                      {totals.accrued > 0 ? formatCurrency(totals.accrued) : "—"}
+                      {totals.totalAccrual > 0 ? formatCurrency(totals.totalAccrual) : "—"}
                     </TableCell>
                     <TableCell className="text-right tabular-nums text-amber-700">
-                      {totals.deferred > 0 ? formatCurrency(totals.deferred) : "—"}
+                      {totals.totalDeferral > 0 ? formatCurrency(totals.totalDeferral) : "—"}
                     </TableCell>
                     <TableCell className={`text-right tabular-nums font-medium border-l border-gray-200 ${totals.netRevenueImpact > 0 ? "text-teal-700" : "text-amber-700"}`}>
                       {formatCurrency(totals.netRevenueImpact)}
@@ -2324,17 +2492,17 @@ function AccrualSchedule({ monthlyData, closedInvoices }: { monthlyData: Monthly
           </CardDescription>
         </CardHeader>
         <CardContent>
-          {scheduleRows.filter((m) => m.accrued > 0 || m.deferred > 0 || m.reversalAccrued > 0 || m.reversalDeferred > 0).length === 0 ? (
+          {scheduleRows.filter((m) => m.totalAccrual > 0 || m.totalDeferral > 0 || m.reversalAccrued > 0 || m.reversalDeferred > 0).length === 0 ? (
             <p className="text-muted-foreground py-8 text-center text-sm">
               No adjustments needed — billed and earned revenue match for all months.
             </p>
           ) : (
             <div className="space-y-6">
               {scheduleRows
-                .filter((m) => m.accrued > 0 || m.deferred > 0 || m.reversalAccrued > 0 || m.reversalDeferred > 0)
+                .filter((m) => m.totalAccrual > 0 || m.totalDeferral > 0 || m.reversalAccrued > 0 || m.reversalDeferred > 0)
                 .map((m) => {
                   const hasReversal = m.reversalAccrued > 0 || m.reversalDeferred > 0;
-                  const hasNewEntry = m.accrued > 0 || m.deferred > 0;
+                  const hasNewEntry = m.totalAccrual > 0 || m.totalDeferral > 0;
                   let lineNum = 0;
                   return (
                     <div key={m.month} className="rounded-lg border p-4">
@@ -2434,7 +2602,7 @@ function AccrualSchedule({ monthlyData, closedInvoices }: { monthlyData: Monthly
                                       <TableCell className="text-muted-foreground">{++lineNum}</TableCell>
                                       <TableCell className="font-medium">Accrued Revenue (Asset)</TableCell>
                                       <TableCell className="text-muted-foreground text-sm">
-                                        Revenue earned but not yet billed — {m.label}
+                                        Timing accrual (invoiced in wrong period) — {m.label}
                                       </TableCell>
                                       <TableCell className="text-right tabular-nums font-medium text-teal-700">
                                         {formatCurrency(m.accrued)}
@@ -2445,13 +2613,52 @@ function AccrualSchedule({ monthlyData, closedInvoices }: { monthlyData: Monthly
                                       <TableCell className="text-muted-foreground">{++lineNum}</TableCell>
                                       <TableCell className="font-medium">Rental Revenue (Income)</TableCell>
                                       <TableCell className="text-muted-foreground text-sm">
-                                        Accrued rental revenue — {m.label}
+                                        Timing accrual — {m.label}
                                       </TableCell>
                                       <TableCell className="text-right tabular-nums">—</TableCell>
                                       <TableCell className="text-right tabular-nums font-medium text-teal-700">
                                         {formatCurrency(m.accrued)}
                                       </TableCell>
                                     </TableRow>
+                                  </>
+                                )}
+                                {m.unbilledEarned > 0 && (
+                                  <>
+                                    <TableRow>
+                                      <TableCell className="text-muted-foreground">{++lineNum}</TableCell>
+                                      <TableCell className="font-medium">Unbilled Receivables (Asset)</TableCell>
+                                      <TableCell className="text-muted-foreground text-sm">
+                                        Earned, not yet invoiced (gross) — {m.label}
+                                      </TableCell>
+                                      <TableCell className="text-right tabular-nums font-medium text-teal-700">
+                                        {formatCurrency(m.unbilledEarned)}
+                                      </TableCell>
+                                      <TableCell className="text-right tabular-nums">—</TableCell>
+                                    </TableRow>
+                                    <TableRow>
+                                      <TableCell className="text-muted-foreground">{++lineNum}</TableCell>
+                                      <TableCell className="font-medium">Rental Revenue (Income)</TableCell>
+                                      <TableCell className="text-muted-foreground text-sm">
+                                        Unbilled earned rental revenue (net of expected discount at {ratePct}%) — {m.label}
+                                      </TableCell>
+                                      <TableCell className="text-right tabular-nums">—</TableCell>
+                                      <TableCell className="text-right tabular-nums font-medium text-teal-700">
+                                        {formatCurrency(m.unbilledNet)}
+                                      </TableCell>
+                                    </TableRow>
+                                    {m.unbilledDiscount > 0 && (
+                                      <TableRow>
+                                        <TableCell className="text-muted-foreground">{++lineNum}</TableCell>
+                                        <TableCell className="font-medium">Allowance for Discounts (Contra-Revenue)</TableCell>
+                                        <TableCell className="text-muted-foreground text-sm">
+                                          Expected customer discount — {m.label}
+                                        </TableCell>
+                                        <TableCell className="text-right tabular-nums">—</TableCell>
+                                        <TableCell className="text-right tabular-nums font-medium text-teal-700">
+                                          {formatCurrency(m.unbilledDiscount)}
+                                        </TableCell>
+                                      </TableRow>
+                                    )}
                                   </>
                                 )}
                                 {m.deferred > 0 && (
@@ -3043,5 +3250,946 @@ function TrendsPanel({
         </Card>
       )}
     </>
+  );
+}
+
+// ─── AccrualTab (Phase 1–3 wrapper) ─────────────────────────────────────────
+
+interface AccrualCloseRow {
+  id: string;
+  entity_id: string;
+  period_year: number;
+  period_month: number;
+  close_as_of_date: string;
+  realization_rate_used: number;
+  gross_unbilled_earned: number;
+  expected_discount: number;
+  net_unbilled_earned: number;
+  timing_accrual: number;
+  timing_deferral: number;
+  total_net_accrual: number;
+  total_net_deferral: number;
+  line_count: number;
+  notes: string | null;
+  closed_at: string;
+  closed_by: string | null;
+  status: string;
+}
+
+interface AccrualCloseLine {
+  id: string;
+  close_period_id: string;
+  entity_id: string;
+  line_type: string;
+  order_number: string | null;
+  invoice_number: string | null;
+  customer: string | null;
+  order_description: string | null;
+  rental_start_date: string | null;
+  rental_end_date: string | null;
+  gross_amount: number;
+  realization_rate_applied: number;
+  expected_discount: number;
+  net_amount: number;
+  matched_invoice_number: string | null;
+  matched_invoice_date: string | null;
+  actual_invoice_subtotal: number | null;
+  variance_amount: number | null;
+  line_status: string;
+  resolved_at: string | null;
+  resolved_by: string | null;
+  writeoff_notes: string | null;
+  created_at: string;
+}
+
+const MONTH_NAMES = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
+
+function AccrualTab({
+  entityId,
+  monthlyData,
+  closedInvoices,
+  unbilledEarnedLines,
+}: {
+  entityId: string;
+  monthlyData: MonthlyRevenue[];
+  closedInvoices: ClosedInvoice[];
+  unbilledEarnedLines: UnbilledEarnedLine[];
+}) {
+  const [rate, setRate] = useState<number>(1);
+  const [rateNotes, setRateNotes] = useState<string | null>(null);
+  const [rateLoaded, setRateLoaded] = useState(false);
+  const [closes, setCloses] = useState<AccrualCloseRow[]>([]);
+  const [closesLoading, setClosesLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/accrual/config?entityId=${encodeURIComponent(entityId)}`);
+        if (!res.ok) throw new Error(await res.text());
+        const json = await res.json();
+        if (!cancelled) {
+          setRate(json.realizationRate ?? 1);
+          setRateNotes(json.notes ?? null);
+          setRateLoaded(true);
+        }
+      } catch (err) {
+        console.error("Load accrual config error:", err);
+        if (!cancelled) setRateLoaded(true);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [entityId]);
+
+  const loadCloses = useCallback(async () => {
+    setClosesLoading(true);
+    try {
+      const res = await fetch(`/api/accrual/closes?entityId=${encodeURIComponent(entityId)}`);
+      if (!res.ok) throw new Error(await res.text());
+      const json = await res.json();
+      setCloses(json.closes ?? []);
+    } catch (err) {
+      console.error("Load closes error:", err);
+    } finally {
+      setClosesLoading(false);
+    }
+  }, [entityId]);
+
+  useEffect(() => { loadCloses(); }, [loadCloses]);
+
+  const saveRate = async (newRate: number, newNotes: string | null) => {
+    try {
+      const res = await fetch("/api/accrual/config", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ entityId, realizationRate: newRate, notes: newNotes }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      setRate(newRate);
+      setRateNotes(newNotes);
+      toast.success("Realization rate saved");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to save rate");
+    }
+  };
+
+  if (!rateLoaded) {
+    return <p className="text-muted-foreground py-8 text-center text-sm">Loading accrual config…</p>;
+  }
+
+  const closedPeriodKeys = new Set(
+    closes.map((c) => `${c.period_year}-${String(c.period_month).padStart(2, "0")}`),
+  );
+
+  return (
+    <>
+      <RealizationRateCard rate={rate} notes={rateNotes} onSave={saveRate} />
+      <AccrualSchedule
+        monthlyData={monthlyData}
+        closedInvoices={closedInvoices}
+        unbilledEarnedLines={unbilledEarnedLines}
+        realizationRate={rate}
+      />
+      <CloseMonthSection
+        entityId={entityId}
+        rate={rate}
+        monthlyData={monthlyData}
+        unbilledEarnedLines={unbilledEarnedLines}
+        closedPeriodKeys={closedPeriodKeys}
+        onClosed={loadCloses}
+      />
+      <HistoricalClosesSection closes={closes} loading={closesLoading} onRefresh={loadCloses} />
+    </>
+  );
+}
+
+function RealizationRateCard({
+  rate,
+  notes,
+  onSave,
+}: {
+  rate: number;
+  notes: string | null;
+  onSave: (rate: number, notes: string | null) => Promise<void>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [pctInput, setPctInput] = useState(String(Math.round(rate * 1000) / 10));
+  const [notesInput, setNotesInput] = useState(notes ?? "");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setPctInput(String(Math.round(rate * 1000) / 10));
+    setNotesInput(notes ?? "");
+  }, [rate, notes]);
+
+  const handleSave = async () => {
+    const pct = Number(pctInput);
+    if (isNaN(pct) || pct < 0 || pct > 100) {
+      toast.error("Enter a percentage between 0 and 100");
+      return;
+    }
+    setSaving(true);
+    await onSave(pct / 100, notesInput.trim() || null);
+    setSaving(false);
+    setEditing(false);
+  };
+
+  const ratePct = Math.round(rate * 1000) / 10;
+  const discountPct = Math.round((1 - rate) * 1000) / 10;
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <CardTitle className="flex items-center gap-2">
+              <Percent className="h-5 w-5" />
+              Realization Rate Rule
+            </CardTitle>
+            <CardDescription>
+              Expected collection rate on unbilled earned revenue. Applies the ASC 606 variable-consideration estimate as a reduction to accrued revenue.
+            </CardDescription>
+          </div>
+          {!editing && (
+            <Button variant="outline" size="sm" onClick={() => setEditing(true)}>Edit</Button>
+          )}
+        </div>
+      </CardHeader>
+      <CardContent>
+        {!editing ? (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <div className="text-xs uppercase tracking-wide text-muted-foreground mb-1">Realization Rate</div>
+              <div className="text-2xl font-bold tabular-nums">{ratePct}%</div>
+              <div className="text-xs text-muted-foreground mt-0.5">Applied to unbilled earned revenue</div>
+            </div>
+            <div>
+              <div className="text-xs uppercase tracking-wide text-muted-foreground mb-1">Expected Discount</div>
+              <div className="text-2xl font-bold tabular-nums text-rose-600">{discountPct}%</div>
+              <div className="text-xs text-muted-foreground mt-0.5">Booked as contra-revenue allowance</div>
+            </div>
+            <div>
+              <div className="text-xs uppercase tracking-wide text-muted-foreground mb-1">Basis Notes</div>
+              <div className="text-sm">{notes?.trim() || <span className="text-muted-foreground italic">None</span>}</div>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <Label htmlFor="rate-input">Realization Rate (%)</Label>
+                <Input
+                  id="rate-input"
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="0.1"
+                  value={pctInput}
+                  onChange={(e) => setPctInput(e.target.value)}
+                  className="mt-1"
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  0–100. Example: 70 means you expect to collect 70% of list-rate rental revenue on orders that haven&apos;t been invoiced yet.
+                </p>
+              </div>
+              <div>
+                <Label htmlFor="rate-notes">Basis / Notes</Label>
+                <Textarea
+                  id="rate-notes"
+                  value={notesInput}
+                  onChange={(e) => setNotesInput(e.target.value)}
+                  placeholder="e.g. Based on 2025 actuals: avg 28% discount on non-contract rentals"
+                  className="mt-1"
+                  rows={3}
+                />
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <Button onClick={handleSave} disabled={saving}>
+                {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                Save Rule
+              </Button>
+              <Button variant="outline" onClick={() => setEditing(false)} disabled={saving}>Cancel</Button>
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+interface CloseLinePreview {
+  lineType: "unbilled_earned" | "timing_accrual" | "timing_deferral";
+  orderNumber?: string;
+  invoiceNumber?: string;
+  customer?: string;
+  orderDescription?: string;
+  rentalStartDate?: string;
+  rentalEndDate?: string;
+  grossAmount: number;
+  realizationRateApplied: number;
+  expectedDiscount: number;
+  netAmount: number;
+}
+
+function CloseMonthSection({
+  entityId,
+  rate,
+  monthlyData,
+  unbilledEarnedLines,
+  closedPeriodKeys,
+  onClosed,
+}: {
+  entityId: string;
+  rate: number;
+  monthlyData: MonthlyRevenue[];
+  unbilledEarnedLines: UnbilledEarnedLine[];
+  closedPeriodKeys: Set<string>;
+  onClosed: () => void;
+}) {
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [selectedMonth, setSelectedMonth] = useState<string>("");
+  const [closeAsOfDate, setCloseAsOfDate] = useState<string>("");
+  const [notes, setNotes] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  const candidateMonths = useMemo(() => {
+    return monthlyData
+      .filter((m) => m.billed > 0 || m.earned > 0 || m.unbilledEarned > 0)
+      .filter((m) => !closedPeriodKeys.has(m.month))
+      .sort((a, b) => b.month.localeCompare(a.month));
+  }, [monthlyData, closedPeriodKeys]);
+
+  useEffect(() => {
+    if (!selectedMonth) return;
+    const [y, m] = selectedMonth.split("-").map(Number);
+    const lastDay = new Date(y, m, 0);
+    const dateStr = `${lastDay.getFullYear()}-${String(lastDay.getMonth() + 1).padStart(2, "0")}-${String(lastDay.getDate()).padStart(2, "0")}`;
+    setCloseAsOfDate(dateStr);
+  }, [selectedMonth]);
+
+  const openDialog = () => {
+    if (candidateMonths.length === 0) {
+      toast.error("No open periods to close");
+      return;
+    }
+    setSelectedMonth(candidateMonths[0].month);
+    setNotes("");
+    setDialogOpen(true);
+  };
+
+  const previewLines: CloseLinePreview[] = useMemo(() => {
+    if (!selectedMonth) return [];
+    const month = monthlyData.find((m) => m.month === selectedMonth);
+    if (!month) return [];
+
+    const lines: CloseLinePreview[] = [];
+
+    if (month.accrued > 0) {
+      lines.push({
+        lineType: "timing_accrual",
+        customer: "Timing adjustment (invoiced)",
+        orderDescription: `Earned > billed in ${month.label}`,
+        grossAmount: month.accrued,
+        realizationRateApplied: 1,
+        expectedDiscount: 0,
+        netAmount: month.accrued,
+      });
+    }
+    if (month.deferred > 0) {
+      lines.push({
+        lineType: "timing_deferral",
+        customer: "Timing adjustment (invoiced)",
+        orderDescription: `Billed > earned in ${month.label}`,
+        grossAmount: month.deferred,
+        realizationRateApplied: 1,
+        expectedDiscount: 0,
+        netAmount: month.deferred,
+      });
+    }
+
+    const ubForMonth = unbilledEarnedLines.filter((l) => l.month === selectedMonth);
+    for (const ln of ubForMonth) {
+      const discount = Math.round(ln.amountInMonth * (1 - rate) * 100) / 100;
+      const net = Math.round(ln.amountInMonth * rate * 100) / 100;
+      lines.push({
+        lineType: "unbilled_earned",
+        orderNumber: ln.orderNumber,
+        customer: ln.customer,
+        orderDescription: ln.orderDescription,
+        rentalStartDate: ln.rentalStartDate.slice(0, 10),
+        rentalEndDate: ln.rentalEndDate.slice(0, 10),
+        grossAmount: ln.amountInMonth,
+        realizationRateApplied: rate,
+        expectedDiscount: discount,
+        netAmount: net,
+      });
+    }
+    return lines;
+  }, [selectedMonth, monthlyData, unbilledEarnedLines, rate]);
+
+  const previewTotals = previewLines.reduce(
+    (acc, l) => ({
+      gross: acc.gross + (l.lineType === "timing_deferral" ? 0 : l.grossAmount),
+      discount: acc.discount + l.expectedDiscount,
+      netAccrual: acc.netAccrual + (l.lineType === "timing_accrual" || l.lineType === "unbilled_earned" ? l.netAmount : 0),
+      netDeferral: acc.netDeferral + (l.lineType === "timing_deferral" ? l.netAmount : 0),
+    }),
+    { gross: 0, discount: 0, netAccrual: 0, netDeferral: 0 },
+  );
+
+  const submitClose = async () => {
+    if (!selectedMonth || !closeAsOfDate) return;
+    const [y, m] = selectedMonth.split("-").map(Number);
+    setSubmitting(true);
+    try {
+      const res = await fetch("/api/accrual/closes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          entityId,
+          periodYear: y,
+          periodMonth: m,
+          closeAsOfDate,
+          realizationRate: rate,
+          lines: previewLines,
+          notes: notes.trim() || null,
+        }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      toast.success(`${MONTH_NAMES[m - 1]} ${y} books closed`);
+      setDialogOpen(false);
+      onClosed();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Close failed");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const [selectedY, selectedM] = selectedMonth ? selectedMonth.split("-").map(Number) : [0, 0];
+  const selectedLabel = selectedMonth ? `${MONTH_NAMES[selectedM - 1]} ${selectedY}` : "";
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <CardTitle className="flex items-center gap-2">
+              <Lock className="h-5 w-5" />
+              Close Month
+            </CardTitle>
+            <CardDescription>
+              Lock the accrual journal entry for a specific period. Once closed, lines become the baseline for variance tracking against actual invoices.
+            </CardDescription>
+          </div>
+          <Button onClick={openDialog} disabled={candidateMonths.length === 0}>
+            <Lock className="mr-2 h-4 w-4" />
+            Close a Period
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {candidateMonths.length === 0 ? (
+          <p className="text-muted-foreground py-4 text-center text-sm">
+            All months with activity are already closed.
+          </p>
+        ) : (
+          <div className="text-sm text-muted-foreground">
+            {candidateMonths.length} open period{candidateMonths.length === 1 ? "" : "s"} available to close: {candidateMonths.slice(0, 6).map((m) => m.label).join(", ")}
+            {candidateMonths.length > 6 && "…"}
+          </div>
+        )}
+      </CardContent>
+
+      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Close {selectedLabel} Books</DialogTitle>
+            <DialogDescription>
+              Review the preview below. Once saved, this close is immutable — adjustments go through the next period as a true-up.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <Label htmlFor="period-select">Period</Label>
+                <Select value={selectedMonth} onValueChange={setSelectedMonth}>
+                  <SelectTrigger id="period-select" className="mt-1">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {candidateMonths.map((m) => (
+                      <SelectItem key={m.month} value={m.month}>{m.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label htmlFor="close-date">Close As Of Date</Label>
+                <Input
+                  id="close-date"
+                  type="date"
+                  value={closeAsOfDate}
+                  onChange={(e) => setCloseAsOfDate(e.target.value)}
+                  className="mt-1"
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  JE will be dated as of this date. Defaults to month-end; change if closing later.
+                </p>
+              </div>
+            </div>
+
+            <div>
+              <Label htmlFor="close-notes">Notes (optional)</Label>
+              <Textarea
+                id="close-notes"
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                placeholder="e.g. Closed after receiving final pricing adjustment from Client X"
+                className="mt-1"
+                rows={2}
+              />
+            </div>
+
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div className="rounded-md border p-3">
+                <div className="text-xs text-muted-foreground">Gross Unbilled</div>
+                <div className="text-lg font-semibold tabular-nums">{formatCurrency(previewTotals.gross)}</div>
+              </div>
+              <div className="rounded-md border p-3">
+                <div className="text-xs text-muted-foreground">Expected Discount</div>
+                <div className="text-lg font-semibold tabular-nums text-rose-600">({formatCurrency(previewTotals.discount)})</div>
+              </div>
+              <div className="rounded-md border p-3">
+                <div className="text-xs text-muted-foreground">Net Accrual (Dr.)</div>
+                <div className="text-lg font-semibold tabular-nums text-teal-700">{formatCurrency(previewTotals.netAccrual)}</div>
+              </div>
+              <div className="rounded-md border p-3">
+                <div className="text-xs text-muted-foreground">Net Deferral (Cr.)</div>
+                <div className="text-lg font-semibold tabular-nums text-amber-700">{formatCurrency(previewTotals.netDeferral)}</div>
+              </div>
+            </div>
+
+            <div>
+              <h5 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
+                Journal Entry Preview (for QuickBooks manual entry)
+              </h5>
+              <div className="rounded border bg-white">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Account</TableHead>
+                      <TableHead>Memo</TableHead>
+                      <TableHead className="text-right">Debit</TableHead>
+                      <TableHead className="text-right">Credit</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {(() => {
+                      const timing = previewLines.filter(l => l.lineType === "timing_accrual").reduce((s, l) => s + l.netAmount, 0);
+                      const unbilledGross = previewLines.filter(l => l.lineType === "unbilled_earned").reduce((s, l) => s + l.grossAmount, 0);
+                      const unbilledNet = previewLines.filter(l => l.lineType === "unbilled_earned").reduce((s, l) => s + l.netAmount, 0);
+                      const discount = previewLines.filter(l => l.lineType === "unbilled_earned").reduce((s, l) => s + l.expectedDiscount, 0);
+                      return (
+                        <>
+                          {timing > 0 && (
+                            <>
+                              <TableRow>
+                                <TableCell className="font-medium">Accrued Revenue (Asset)</TableCell>
+                                <TableCell className="text-sm text-muted-foreground">Timing accrual — {selectedLabel}</TableCell>
+                                <TableCell className="text-right tabular-nums font-medium">{formatCurrency(timing)}</TableCell>
+                                <TableCell className="text-right">—</TableCell>
+                              </TableRow>
+                              <TableRow>
+                                <TableCell className="font-medium">Rental Revenue (Income)</TableCell>
+                                <TableCell className="text-sm text-muted-foreground">Timing accrual — {selectedLabel}</TableCell>
+                                <TableCell className="text-right">—</TableCell>
+                                <TableCell className="text-right tabular-nums font-medium">{formatCurrency(timing)}</TableCell>
+                              </TableRow>
+                            </>
+                          )}
+                          {unbilledGross > 0 && (
+                            <>
+                              <TableRow>
+                                <TableCell className="font-medium">Unbilled Receivables (Asset)</TableCell>
+                                <TableCell className="text-sm text-muted-foreground">Earned, not yet invoiced — {selectedLabel}</TableCell>
+                                <TableCell className="text-right tabular-nums font-medium">{formatCurrency(unbilledGross)}</TableCell>
+                                <TableCell className="text-right">—</TableCell>
+                              </TableRow>
+                              <TableRow>
+                                <TableCell className="font-medium">Rental Revenue (Income)</TableCell>
+                                <TableCell className="text-sm text-muted-foreground">Net of expected discount @ {Math.round(rate * 1000) / 10}%</TableCell>
+                                <TableCell className="text-right">—</TableCell>
+                                <TableCell className="text-right tabular-nums font-medium">{formatCurrency(unbilledNet)}</TableCell>
+                              </TableRow>
+                              {discount > 0 && (
+                                <TableRow>
+                                  <TableCell className="font-medium">Allowance for Discounts (Contra-Revenue)</TableCell>
+                                  <TableCell className="text-sm text-muted-foreground">Expected customer discount</TableCell>
+                                  <TableCell className="text-right">—</TableCell>
+                                  <TableCell className="text-right tabular-nums font-medium">{formatCurrency(discount)}</TableCell>
+                                </TableRow>
+                              )}
+                            </>
+                          )}
+                          {previewTotals.netDeferral > 0 && (
+                            <>
+                              <TableRow>
+                                <TableCell className="font-medium">Rental Revenue (Income)</TableCell>
+                                <TableCell className="text-sm text-muted-foreground">Timing deferral — {selectedLabel}</TableCell>
+                                <TableCell className="text-right tabular-nums font-medium">{formatCurrency(previewTotals.netDeferral)}</TableCell>
+                                <TableCell className="text-right">—</TableCell>
+                              </TableRow>
+                              <TableRow>
+                                <TableCell className="font-medium">Deferred Revenue (Liability)</TableCell>
+                                <TableCell className="text-sm text-muted-foreground">Timing deferral — {selectedLabel}</TableCell>
+                                <TableCell className="text-right">—</TableCell>
+                                <TableCell className="text-right tabular-nums font-medium">{formatCurrency(previewTotals.netDeferral)}</TableCell>
+                              </TableRow>
+                            </>
+                          )}
+                        </>
+                      );
+                    })()}
+                  </TableBody>
+                </Table>
+              </div>
+            </div>
+
+            <div>
+              <h5 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
+                Source Lines ({previewLines.length})
+              </h5>
+              <div className="rounded border bg-white max-h-80 overflow-y-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="text-xs">Type</TableHead>
+                      <TableHead className="text-xs">Order</TableHead>
+                      <TableHead className="text-xs">Customer</TableHead>
+                      <TableHead className="text-xs">Description</TableHead>
+                      <TableHead className="text-right text-xs">Gross</TableHead>
+                      <TableHead className="text-right text-xs">Discount</TableHead>
+                      <TableHead className="text-right text-xs">Net</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {previewLines.map((l, idx) => (
+                      <TableRow key={idx}>
+                        <TableCell className="text-xs">
+                          <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+                            {l.lineType === "unbilled_earned" ? "UB Earned" : l.lineType === "timing_accrual" ? "Timing Acc" : "Timing Def"}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-xs font-medium">{l.orderNumber ?? "—"}</TableCell>
+                        <TableCell className="text-xs">{l.customer ?? "—"}</TableCell>
+                        <TableCell className="text-xs max-w-[220px] truncate">{l.orderDescription ?? "—"}</TableCell>
+                        <TableCell className="text-right text-xs tabular-nums">{formatCurrency(l.grossAmount)}</TableCell>
+                        <TableCell className="text-right text-xs tabular-nums text-rose-500">
+                          {l.expectedDiscount > 0 ? `(${formatCurrency(l.expectedDiscount)})` : "—"}
+                        </TableCell>
+                        <TableCell className="text-right text-xs tabular-nums font-medium">{formatCurrency(l.netAmount)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDialogOpen(false)} disabled={submitting}>Cancel</Button>
+            <Button onClick={submitClose} disabled={submitting || previewLines.length === 0}>
+              {submitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Lock className="mr-2 h-4 w-4" />}
+              Lock {selectedLabel}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </Card>
+  );
+}
+
+function HistoricalClosesSection({
+  closes,
+  loading,
+  onRefresh,
+}: {
+  closes: AccrualCloseRow[];
+  loading: boolean;
+  onRefresh: () => void;
+}) {
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <CardTitle>Closed Periods</CardTitle>
+            <CardDescription>
+              Each closed period locks the accrual JE as the baseline. Expand a row to see variance against actual invoices.
+            </CardDescription>
+          </div>
+          <Button variant="outline" size="sm" onClick={onRefresh}>
+            <RefreshCw className="mr-2 h-4 w-4" />
+            Refresh
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {loading ? (
+          <p className="text-muted-foreground py-8 text-center text-sm">Loading…</p>
+        ) : closes.length === 0 ? (
+          <p className="text-muted-foreground py-8 text-center text-sm">No closed periods yet.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-[30px]" />
+                  <TableHead>Period</TableHead>
+                  <TableHead>Closed As Of</TableHead>
+                  <TableHead>Rate</TableHead>
+                  <TableHead className="text-right">Net Accrual</TableHead>
+                  <TableHead className="text-right">Net Deferral</TableHead>
+                  <TableHead className="text-right">Lines</TableHead>
+                  <TableHead>Status</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {closes.map((c) => {
+                  const isExpanded = expandedId === c.id;
+                  const label = `${MONTH_NAMES[c.period_month - 1]} ${c.period_year}`;
+                  return (
+                    <React.Fragment key={c.id}>
+                      <TableRow
+                        className="cursor-pointer hover:bg-muted/50"
+                        onClick={() => setExpandedId(isExpanded ? null : c.id)}
+                      >
+                        <TableCell className="text-muted-foreground">
+                          {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                        </TableCell>
+                        <TableCell className="font-medium">{label}</TableCell>
+                        <TableCell className="text-muted-foreground">{c.close_as_of_date}</TableCell>
+                        <TableCell className="tabular-nums">{Math.round(c.realization_rate_used * 1000) / 10}%</TableCell>
+                        <TableCell className="text-right tabular-nums text-teal-700">
+                          {c.total_net_accrual > 0 ? formatCurrency(c.total_net_accrual) : "—"}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums text-amber-700">
+                          {c.total_net_deferral > 0 ? formatCurrency(c.total_net_deferral) : "—"}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">{c.line_count}</TableCell>
+                        <TableCell>
+                          <Badge variant={c.status === "closed" ? "secondary" : "outline"} className="text-[10px]">
+                            <Lock className="h-3 w-3 mr-1" />
+                            {c.status}
+                          </Badge>
+                        </TableCell>
+                      </TableRow>
+                      {isExpanded && (
+                        <TableRow>
+                          <TableCell colSpan={8} className="p-0 bg-muted/30">
+                            <ClosePeriodDetail closeId={c.id} closeRecord={c} />
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </React.Fragment>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function ClosePeriodDetail({
+  closeId,
+  closeRecord,
+}: {
+  closeId: string;
+  closeRecord: AccrualCloseRow;
+}) {
+  const [lines, setLines] = useState<AccrualCloseLine[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [matching, setMatching] = useState(false);
+
+  const loadLines = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/accrual/closes/${closeId}`);
+      if (!res.ok) throw new Error(await res.text());
+      const json = await res.json();
+      setLines(json.lines ?? []);
+    } catch (err) {
+      console.error("Load close detail error:", err);
+    } finally {
+      setLoading(false);
+    }
+  }, [closeId]);
+
+  useEffect(() => { loadLines(); }, [loadLines]);
+
+  const runMatching = async () => {
+    setMatching(true);
+    try {
+      const res = await fetch(`/api/accrual/closes/${closeId}/match`, { method: "POST" });
+      if (!res.ok) throw new Error(await res.text());
+      const json = await res.json();
+      toast.success(`Matched ${json.matched} of ${json.checked} unresolved lines`);
+      await loadLines();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Matching failed");
+    } finally {
+      setMatching(false);
+    }
+  };
+
+  const writeOff = async (lineId: string) => {
+    const notes = window.prompt("Write-off reason:") ?? null;
+    if (notes === null) return;
+    try {
+      const res = await fetch(`/api/accrual/closes/${closeId}/writeoff`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lineId, notes }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      toast.success("Line written off");
+      await loadLines();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Write-off failed");
+    }
+  };
+
+  const summary = useMemo(() => {
+    const res = {
+      accrued: 0,
+      invoiced: 0,
+      writtenOff: 0,
+      actualTotal: 0,
+      varianceTotal: 0,
+    };
+    for (const l of lines) {
+      if (l.line_status === "accrued") res.accrued += 1;
+      else if (l.line_status === "invoiced") res.invoiced += 1;
+      else if (l.line_status === "written_off") res.writtenOff += 1;
+      res.actualTotal += l.actual_invoice_subtotal ?? 0;
+      res.varianceTotal += l.variance_amount ?? 0;
+    }
+    return res;
+  }, [lines]);
+
+  return (
+    <div className="px-4 py-3 space-y-3">
+      <div className="flex items-center justify-between">
+        <div className="text-xs text-muted-foreground">
+          Closed on {formatDate(closeRecord.closed_at)} {closeRecord.notes ? `· "${closeRecord.notes}"` : ""}
+        </div>
+        <Button variant="outline" size="sm" onClick={runMatching} disabled={matching}>
+          {matching ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <RefreshCw className="h-3 w-3 mr-1" />}
+          Match Against Current Invoices
+        </Button>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+        <div className="rounded border bg-white p-2">
+          <div className="text-[10px] uppercase text-muted-foreground">Locked Net</div>
+          <div className="text-sm font-semibold">{formatCurrency(closeRecord.total_net_accrual)}</div>
+        </div>
+        <div className="rounded border bg-white p-2">
+          <div className="text-[10px] uppercase text-muted-foreground">Actually Invoiced</div>
+          <div className="text-sm font-semibold text-teal-700">{formatCurrency(summary.actualTotal)}</div>
+          <div className="text-[10px] text-muted-foreground">{summary.invoiced} of {lines.length}</div>
+        </div>
+        <div className="rounded border bg-white p-2">
+          <div className="text-[10px] uppercase text-muted-foreground">Variance</div>
+          <div className={`text-sm font-semibold ${summary.varianceTotal >= 0 ? "text-teal-700" : "text-amber-700"}`}>
+            {summary.varianceTotal >= 0 ? "+" : ""}{formatCurrency(summary.varianceTotal)}
+          </div>
+        </div>
+        <div className="rounded border bg-white p-2">
+          <div className="text-[10px] uppercase text-muted-foreground">Still Unresolved</div>
+          <div className="text-sm font-semibold">{summary.accrued}</div>
+        </div>
+        <div className="rounded border bg-white p-2">
+          <div className="text-[10px] uppercase text-muted-foreground">Written Off</div>
+          <div className="text-sm font-semibold text-rose-600">{summary.writtenOff}</div>
+        </div>
+      </div>
+
+      {loading ? (
+        <p className="text-xs text-muted-foreground">Loading lines…</p>
+      ) : lines.length === 0 ? (
+        <p className="text-xs text-muted-foreground">No lines.</p>
+      ) : (
+        <div className="rounded border bg-white overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="text-xs">Order</TableHead>
+                <TableHead className="text-xs">Customer</TableHead>
+                <TableHead className="text-xs">Description</TableHead>
+                <TableHead className="text-right text-xs">Net Accrued</TableHead>
+                <TableHead className="text-right text-xs">Actual Invoiced</TableHead>
+                <TableHead className="text-right text-xs">Variance</TableHead>
+                <TableHead className="text-xs">Status</TableHead>
+                <TableHead className="text-xs" />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {lines.map((l) => (
+                <TableRow key={l.id}>
+                  <TableCell className="text-xs font-medium">{l.order_number ?? l.invoice_number ?? "—"}</TableCell>
+                  <TableCell className="text-xs">{l.customer ?? "—"}</TableCell>
+                  <TableCell className="text-xs max-w-[200px] truncate">
+                    {l.order_description ?? "—"}
+                    {l.writeoff_notes && <div className="text-[10px] text-rose-600 italic">Write-off: {l.writeoff_notes}</div>}
+                    {l.matched_invoice_number && <div className="text-[10px] text-teal-600">Inv: {l.matched_invoice_number}</div>}
+                  </TableCell>
+                  <TableCell className="text-right text-xs tabular-nums">{formatCurrency(l.net_amount)}</TableCell>
+                  <TableCell className="text-right text-xs tabular-nums">
+                    {l.actual_invoice_subtotal !== null ? formatCurrency(l.actual_invoice_subtotal) : "—"}
+                  </TableCell>
+                  <TableCell className={`text-right text-xs tabular-nums font-medium ${
+                    l.variance_amount === null ? "" : l.variance_amount >= 0 ? "text-teal-700" : "text-amber-700"
+                  }`}>
+                    {l.variance_amount === null ? "—" : `${l.variance_amount >= 0 ? "+" : ""}${formatCurrency(l.variance_amount)}`}
+                  </TableCell>
+                  <TableCell>
+                    <Badge
+                      variant="secondary"
+                      className={`text-[10px] px-1.5 py-0 ${
+                        l.line_status === "invoiced" ? "bg-teal-100 text-teal-800" :
+                        l.line_status === "written_off" ? "bg-rose-100 text-rose-800" :
+                        "bg-amber-100 text-amber-800"
+                      }`}
+                    >
+                      {l.line_status === "accrued" ? <Unlock className="h-2.5 w-2.5 mr-0.5" /> : null}
+                      {l.line_status}
+                    </Badge>
+                  </TableCell>
+                  <TableCell>
+                    {l.line_status === "accrued" && (
+                      <Button variant="ghost" size="sm" className="text-xs h-6 px-2" onClick={() => writeOff(l.id)}>
+                        Write off
+                      </Button>
+                    )}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+    </div>
   );
 }

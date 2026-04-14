@@ -61,9 +61,24 @@ export interface MonthlyRevenue {
   pipeline: number;
   forecast: number | null; // null = no forecast for this month
   billed: number; // revenue grouped by invoice date
-  earned: number; // revenue pro-rata by rental period
+  earned: number; // revenue pro-rata by rental period (closed invoices only)
   accrued: number; // earned > billed → recognize extra revenue
   deferred: number; // billed > earned → defer excess to future
+  unbilledEarned: number; // active orders: rental in period, no matching closed invoice yet (gross/list rate)
+  unbilledOrderCount: number; // count of orders contributing to unbilledEarned
+}
+
+export interface UnbilledEarnedLine {
+  orderNumber: string;
+  customer: string;
+  orderDescription: string;
+  rentalStartDate: string;
+  rentalEndDate: string;
+  orderTotal: number;
+  billedAgainstOrder: number; // sum of CLOSED invoice subtotals already applied
+  unbilledRemainder: number;  // orderTotal - billedAgainstOrder, floored at 0
+  amountInMonth: number;      // allocated portion of unbilledRemainder to this month
+  month: string;              // "2026-03"
 }
 
 export interface PipelineOrder {
@@ -142,6 +157,7 @@ export interface RevenueProjectionResponse {
   unbilledOrders: PipelineOrder[];
   overdueActiveOrders: PipelineOrder[];
   equipmentBreakdown: EquipmentBreakdown[];
+  unbilledEarnedLines: UnbilledEarnedLine[];
   dataAsOf: string;
   dateMode: DateMode;
 }
@@ -394,10 +410,10 @@ export function processRevenueData(
   const monthKeys = generateMonthKeys(12, 3);
   const monthMap = new Map<
     string,
-    { closed: number; pending: number; pipeline: number; billed: number; earned: number }
+    { closed: number; pending: number; pipeline: number; billed: number; earned: number; unbilledEarned: number; unbilledOrderCount: number }
   >();
   for (const mk of monthKeys) {
-    monthMap.set(mk, { closed: 0, pending: 0, pipeline: 0, billed: 0, earned: 0 });
+    monthMap.set(mk, { closed: 0, pending: 0, pipeline: 0, billed: 0, earned: 0, unbilledEarned: 0, unbilledOrderCount: 0 });
   }
 
   // --- Compute billed (by invoice date) and earned (by rental period) for all closed invoices ---
@@ -476,6 +492,61 @@ export function processRevenueData(
     }
   }
 
+  // --- Unbilled Earned: rental occurred in-month, no matching closed invoice ─
+  // Build OrderNumber → sum of closed InvoiceSubTotal lookup
+  const orderBilledMap = new Map<string, number>();
+  for (const inv of closedInvoices) {
+    if (!inv.OrderNumber) continue;
+    const prev = orderBilledMap.get(inv.OrderNumber) ?? 0;
+    orderBilledMap.set(inv.OrderNumber, prev + toNum(inv.InvoiceSubTotal));
+  }
+
+  const unbilledEarnedLines: UnbilledEarnedLine[] = [];
+  const monthOrderSeen = new Map<string, Set<string>>();
+
+  for (const ord of activeOrders) {
+    if (!ord.OrderNumber || !ord.EstimatedStartDate || !ord.EstimatedStopDate) continue;
+    const orderTotal = toNum(ord.Total);
+    if (orderTotal <= 0) continue;
+    const billedAgainst = orderBilledMap.get(ord.OrderNumber) ?? 0;
+    const unbilledRemainder = Math.max(0, orderTotal - billedAgainst);
+    if (unbilledRemainder <= 0) continue;
+
+    // Allocate the unbilled remainder proportionally across the rental period
+    const allocations = allocateToMonths(
+      ord.EstimatedStartDate, ord.EstimatedStopDate, unbilledRemainder, ord.OrderDate,
+    );
+    for (const [mk, entry] of allocations) {
+      if (!monthMap.has(mk)) continue;
+      // Only count rental activity in months at or before the current month —
+      // future months are still "pipeline" forecast, not earned revenue.
+      if (mk > currentMonthKey) continue;
+
+      monthMap.get(mk)!.unbilledEarned += entry.amount;
+
+      // Dedup order-count per month
+      if (!monthOrderSeen.has(mk)) monthOrderSeen.set(mk, new Set());
+      const seen = monthOrderSeen.get(mk)!;
+      if (!seen.has(ord.OrderNumber)) {
+        seen.add(ord.OrderNumber);
+        monthMap.get(mk)!.unbilledOrderCount += 1;
+      }
+
+      unbilledEarnedLines.push({
+        orderNumber: ord.OrderNumber,
+        customer: ord.Customer || "",
+        orderDescription: ord.Description || "",
+        rentalStartDate: ord.EstimatedStartDate,
+        rentalEndDate: ord.EstimatedStopDate,
+        orderTotal,
+        billedAgainstOrder: billedAgainst,
+        unbilledRemainder,
+        amountInMonth: Math.round(entry.amount * 100) / 100,
+        month: mk,
+      });
+    }
+  }
+
   // --- Forecast: 6-month SMA of closed revenue projected 3 months forward ---
   // Get last 6 completed months (excluding current month)
   const completedMonths = monthKeys.filter((mk) => mk < currentMonthKey);
@@ -503,6 +574,8 @@ export function processRevenueData(
       earned: Math.round(bucket.earned * 100) / 100,
       accrued: diff > 0 ? Math.round(diff * 100) / 100 : 0,
       deferred: diff < 0 ? Math.round(Math.abs(diff) * 100) / 100 : 0,
+      unbilledEarned: Math.round(bucket.unbilledEarned * 100) / 100,
+      unbilledOrderCount: bucket.unbilledOrderCount,
     };
   });
 
@@ -734,6 +807,7 @@ export function processRevenueData(
     unbilledOrders,
     overdueActiveOrders,
     equipmentBreakdown,
+    unbilledEarnedLines,
     dataAsOf: new Date().toISOString(),
     dateMode,
   };
