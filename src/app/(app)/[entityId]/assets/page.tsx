@@ -84,6 +84,7 @@ import {
   type CustomVehicleClassRow,
 } from "@/lib/utils/vehicle-classification";
 import type { VehicleClass } from "@/lib/types/database";
+import { AdditionsTab } from "./additions-tab";
 import { ReconciliationTab } from "./reconciliation-tab";
 import { RollForwardTab } from "./roll-forward-tab";
 import { SoldTab } from "./sold-tab";
@@ -698,6 +699,7 @@ export default function AssetsPage() {
         <TabsList>
           <TabsTrigger value="register">Register</TabsTrigger>
           <TabsTrigger value="depreciation">Depreciation</TabsTrigger>
+          <TabsTrigger value="additions">Additions</TabsTrigger>
           <TabsTrigger value="sold">Sold</TabsTrigger>
           <TabsTrigger value="reconciliation">Reconciliation</TabsTrigger>
           <TabsTrigger value="roll-forward">Roll-Forward</TabsTrigger>
@@ -997,6 +999,10 @@ export default function AssetsPage() {
             entityId={entityId}
             customClasses={customClasses}
           />
+        </TabsContent>
+
+        <TabsContent value="additions">
+          <AdditionsTab entityId={entityId} />
         </TabsContent>
 
         <TabsContent value="sold">
