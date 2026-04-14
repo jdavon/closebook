@@ -523,7 +523,10 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
     key: keyof MonthlyRollForward | "sep";
     label: string;
     bold?: boolean;
+    /** Wrap positive values in parens AND color red — for outflows like disposals. */
     negative?: boolean;
+    /** Wrap positive values in parens without coloring — for contra-asset balances. */
+    paren?: boolean;
     separator?: boolean;
   }
 
@@ -533,8 +536,8 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
     { key: "disposalsCost", label: "− Disposals", negative: true },
     { key: "endingCost", label: "Ending Cost", bold: true },
     { key: "sep", label: "", separator: true },
-    { key: "beginningAccum", label: "Beginning Accum. Depreciation" },
-    { key: "depreciation", label: "+ Depreciation" },
+    { key: "beginningAccum", label: "Beginning Accum. Depreciation", negative: true },
+    { key: "depreciation", label: "+ Depreciation", paren: true },
     { key: "disposalsAccum", label: "− Disposals Accum.", negative: true },
     { key: "endingAccum", label: "Ending Accum. Depreciation", bold: true },
     { key: "sep", label: "", separator: true },
@@ -656,7 +659,8 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
                             </tr>
                           );
                         }
-                        const { key, label, bold, negative } = rowDef;
+                        const { key, label, bold, negative, paren } = rowDef;
+                        const wrap = negative || paren;
                         return (
                           <tr
                             key={`${key}-${rowIdx}`}
@@ -675,7 +679,7 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
                               const value = row[
                                 key as keyof MonthlyRollForward
                               ] as number;
-                              const displayValue = negative
+                              const displayValue = wrap
                                 ? value > 0
                                   ? `(${formatCurrency(value)})`
                                   : formatCurrency(0)
