@@ -17,6 +17,19 @@ import {
   getAssetGLGroup,
   type GLAccountGroup,
 } from "@/lib/utils/asset-gl-groups";
+import {
+  generateDepreciationSchedule,
+  buildOpeningBalance,
+  type AssetForDepreciation,
+  type DepreciationEntry,
+} from "@/lib/utils/depreciation";
+import {
+  getReportingGroup,
+  customRowsToClassifications,
+  type VehicleClassification,
+  type CustomVehicleClassRow,
+} from "@/lib/utils/vehicle-classification";
+import type { DepreciationRule } from "./depreciation-rules-settings";
 
 interface RollForwardTabProps {
   entityId: string;
@@ -28,21 +41,18 @@ interface AssetRecord {
   vehicle_class: string | null;
   acquisition_cost: number;
   in_service_date: string;
-  book_accumulated_depreciation: number;
-  book_net_value: number;
+  book_useful_life_months: number;
+  book_salvage_value: number;
+  book_depreciation_method: string;
+  tax_cost_basis: number | null;
+  tax_depreciation_method: string;
+  tax_useful_life_months: number | null;
+  section_179_amount: number;
+  bonus_depreciation_amount: number;
   status: string;
   disposed_date: string | null;
   cost_account_id: string | null;
   master_type_override: string | null;
-}
-
-interface DeprEntry {
-  fixed_asset_id: string;
-  period_year: number;
-  period_month: number;
-  book_depreciation: number;
-  book_accumulated: number;
-  book_net_value: number;
 }
 
 interface MonthlyRollForward {
@@ -102,33 +112,55 @@ function parseISODate(dateStr: string): { year: number; month: number } {
   return { year: parseInt(parts[0], 10), month: parseInt(parts[1], 10) };
 }
 
+/**
+ * Resolve effective useful life / salvage / method for an asset. Mirrors the
+ * logic in depreciation-schedule-tab.tsx so both tabs calculate from the same
+ * rule-driven inputs. When a reporting-group rule exists, it wins over the
+ * asset's stored values.
+ */
+function resolveAssetForCalc(
+  asset: AssetRecord,
+  rule: DepreciationRule | undefined
+): AssetForDepreciation {
+  const ruleSalvagePct = rule?.book_salvage_pct ?? null;
+  const ruleSalvage =
+    ruleSalvagePct != null && ruleSalvagePct >= 0
+      ? Math.round(asset.acquisition_cost * (ruleSalvagePct / 100) * 100) / 100
+      : null;
+
+  const usefulLife =
+    rule?.book_useful_life_months != null && rule.book_useful_life_months > 0
+      ? rule.book_useful_life_months
+      : asset.book_useful_life_months;
+  const salvageValue = ruleSalvage != null ? ruleSalvage : asset.book_salvage_value;
+  const method = rule?.book_depreciation_method ?? asset.book_depreciation_method;
+
+  return {
+    acquisition_cost: asset.acquisition_cost,
+    in_service_date: asset.in_service_date,
+    book_useful_life_months: usefulLife,
+    book_salvage_value: salvageValue,
+    book_depreciation_method: method,
+    tax_cost_basis: asset.tax_cost_basis,
+    tax_depreciation_method: asset.tax_depreciation_method,
+    tax_useful_life_months: asset.tax_useful_life_months,
+    section_179_amount: asset.section_179_amount,
+    bonus_depreciation_amount: asset.bonus_depreciation_amount,
+  };
+}
+
 function computeRollForward(
   group: GLAccountGroup,
   assets: AssetRecord[],
-  deprEntries: DeprEntry[],
+  scheduleMap: Record<string, Record<string, DepreciationEntry>>,
+  openingAccumMap: Record<string, number>,
   months: { year: number; month: number }[],
   openingYear: number,
   openingMonth: number,
-  resolveGLGroup?: (asset: AssetRecord) => string | null
+  resolveGLGroup: (asset: AssetRecord) => string | null
 ): MonthlyRollForward[] {
-  // Filter assets to this group, using resolver if provided
-  const groupAssets = assets.filter((a) => {
-    const resolved = resolveGLGroup
-      ? resolveGLGroup(a)
-      : getAssetGLGroup(a.vehicle_class, a.master_type_override);
-    return resolved === group.key;
-  });
+  const groupAssets = assets.filter((a) => resolveGLGroup(a) === group.key);
 
-  // Build depreciation lookup: assetId -> monthKey -> entry
-  const deprByAssetMonth: Record<string, Record<string, DeprEntry>> = {};
-  for (const d of deprEntries) {
-    if (!deprByAssetMonth[d.fixed_asset_id]) {
-      deprByAssetMonth[d.fixed_asset_id] = {};
-    }
-    deprByAssetMonth[d.fixed_asset_id][monthKey(d.period_year, d.period_month)] = d;
-  }
-
-  // --- Helpers for asset lifecycle boundaries ---
   const isInServiceBy = (a: AssetRecord, y: number, m: number) => {
     if (!a.in_service_date) return false;
     const d = parseISODate(a.in_service_date);
@@ -152,13 +184,23 @@ function computeRollForward(
   const prevPeriod = (y: number, m: number) =>
     m === 1 ? { year: y - 1, month: 12 } : { year: y, month: m - 1 };
 
+  // Look up an asset's accumulated depreciation at the end of a given period.
+  // The in-memory schedule does not emit an entry for the opening period
+  // itself — at that period, fall back to the pinned opening balance.
+  const accumAt = (a: AssetRecord, y: number, m: number): number => {
+    const entry = scheduleMap[a.id]?.[monthKey(y, m)];
+    if (entry) return entry.book_accumulated;
+    if (y === openingYear && m === openingMonth) {
+      return openingAccumMap[a.id] ?? 0;
+    }
+    return 0;
+  };
+
   const result: MonthlyRollForward[] = [];
 
   for (const { year, month } of months) {
-    // Opening-period snapshot: this is the as-of date the register was loaded
-    // against. There is no pre-opening history to roll forward, so we just
-    // display the loaded-in cost + accumulated. Beginning equals ending;
-    // no additions/disposals/depreciation are attributed to this month.
+    // Opening-period snapshot: beginning equals ending from the pinned
+    // opening balances; no additions/disposals/depreciation flow here.
     if (year === openingYear && month === openingMonth) {
       const heldAtOpening = groupAssets.filter(
         (a) => isInServiceBy(a, year, month) && !isDisposedBy(a, year, month)
@@ -169,8 +211,7 @@ function computeRollForward(
       );
       let snapshotAccum = 0;
       for (const a of heldAtOpening) {
-        const entry = deprByAssetMonth[a.id]?.[monthKey(year, month)];
-        if (entry) snapshotAccum += Number(entry.book_accumulated);
+        snapshotAccum += openingAccumMap[a.id] ?? 0;
       }
       result.push({
         year,
@@ -190,8 +231,6 @@ function computeRollForward(
     }
 
     const { year: py, month: pm } = prevPeriod(year, month);
-
-    // Held at start of month = in service by end of prior month, not yet disposed
     const heldAtStart = groupAssets.filter(
       (a) => isInServiceBy(a, py, pm) && !isDisposedBy(a, py, pm)
     );
@@ -217,32 +256,19 @@ function computeRollForward(
     );
     const endingCost = beginningCost + additionsCost - disposalsCost;
 
-    // ---- ACCUMULATED DEPRECIATION ----
-    // Beginning: each held asset's accumulated at end of prior month
+    // ---- ACCUMULATED DEPRECIATION (from in-memory rule-driven schedule) ----
     let beginningAccum = 0;
     for (const a of heldAtStart) {
-      const prev = deprByAssetMonth[a.id]?.[monthKey(py, pm)];
-      if (prev) beginningAccum += Number(prev.book_accumulated);
+      beginningAccum += accumAt(a, py, pm);
     }
-    // Depreciation: sum of book_depreciation from this month's entries across
-    // all group assets (held, added, and disposed-this-month).
     let depreciation = 0;
     for (const a of groupAssets) {
-      const entry = deprByAssetMonth[a.id]?.[monthKey(year, month)];
-      if (entry) depreciation += Number(entry.book_depreciation);
+      const entry = scheduleMap[a.id]?.[monthKey(year, month)];
+      if (entry) depreciation += entry.book_depreciation;
     }
-    // Disposals accumulated: the disposed asset's accumulated at disposal
-    // month (which already includes that month's depreciation). This keeps
-    // Beginning + Depreciation − Disposals Accum = Ending Accum exactly.
     let disposalsAccum = 0;
     for (const a of disposalsAssets) {
-      const entry = deprByAssetMonth[a.id]?.[monthKey(year, month)];
-      if (entry) {
-        disposalsAccum += Number(entry.book_accumulated);
-      } else {
-        const prev = deprByAssetMonth[a.id]?.[monthKey(py, pm)];
-        if (prev) disposalsAccum += Number(prev.book_accumulated);
-      }
+      disposalsAccum += accumAt(a, year, month);
     }
     const endingAccum = beginningAccum + depreciation - disposalsAccum;
 
@@ -272,17 +298,14 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
   const supabase = createClient();
   const now = new Date();
 
-  // Default range: month after opening balance → current month. Set once on
-  // mount from the entity setting so the user can still adjust the pickers.
   const [startYear, setStartYear] = useState(now.getFullYear());
   const [startMonth, setStartMonth] = useState(1);
   const [endYear, setEndYear] = useState(now.getFullYear());
   const [endMonth, setEndMonth] = useState(now.getMonth() + 1);
   const [loading, setLoading] = useState(true);
-  // Opening period — roll-forward cannot go earlier than this and the first
-  // column at this period is rendered as an as-of snapshot.
   const [openingYear, setOpeningYear] = useState<number | null>(null);
   const [openingMonth, setOpeningMonth] = useState<number | null>(null);
+  const [openingDate, setOpeningDate] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -290,7 +313,9 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
         if (cancelled || !data?.rental_asset_opening_date) return;
-        const [y, m] = data.rental_asset_opening_date.split("-").map(Number);
+        const iso: string = data.rental_asset_opening_date;
+        setOpeningDate(iso);
+        const [y, m] = iso.split("-").map(Number);
         setOpeningYear(y);
         setOpeningMonth(m);
         let nextY = y;
@@ -308,7 +333,6 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
     };
   }, [entityId]);
 
-  // Clamp any start selection so it never goes before the opening period.
   function handleStartYearChange(y: number) {
     let newY = y;
     let newM = startMonth;
@@ -339,16 +363,34 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
   const loadData = useCallback(async () => {
     setLoading(true);
 
-    // Fetch all assets (including GL override fields)
+    // 1. Custom vehicle classes (needed for master-type resolution).
+    const ccRes = await fetch(`/api/assets/classes?entityId=${entityId}`);
+    let customClasses: VehicleClassification[] = [];
+    if (ccRes.ok) {
+      const rows: CustomVehicleClassRow[] = await ccRes.json();
+      customClasses = customRowsToClassifications(rows);
+    }
+
+    // 2. Reporting-group depreciation rules — the authoritative source of
+    // useful life / salvage / method for live schedule calculation.
+    const rulesRes = await fetch(
+      `/api/assets/depreciation-rules?entityId=${entityId}`
+    );
+    const rules: DepreciationRule[] = rulesRes.ok ? await rulesRes.json() : [];
+    const rulesMap = new Map<string, DepreciationRule>();
+    for (const r of rules) rulesMap.set(r.reporting_group, r);
+
+    // 3. Assets with all fields required for schedule calculation.
     const { data: assetsData } = await supabase
       .from("fixed_assets")
       .select(
-        "id, asset_name, vehicle_class, acquisition_cost, in_service_date, book_accumulated_depreciation, book_net_value, status, disposed_date, cost_account_id, master_type_override"
+        "id, asset_name, vehicle_class, acquisition_cost, in_service_date, book_useful_life_months, book_salvage_value, book_depreciation_method, tax_cost_basis, tax_depreciation_method, tax_useful_life_months, section_179_amount, bonus_depreciation_amount, status, disposed_date, cost_account_id, master_type_override"
       )
       .eq("entity_id", entityId);
     const assets = (assetsData ?? []) as AssetRecord[];
 
-    // Fetch recon links so we can resolve GL overrides
+    // 4. Recon links so GL-override placement still routes an asset to the
+    // correct Vehicle/Trailer bucket when a cost account is pinned.
     const linkRes = await fetch(`/api/assets/recon-links?entityId=${entityId}`);
     const linkData = linkRes.ok ? await linkRes.json() : [];
     const accountToParent: Record<string, string> = {};
@@ -359,47 +401,83 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
       }
     }
 
-    // Build resolver: asset GL override → parent group, else vehicle_class
     const resolveGLGroup = (asset: AssetRecord): string | null => {
       if (asset.cost_account_id && accountToParent[asset.cost_account_id]) {
         return accountToParent[asset.cost_account_id];
       }
-      return getAssetGLGroup(asset.vehicle_class, asset.master_type_override);
+      return getAssetGLGroup(
+        asset.vehicle_class,
+        asset.master_type_override,
+        customClasses
+      );
     };
 
-    // Fetch ALL depreciation entries for these assets so we can look up the
-    // beginning-of-month accumulated (which may predate the chosen range)
-    // without another round trip.
+    const months = generateMonthRange(startYear, startMonth, endYear, endMonth);
+    const openY = openingYear ?? 0;
+    const openM = openingMonth ?? 0;
+
+    // 5. Pinned opening balances — the is_manual_override row written at the
+    // opening period during import. This is the same source the Depreciation
+    // Schedule tab uses, keeping the two tabs aligned even if rules drift.
     const assetIds = assets.map((a) => a.id);
-    let allDepr: DeprEntry[] = [];
-    if (assetIds.length > 0) {
+    const openingAccumMap: Record<string, number> = {};
+    if (openY > 0 && openM > 0 && assetIds.length > 0) {
       const batchSize = 100;
       for (let i = 0; i < assetIds.length; i += batchSize) {
         const batch = assetIds.slice(i, i + batchSize);
-        const { data: deprData } = await supabase
+        const { data: openingRows } = await supabase
           .from("fixed_asset_depreciation")
-          .select(
-            "fixed_asset_id, period_year, period_month, book_depreciation, book_accumulated, book_net_value"
-          )
-          .in("fixed_asset_id", batch);
-        allDepr = allDepr.concat((deprData ?? []) as DeprEntry[]);
+          .select("fixed_asset_id, book_accumulated")
+          .in("fixed_asset_id", batch)
+          .eq("period_year", openY)
+          .eq("period_month", openM);
+        for (const r of (openingRows ?? []) as {
+          fixed_asset_id: string;
+          book_accumulated: number;
+        }[]) {
+          openingAccumMap[r.fixed_asset_id] = Number(r.book_accumulated) || 0;
+        }
       }
     }
 
-    const months = generateMonthRange(startYear, startMonth, endYear, endMonth);
+    // 6. Live, rule-driven schedule per asset through the end of the range.
+    // Same inputs as the Depreciation Schedule tab: rule-resolved UL/salvage
+    // /method + opening balance anchored at the opening period.
+    const scheduleMap: Record<string, Record<string, DepreciationEntry>> = {};
+    if (months.length > 0) {
+      const lastMonth = months[months.length - 1];
+      for (const asset of assets) {
+        const group = getReportingGroup(asset.vehicle_class, customClasses);
+        const rule = group ? rulesMap.get(group) : undefined;
+        const assetForCalc = resolveAssetForCalc(asset, rule);
 
-    // Opening period — snapshot column in computeRollForward. Defaults to a
-    // sentinel (year 0) when not yet loaded, so no month matches and all
-    // months fall through to normal roll-forward logic.
-    const openY = openingYear ?? 0;
-    const openM = openingMonth ?? 0;
+        const storedBook = openingAccumMap[asset.id] ?? 0;
+        const opening = openingDate
+          ? buildOpeningBalance(openingDate, storedBook, 0)
+          : undefined;
+
+        const schedule = generateDepreciationSchedule(
+          assetForCalc,
+          lastMonth.year,
+          lastMonth.month,
+          opening
+        );
+
+        const entryMap: Record<string, DepreciationEntry> = {};
+        for (const entry of schedule) {
+          entryMap[monthKey(entry.period_year, entry.period_month)] = entry;
+        }
+        scheduleMap[asset.id] = entryMap;
+      }
+    }
 
     const data: Record<string, MonthlyRollForward[]> = {};
     for (const group of GL_ACCOUNT_GROUPS) {
       data[group.key] = computeRollForward(
         group,
         assets,
-        allDepr,
+        scheduleMap,
+        openingAccumMap,
         months,
         openY,
         openM,
@@ -417,6 +495,7 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
     endMonth,
     openingYear,
     openingMonth,
+    openingDate,
   ]);
 
   useEffect(() => {
@@ -424,9 +503,6 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
   }, [loadData]);
 
   const months = generateMonthRange(startYear, startMonth, endYear, endMonth);
-  // Year list — omit anything before the opening year so the user can't
-  // pick a pre-opening range. Falls back to the default window when the
-  // opening period hasn't loaded yet.
   const allYears = Array.from(
     { length: 5 },
     (_, i) => now.getFullYear() - i + 1
@@ -434,8 +510,6 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
   const years = openingYear
     ? allYears.filter((y) => y >= openingYear).sort((a, b) => a - b)
     : allYears;
-  // Months available for the Start picker when the selected Start year
-  // equals the opening year — can't pick a month before the opening month.
   const startMonthOptions =
     openingYear != null &&
     openingMonth != null &&
