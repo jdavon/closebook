@@ -52,6 +52,7 @@ interface AssetRow {
   section_179_amount: number;
   bonus_depreciation_amount: number;
   status: string;
+  disposed_date: string | null;
 }
 
 type ViewMode = "depreciation" | "remaining_life" | "net_book_value";
@@ -245,10 +246,10 @@ export function DepreciationScheduleTab({
     const { data } = await supabase
       .from("fixed_assets")
       .select(
-        "id, asset_name, asset_tag, vehicle_class, acquisition_cost, in_service_date, book_useful_life_months, book_salvage_value, book_depreciation_method, book_accumulated_depreciation, book_net_value, tax_cost_basis, tax_depreciation_method, tax_useful_life_months, tax_accumulated_depreciation, section_179_amount, bonus_depreciation_amount, status"
+        "id, asset_name, asset_tag, vehicle_class, acquisition_cost, in_service_date, book_useful_life_months, book_salvage_value, book_depreciation_method, book_accumulated_depreciation, book_net_value, tax_cost_basis, tax_depreciation_method, tax_useful_life_months, tax_accumulated_depreciation, section_179_amount, bonus_depreciation_amount, status, disposed_date"
       )
       .eq("entity_id", entityId)
-      .in("status", ["active", "fully_depreciated"])
+      .in("status", ["active", "fully_depreciated", "disposed"])
       .order("asset_name");
     setAssets((data as unknown as AssetRow[]) ?? []);
   }, [supabase, entityId]);
@@ -354,10 +355,36 @@ export function DepreciationScheduleTab({
     }
   }, [loading, buildSchedules]);
 
-  // Group assets by reporting group
+  // Disposed-month helpers. A sold asset stays on the schedule through its
+  // disposal month (showing the final month's depreciation) and renders blank
+  // thereafter, so reviewers can see the last depreciation recorded before sale.
+  const disposedPeriod = (asset: AssetRow): { year: number; month: number } | null => {
+    if (asset.status !== "disposed" || !asset.disposed_date) return null;
+    return parseISODate(asset.disposed_date);
+  };
+  const isPastDisposal = (asset: AssetRow, year: number, month: number): boolean => {
+    const dp = disposedPeriod(asset);
+    if (!dp) return false;
+    return year > dp.year || (year === dp.year && month > dp.month);
+  };
+
+  // Group assets by reporting group. Drop anything disposed before the first
+  // month of the selected range — those assets had no activity in view.
   const groupedAssets = useMemo(() => {
+    const firstMonth = months[0];
+    const visibleAssets = firstMonth
+      ? assets.filter((a) => {
+          const dp = disposedPeriod(a);
+          if (!dp) return true;
+          return (
+            dp.year > firstMonth.year ||
+            (dp.year === firstMonth.year && dp.month >= firstMonth.month)
+          );
+        })
+      : assets;
+
     const groups: Record<string, AssetRow[]> = {};
-    for (const asset of assets) {
+    for (const asset of visibleAssets) {
       const group = getReportingGroup(asset.vehicle_class, customClasses) ?? "Unassigned";
       if (!groups[group]) groups[group] = [];
       groups[group].push(asset);
@@ -373,7 +400,8 @@ export function DepreciationScheduleTab({
       group: key,
       assets: groups[key],
     }));
-  }, [assets, customClasses]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [assets, customClasses, months]);
 
   // Regenerate all schedules through current period and save to DB
   async function handleGenerateAll() {
@@ -493,6 +521,10 @@ export function DepreciationScheduleTab({
     year: number,
     month: number
   ): string {
+    // After disposal the asset is off the books — render blank so the row
+    // shows the final month's depreciation then goes empty.
+    if (isPastDisposal(asset, year, month)) return "";
+
     const key = monthKey(year, month);
     const entry = scheduleMap[asset.id]?.[key];
 
@@ -545,6 +577,7 @@ export function DepreciationScheduleTab({
     const key = monthKey(year, month);
     let total = 0;
     for (const asset of groupAssets) {
+      if (isPastDisposal(asset, year, month)) continue;
       const entry = scheduleMap[asset.id]?.[key];
       if (entry) {
         if (viewMode === "net_book_value") {
@@ -735,9 +768,10 @@ export function DepreciationScheduleTab({
       ) : groupedAssets.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-12">
           <Calculator className="h-12 w-12 text-muted-foreground mb-4" />
-          <h3 className="text-lg font-medium mb-2">No Active Assets</h3>
+          <h3 className="text-lg font-medium mb-2">No Assets to Display</h3>
           <p className="text-muted-foreground text-center">
-            Add assets and generate depreciation schedules to view the schedule.
+            Add assets and generate depreciation schedules, or widen the date
+            range to include periods with activity.
           </p>
         </div>
       ) : (
@@ -773,6 +807,9 @@ export function DepreciationScheduleTab({
                       </th>
                       <th className="text-center py-2 px-2 min-w-[90px] font-medium whitespace-nowrap">
                         End Date
+                      </th>
+                      <th className="text-center py-2 px-2 min-w-[90px] font-medium whitespace-nowrap">
+                        Sold Date
                       </th>
                       {months.map(({ year, month }) => (
                         <th
@@ -810,6 +847,12 @@ export function DepreciationScheduleTab({
                         <td className="text-center py-2 px-2 whitespace-nowrap text-muted-foreground">
                           {getEndServiceLabel(asset)}
                         </td>
+                        <td className="text-center py-2 px-2 whitespace-nowrap text-muted-foreground">
+                          {(() => {
+                            const dp = disposedPeriod(asset);
+                            return dp ? getPeriodShortLabel(dp.year, dp.month) : "";
+                          })()}
+                        </td>
                         {months.map(({ year, month }) => (
                           <td
                             key={monthKey(year, month)}
@@ -840,6 +883,7 @@ export function DepreciationScheduleTab({
                             )
                           )}
                       </td>
+                      <td className="py-2 px-2"></td>
                       <td className="py-2 px-2"></td>
                       <td className="py-2 px-2"></td>
                       <td className="py-2 px-2"></td>
@@ -878,16 +922,23 @@ export function DepreciationScheduleTab({
                     </th>
                     <th className="text-right py-2 px-2 min-w-[100px] font-semibold whitespace-nowrap">
                       {formatCurrency(
-                        assets.reduce((s, a) => s + a.acquisition_cost, 0)
+                        groupedAssets
+                          .flatMap((g) => g.assets)
+                          .reduce((s, a) => s + a.acquisition_cost, 0)
                       )}
                     </th>
                     <th className="py-2 px-2 min-w-[90px]"></th>
                     <th className="py-2 px-2 min-w-[70px]"></th>
                     <th className="py-2 px-2 min-w-[90px]"></th>
                     <th className="py-2 px-2 min-w-[90px]"></th>
+                    <th className="py-2 px-2 min-w-[90px]"></th>
                     {months.map(({ year, month }) => {
                       let total = 0;
-                      for (const asset of assets) {
+                      const visibleAssets = groupedAssets.flatMap(
+                        (g) => g.assets
+                      );
+                      for (const asset of visibleAssets) {
+                        if (isPastDisposal(asset, year, month)) continue;
                         const key = monthKey(year, month);
                         const entry = scheduleMap[asset.id]?.[key];
                         if (entry) {
