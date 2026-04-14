@@ -33,6 +33,7 @@ import {
 import {
   getReportingGroup,
   getAllReportingGroups,
+  getEffectiveMasterType,
   type VehicleClassification,
 } from "@/lib/utils/vehicle-classification";
 import type { DepreciationRule } from "./depreciation-rules-settings";
@@ -62,6 +63,7 @@ interface AssetRow {
   bonus_depreciation_amount: number;
   status: string;
   disposed_date: string | null;
+  master_type_override: string | null;
 }
 
 type ViewMode = "depreciation" | "remaining_life" | "net_book_value";
@@ -255,7 +257,7 @@ export function DepreciationScheduleTab({
     const { data } = await supabase
       .from("fixed_assets")
       .select(
-        "id, asset_name, asset_tag, vehicle_class, acquisition_cost, in_service_date, book_useful_life_months, book_salvage_value, book_depreciation_method, book_accumulated_depreciation, book_net_value, tax_cost_basis, tax_depreciation_method, tax_useful_life_months, tax_accumulated_depreciation, section_179_amount, bonus_depreciation_amount, status, disposed_date"
+        "id, asset_name, asset_tag, vehicle_class, acquisition_cost, in_service_date, book_useful_life_months, book_salvage_value, book_depreciation_method, book_accumulated_depreciation, book_net_value, tax_cost_basis, tax_depreciation_method, tax_useful_life_months, tax_accumulated_depreciation, section_179_amount, bonus_depreciation_amount, status, disposed_date, master_type_override"
       )
       .eq("entity_id", entityId)
       .in("status", ["active", "fully_depreciated", "disposed"])
@@ -676,6 +678,86 @@ export function DepreciationScheduleTab({
         format: NUMBER_FORMATS.currency,
       }));
 
+      // Leading summary sheet — monthly totals for Vehicles and Trailers that
+      // mirror the on-screen summary card. Simple, single-page view intended
+      // as the first thing a reviewer sees.
+      {
+        const summaryRows: MatrixRow[] = [];
+        const visibleAssets = groupedAssets.flatMap((g) => g.assets);
+        const depByType = (
+          masterType: "Vehicle" | "Trailer",
+          mode: "depreciation" | "net_book_value"
+        ) => {
+          const catAssets = visibleAssets.filter(
+            (a) =>
+              getEffectiveMasterType(
+                a.vehicle_class,
+                a.master_type_override,
+                customClasses
+              ) === masterType
+          );
+          return months.map(({ year, month }) => {
+            let total = 0;
+            for (const asset of catAssets) {
+              if (isPastDisposal(asset, year, month)) continue;
+              const entry = scheduleMap[asset.id]?.[monthKey(year, month)];
+              if (!entry) continue;
+              total +=
+                mode === "depreciation"
+                  ? Number(entry.book_depreciation) || 0
+                  : Number(entry.book_net_value) || 0;
+            }
+            return total;
+          });
+        };
+
+        summaryRows.push({
+          label: "Monthly Depreciation",
+          values: months.map(() => ""),
+          bold: true,
+        });
+        const vehDepr = depByType("Vehicle", "depreciation");
+        const trailerDepr = depByType("Trailer", "depreciation");
+        summaryRows.push({ label: "Vehicles", values: vehDepr, indent: 1 });
+        summaryRows.push({ label: "Trailers", values: trailerDepr, indent: 1 });
+        summaryRows.push({
+          label: "Total Monthly Depreciation",
+          values: months.map((_, i) => vehDepr[i] + trailerDepr[i]),
+          totalStyle: true,
+          bold: true,
+        });
+        summaryRows.push({ label: "", values: months.map(() => "") });
+        summaryRows.push({
+          label: "Net Book Value",
+          values: months.map(() => ""),
+          bold: true,
+        });
+        const vehNbv = depByType("Vehicle", "net_book_value");
+        const trailerNbv = depByType("Trailer", "net_book_value");
+        summaryRows.push({ label: "Vehicles", values: vehNbv, indent: 1 });
+        summaryRows.push({ label: "Trailers", values: trailerNbv, indent: 1 });
+        summaryRows.push({
+          label: "Total Net Book Value",
+          values: months.map((_, i) => vehNbv[i] + trailerNbv[i]),
+          totalStyle: true,
+          bold: true,
+        });
+
+        addMatrixSheet(wb, {
+          name: "Summary",
+          title: {
+            entityName,
+            reportTitle: "Depreciation Schedule — Summary",
+            subtitle: "Vehicles & Trailers by Month",
+            period: periodLabel ? `Periods: ${periodLabel}` : undefined,
+            asOf: `Generated ${formatLongDate(new Date().toISOString().slice(0, 10))}`,
+          },
+          labelColumn: { header: "", width: 34 },
+          periodColumns: matrixColumns,
+          rows: summaryRows,
+        });
+      }
+
       for (const mode of ["depreciation", "net_book_value"] as const) {
         const sheetTitle =
           mode === "depreciation" ? "Monthly Depreciation" : "Net Book Value";
@@ -1059,7 +1141,132 @@ export function DepreciationScheduleTab({
           </p>
         </div>
       ) : (
-        groupedAssets.map(({ group, assets: groupAssets }) => (
+        <>
+          {viewMode !== "remaining_life" && (() => {
+            // Totals matrix: Vehicle row + Trailer row + Grand Total, one
+            // column per month, matching the current view mode so the summary
+            // tracks whichever metric (depreciation / NBV) is on-screen.
+            const summaryCats: Array<{
+              label: string;
+              masterType: "Vehicle" | "Trailer";
+            }> = [
+              { label: "Vehicles", masterType: "Vehicle" },
+              { label: "Trailers", masterType: "Trailer" },
+            ];
+            const valueFor = (asset: AssetRow, year: number, month: number) => {
+              if (isPastDisposal(asset, year, month)) return 0;
+              const entry = scheduleMap[asset.id]?.[monthKey(year, month)];
+              if (!entry) return 0;
+              return viewMode === "net_book_value"
+                ? Number(entry.book_net_value) || 0
+                : Number(entry.book_depreciation) || 0;
+            };
+            const assetMaster = (a: AssetRow) =>
+              getEffectiveMasterType(
+                a.vehicle_class,
+                a.master_type_override,
+                customClasses
+              );
+            const visibleAssets = groupedAssets.flatMap((g) => g.assets);
+            const catTotals = summaryCats.map((cat) => {
+              const catAssets = visibleAssets.filter(
+                (a) => assetMaster(a) === cat.masterType
+              );
+              return {
+                ...cat,
+                count: catAssets.length,
+                monthly: months.map(({ year, month }) =>
+                  catAssets.reduce(
+                    (s, a) => s + valueFor(a, year, month),
+                    0
+                  )
+                ),
+              };
+            });
+            const grand = months.map((_, idx) =>
+              catTotals.reduce((s, c) => s + c.monthly[idx], 0)
+            );
+            const metricLabel =
+              viewMode === "net_book_value"
+                ? "Monthly Net Book Value"
+                : "Monthly Depreciation";
+            return (
+              <Card>
+                <CardHeader className="pb-3">
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-lg">
+                      {metricLabel} — Summary by Type
+                    </CardTitle>
+                    <Badge variant="outline">Vehicles & Trailers</Badge>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b">
+                          <th className="sticky left-0 bg-background text-left py-2 pr-2 min-w-[160px] font-medium z-10">
+                            Category
+                          </th>
+                          <th className="text-right py-2 px-2 min-w-[80px] font-medium whitespace-nowrap">
+                            Assets
+                          </th>
+                          {months.map(({ year, month }) => (
+                            <th
+                              key={`sum-h-${monthKey(year, month)}`}
+                              className="text-right py-2 px-3 min-w-[110px] font-medium whitespace-nowrap"
+                            >
+                              {getPeriodShortLabel(year, month)}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {catTotals.map((cat) => (
+                          <tr
+                            key={cat.masterType}
+                            className="border-b border-muted/50"
+                          >
+                            <td className="sticky left-0 bg-background py-2 pr-2 font-medium z-10">
+                              {cat.label}
+                            </td>
+                            <td className="text-right py-2 px-2 tabular-nums text-muted-foreground whitespace-nowrap">
+                              {cat.count}
+                            </td>
+                            {cat.monthly.map((v, i) => (
+                              <td
+                                key={`sum-${cat.masterType}-${i}`}
+                                className="text-right py-2 px-3 tabular-nums whitespace-nowrap"
+                              >
+                                {formatCurrency(v)}
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                        <tr className="border-t-2 border-foreground/20 font-semibold">
+                          <td className="sticky left-0 bg-background py-2 pr-2 font-semibold z-10">
+                            Total
+                          </td>
+                          <td className="text-right py-2 px-2 tabular-nums whitespace-nowrap">
+                            {visibleAssets.length}
+                          </td>
+                          {grand.map((v, i) => (
+                            <td
+                              key={`sum-grand-${i}`}
+                              className="text-right py-2 px-3 tabular-nums whitespace-nowrap font-semibold"
+                            >
+                              {formatCurrency(v)}
+                            </td>
+                          ))}
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })()}
+          {groupedAssets.map(({ group, assets: groupAssets }) => (
           <Card key={group}>
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
@@ -1190,7 +1397,8 @@ export function DepreciationScheduleTab({
               </div>
             </CardContent>
           </Card>
-        ))
+          ))}
+        </>
       )}
 
       {/* Grand total across all groups */}
