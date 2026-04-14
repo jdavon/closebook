@@ -44,6 +44,7 @@ import { formatCurrency } from "@/lib/utils/dates";
 import {
   EQUIPMENT_TYPE_LABELS,
   processRevenueData,
+  getMonthKey,
   type RevenueProjectionResponse,
   type ClosedInvoice,
   type MonthlyRevenue,
@@ -1993,13 +1994,6 @@ interface InvoiceMonthDetail {
   adjustment: number; // positive = accrual, negative = deferral
 }
 
-function getMonthKeyClient(dateStr: string | null | undefined): string {
-  if (!dateStr) return "";
-  const d = new Date(dateStr);
-  if (isNaN(d.getTime())) return "";
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-}
-
 function computeEarnedForMonth(
   startDateStr: string | null | undefined,
   endDateStr: string | null | undefined,
@@ -2013,12 +2007,12 @@ function computeEarnedForMonth(
   const endDate = endDateStr ? new Date(endDateStr) : null;
 
   if (!startDate || !endDate || isNaN(startDate.getTime()) || isNaN(endDate.getTime()) || endDate < startDate) {
-    return getMonthKeyClient(fallbackDateStr) === targetMonth ? amount : 0;
+    return getMonthKey(fallbackDateStr) === targetMonth ? amount : 0;
   }
 
   const totalDays = Math.round((endDate.getTime() - startDate.getTime()) / 86400000) + 1;
   if (totalDays <= 0) {
-    return getMonthKeyClient(fallbackDateStr) === targetMonth ? amount : 0;
+    return getMonthKey(fallbackDateStr) === targetMonth ? amount : 0;
   }
 
   const [ty, tm] = targetMonth.split("-").map(Number);
@@ -2042,7 +2036,7 @@ function getInvoiceDetailsForMonth(invoices: ClosedInvoice[], monthKey: string):
     // Only CLOSED/PROCESSED invoices contribute to accrual calc
     if (inv.status !== "CLOSED" && inv.status !== "PROCESSED") continue;
 
-    const billedThisMonth = getMonthKeyClient(inv.invoiceDate) === monthKey ? inv.subTotal : 0;
+    const billedThisMonth = getMonthKey(inv.invoiceDate) === monthKey ? inv.subTotal : 0;
     const earnedThisMonth = computeEarnedForMonth(
       inv.billingStartDate, inv.billingEndDate,
       inv.subTotal, inv.invoiceDate, monthKey,

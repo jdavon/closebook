@@ -176,7 +176,7 @@ function toNum(val: string | number | undefined | null): number {
   return isNaN(n) ? 0 : n;
 }
 
-function getMonthKey(dateStr: string | null | undefined): string {
+export function getMonthKey(dateStr: string | null | undefined): string {
   if (!dateStr) return "";
   // Use parseDateParts for consistent UTC handling across server & client
   const parts = parseDateParts(dateStr);
