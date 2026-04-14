@@ -1,4 +1,7 @@
-import { getMasterType, type VehicleClassification } from "./vehicle-classification";
+import {
+  getEffectiveMasterType,
+  type VehicleClassification,
+} from "./vehicle-classification";
 
 export type ReconLineType = "cost" | "accum_depr";
 
@@ -70,14 +73,21 @@ export const RECON_GROUPS: ReconGroup[] = [
 export const UNALLOCATED_KEY = "unallocated";
 
 /**
- * Get the GL account group key for an asset based on its vehicle class.
- * Returns "vehicles_net" for Vehicle master type, "trailers_net" for Trailer.
+ * Get the GL account group key for an asset. Prefers master_type_override
+ * (intended for Accounting Adjustment assets where the class has no inherent
+ * master type) before falling back to the class-derived master type.
+ * Returns "vehicles_net" for Vehicle, "trailers_net" for Trailer.
  */
 export function getAssetGLGroup(
   vehicleClass: string | null,
+  masterTypeOverride?: string | null,
   customClasses?: VehicleClassification[]
 ): string | null {
-  const mt = getMasterType(vehicleClass, customClasses);
+  const mt = getEffectiveMasterType(
+    vehicleClass,
+    masterTypeOverride,
+    customClasses
+  );
   if (!mt) return null;
   const group = GL_ACCOUNT_GROUPS.find((g) => g.masterType === mt);
   return group?.key ?? null;

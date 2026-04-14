@@ -1618,6 +1618,7 @@ export type Database = {
           disposed_tax_gain_loss: number | null
           disposition_method: string | null
           disposed_buyer: string | null
+          master_type_override: string | null
           created_by: string | null
           created_at: string
           updated_at: string
@@ -1662,6 +1663,7 @@ export type Database = {
           disposed_tax_gain_loss?: number | null
           disposition_method?: string | null
           disposed_buyer?: string | null
+          master_type_override?: string | null
           created_by?: string | null
           created_at?: string
           updated_at?: string
@@ -1706,6 +1708,7 @@ export type Database = {
           disposed_tax_gain_loss?: number | null
           disposition_method?: string | null
           disposed_buyer?: string | null
+          master_type_override?: string | null
           created_by?: string | null
           created_at?: string
           updated_at?: string

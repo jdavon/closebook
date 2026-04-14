@@ -26,7 +26,7 @@ import { formatCurrency } from "@/lib/utils/dates";
 import {
   getVehicleClassification,
   getReportingGroup,
-  getMasterType,
+  getEffectiveMasterType,
   REPORTING_GROUPS,
 } from "@/lib/utils/vehicle-classification";
 
@@ -50,6 +50,7 @@ interface SoldAsset {
   disposed_book_gain_loss: number | null;
   disposed_tax_gain_loss: number | null;
   disposed_buyer: string | null;
+  master_type_override: string | null;
 }
 
 export function SoldTab({ entityId }: SoldTabProps) {
@@ -68,7 +69,7 @@ export function SoldTab({ entityId }: SoldTabProps) {
     const { data } = await supabase
       .from("fixed_assets")
       .select(
-        "id, asset_name, asset_tag, vehicle_year, vehicle_make, vehicle_model, vehicle_class, vin, acquisition_cost, book_net_value, disposed_date, disposed_sale_price, disposed_book_gain_loss, disposed_tax_gain_loss, disposed_buyer"
+        "id, asset_name, asset_tag, vehicle_year, vehicle_make, vehicle_model, vehicle_class, vin, acquisition_cost, book_net_value, disposed_date, disposed_sale_price, disposed_book_gain_loss, disposed_tax_gain_loss, disposed_buyer, master_type_override"
       )
       .eq("entity_id", entityId)
       .eq("status", "disposed")
@@ -86,7 +87,7 @@ export function SoldTab({ entityId }: SoldTabProps) {
 
   const filteredAssets = assets.filter((a) => {
     if (masterTypeFilter !== "all") {
-      const mt = getMasterType(a.vehicle_class);
+      const mt = getEffectiveMasterType(a.vehicle_class, a.master_type_override);
       if (mt !== masterTypeFilter) return false;
     }
     if (reportingGroupFilter !== "all") {

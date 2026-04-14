@@ -76,7 +76,7 @@ import { calculateDispositionGainLoss } from "@/lib/utils/depreciation";
 import {
   getVehicleClassification,
   getReportingGroup,
-  getMasterType,
+  getEffectiveMasterType,
   REPORTING_GROUPS,
   getAllReportingGroups,
   customRowsToClassifications,
@@ -111,6 +111,7 @@ interface FixedAsset {
   tax_net_value: number;
   status: string;
   disposed_date: string | null;
+  master_type_override: string | null;
 }
 
 interface AsOfSnapshot {
@@ -210,7 +211,7 @@ export default function AssetsPage() {
     let query = supabase
       .from("fixed_assets")
       .select(
-        "id, asset_name, asset_tag, vehicle_year, vehicle_make, vehicle_model, vehicle_class, vin, acquisition_date, in_service_date, acquisition_cost, book_accumulated_depreciation, tax_cost_basis, tax_accumulated_depreciation, book_net_value, tax_net_value, status, disposed_date"
+        "id, asset_name, asset_tag, vehicle_year, vehicle_make, vehicle_model, vehicle_class, vin, acquisition_date, in_service_date, acquisition_cost, book_accumulated_depreciation, tax_cost_basis, tax_accumulated_depreciation, book_net_value, tax_net_value, status, disposed_date, master_type_override"
       )
       .eq("entity_id", entityId)
       .order("asset_name")
@@ -346,7 +347,11 @@ export default function AssetsPage() {
 
       // Master type filter
       if (masterTypeFilter !== "all") {
-        const mt = getMasterType(a.vehicle_class, customClasses);
+        const mt = getEffectiveMasterType(
+          a.vehicle_class,
+          a.master_type_override,
+          customClasses
+        );
         if (mt !== masterTypeFilter) return false;
       }
 

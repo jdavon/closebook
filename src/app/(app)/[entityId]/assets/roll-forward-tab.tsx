@@ -33,6 +33,7 @@ interface AssetRecord {
   status: string;
   disposed_date: string | null;
   cost_account_id: string | null;
+  master_type_override: string | null;
 }
 
 interface DeprEntry {
@@ -105,7 +106,7 @@ function computeRollForward(
   const groupAssets = assets.filter((a) => {
     const resolved = resolveGLGroup
       ? resolveGLGroup(a)
-      : getAssetGLGroup(a.vehicle_class);
+      : getAssetGLGroup(a.vehicle_class, a.master_type_override);
     return resolved === group.key;
   });
 
@@ -238,7 +239,7 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
     const { data: assetsData } = await supabase
       .from("fixed_assets")
       .select(
-        "id, asset_name, vehicle_class, acquisition_cost, in_service_date, book_accumulated_depreciation, book_net_value, status, disposed_date, cost_account_id"
+        "id, asset_name, vehicle_class, acquisition_cost, in_service_date, book_accumulated_depreciation, book_net_value, status, disposed_date, cost_account_id, master_type_override"
       )
       .eq("entity_id", entityId);
     const assets = (assetsData ?? []) as AssetRecord[];
@@ -260,7 +261,7 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
       if (asset.cost_account_id && accountToParent[asset.cost_account_id]) {
         return accountToParent[asset.cost_account_id];
       }
-      return getAssetGLGroup(asset.vehicle_class);
+      return getAssetGLGroup(asset.vehicle_class, asset.master_type_override);
     };
 
     // Fetch all depreciation entries from baseline through end period

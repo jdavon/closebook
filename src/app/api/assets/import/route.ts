@@ -38,6 +38,7 @@ interface AssetImportRow {
   book_accumulated_depreciation?: number;
   tax_accumulated_depreciation?: number;
   status?: string;
+  master_type_override?: string | null;
 }
 
 /**
@@ -183,6 +184,11 @@ export async function POST(request: NextRequest) {
       section_179_amount: section179,
       bonus_depreciation_amount: bonusDepr,
       status,
+      master_type_override:
+        row.master_type_override === "Vehicle" ||
+        row.master_type_override === "Trailer"
+          ? row.master_type_override
+          : null,
     };
 
     let assetId: string;

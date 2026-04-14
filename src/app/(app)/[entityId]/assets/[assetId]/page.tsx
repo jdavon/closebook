@@ -50,6 +50,7 @@ import {
   getVehicleClassification,
   getClassesGroupedByMasterType,
   getClassLabel,
+  isMasterTypeEditable,
   customRowsToClassifications,
   type VehicleClassification,
   type CustomVehicleClassRow,
@@ -95,6 +96,7 @@ interface FixedAssetData {
   cost_account_id: string | null;
   accum_depr_account_id: string | null;
   depr_expense_account_id: string | null;
+  master_type_override: string | null;
   status: string;
   disposed_date: string | null;
   disposed_sale_price: number | null;
@@ -182,6 +184,7 @@ export default function AssetDetailPage() {
   const [licensePlate, setLicensePlate] = useState("");
   const [licenseState, setLicenseState] = useState("");
   const [vehicleClass, setVehicleClass] = useState<string>("");
+  const [masterTypeOverride, setMasterTypeOverride] = useState<string>("");
   const [mileage, setMileage] = useState("");
   const [titleNumber, setTitleNumber] = useState("");
   const [registrationExpiry, setRegistrationExpiry] = useState("");
@@ -242,6 +245,7 @@ export default function AssetDetailPage() {
       setLicensePlate(a.license_plate ?? "");
       setLicenseState(a.license_state ?? "");
       setVehicleClass(a.vehicle_class ?? "");
+      setMasterTypeOverride(a.master_type_override ?? "");
       setMileage(a.mileage_at_acquisition?.toString() ?? "");
       setTitleNumber(a.title_number ?? "");
       setRegistrationExpiry(a.registration_expiry ?? "");
@@ -340,6 +344,11 @@ export default function AssetDetailPage() {
         license_state: licenseState || null,
         mileage_at_acquisition: mileage ? parseInt(mileage) : null,
         vehicle_class: vehicleClass || null,
+        master_type_override: isMasterTypeEditable(vehicleClass, customClasses)
+          ? masterTypeOverride === "Vehicle" || masterTypeOverride === "Trailer"
+            ? masterTypeOverride
+            : null
+          : null,
         title_number: titleNumber || null,
         registration_expiry: registrationExpiry || null,
         vehicle_notes: vehicleNotes || null,
@@ -863,7 +872,14 @@ export default function AssetDetailPage() {
                   <Label>Vehicle Class</Label>
                   <Select
                     value={vehicleClass}
-                    onValueChange={setVehicleClass}
+                    onValueChange={(v) => {
+                      setVehicleClass(v);
+                      // Drop the override if the new class has its own
+                      // master type; keep it when class is ADJ / null.
+                      if (!isMasterTypeEditable(v, customClasses)) {
+                        setMasterTypeOverride("");
+                      }
+                    }}
                     disabled={isDisposed}
                   >
                     <SelectTrigger>
@@ -896,12 +912,38 @@ export default function AssetDetailPage() {
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label>Master Type</Label>
-                    <Input
-                      value={getVehicleClassification(vehicleClass, customClasses)?.masterType ?? "---"}
-                      disabled
-                      className="bg-muted"
-                    />
+                    <Label>
+                      Master Type
+                      {isMasterTypeEditable(vehicleClass, customClasses) && (
+                        <span className="ml-1 text-xs text-muted-foreground font-normal">
+                          (override — class has no default)
+                        </span>
+                      )}
+                    </Label>
+                    {isMasterTypeEditable(vehicleClass, customClasses) ? (
+                      <Select
+                        value={masterTypeOverride || ""}
+                        onValueChange={(v) =>
+                          setMasterTypeOverride(v === "__none__" ? "" : v)
+                        }
+                        disabled={isDisposed}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select master type..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__none__">— None —</SelectItem>
+                          <SelectItem value="Vehicle">Vehicle</SelectItem>
+                          <SelectItem value="Trailer">Trailer</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      <Input
+                        value={getVehicleClassification(vehicleClass, customClasses)?.masterType ?? "---"}
+                        disabled
+                        className="bg-muted"
+                      />
+                    )}
                   </div>
                 </div>
               )}

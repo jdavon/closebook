@@ -45,7 +45,7 @@ import {
   type ReconGroup,
 } from "@/lib/utils/asset-gl-groups";
 import {
-  getMasterType,
+  getEffectiveMasterType,
   getVehicleClassification,
   getReportingGroup,
   customRowsToClassifications,
@@ -81,6 +81,7 @@ interface AssetRow {
   status: string;
   cost_account_id: string | null;
   accum_depr_account_id: string | null;
+  master_type_override: string | null;
 }
 
 interface DeprRow {
@@ -221,7 +222,7 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
     const { data: assetsData } = await supabase
       .from("fixed_assets")
       .select(
-        "id, asset_name, asset_tag, vehicle_class, in_service_date, acquisition_cost, book_useful_life_months, book_salvage_value, book_depreciation_method, book_accumulated_depreciation, book_net_value, status, cost_account_id, accum_depr_account_id"
+        "id, asset_name, asset_tag, vehicle_class, in_service_date, acquisition_cost, book_useful_life_months, book_salvage_value, book_depreciation_method, book_accumulated_depreciation, book_net_value, status, cost_account_id, accum_depr_account_id, master_type_override"
       )
       .eq("entity_id", entityId);
 
@@ -295,7 +296,11 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
 
       if (!costKey || !accumKey) {
         // Fall back to vehicle class → master type → matching RECON_GROUP
-        const mt = getMasterType(asset.vehicle_class, cc);
+        const mt = getEffectiveMasterType(
+          asset.vehicle_class,
+          asset.master_type_override,
+          cc
+        );
         if (mt) {
           if (!costKey) {
             const cg = RECON_GROUPS.find(
@@ -469,7 +474,11 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
     for (const asset of allAssets) {
       const depr = deprMapState[asset.id];
       const classification = getVehicleClassification(asset.vehicle_class, customClasses);
-      const mt = getMasterType(asset.vehicle_class, customClasses);
+      const mt = getEffectiveMasterType(
+        asset.vehicle_class,
+        asset.master_type_override,
+        customClasses
+      );
 
       // Determine which recon group this asset falls into
       let groupLabel = "Unallocated";

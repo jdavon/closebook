@@ -25,6 +25,8 @@ import {
   VEHICLE_CLASSIFICATIONS,
   getAllClasses,
   getReportingGroup,
+  getVehicleClassification,
+  isMasterTypeEditable,
   customRowsToClassifications,
   type VehicleClassification,
   type CustomVehicleClassRow,
@@ -40,6 +42,7 @@ type FieldKey =
   | "asset_tag"
   | "asset_name"
   | "vehicle_class"
+  | "master_type_override"
   | "vehicle_year"
   | "vehicle_make"
   | "vehicle_model"
@@ -75,6 +78,7 @@ interface AssetRow {
   asset_tag: string;
   asset_name: string;
   vehicle_class: string;
+  master_type_override: string;
   vehicle_year: string;
   vehicle_make: string;
   vehicle_model: string;
@@ -159,6 +163,11 @@ const STATUS_OPTIONS = [
   { value: "inactive", label: "Inactive" },
 ];
 
+const MASTER_TYPE_OPTIONS = [
+  { value: "Vehicle", label: "Vehicle" },
+  { value: "Trailer", label: "Trailer" },
+];
+
 const STATE_OPTIONS = US_STATES.map((s) => ({ value: s, label: s }));
 
 function buildColumns(classOptions: { value: string; label: string }[]): ColumnDef[] {
@@ -168,6 +177,7 @@ function buildColumns(classOptions: { value: string; label: string }[]): ColumnD
   { key: "asset_name", label: "Asset Name", group: "id", type: "text", width: 160, placeholder: "Auto from Year/Make/Model" },
   // Vehicle
   { key: "vehicle_class", label: "Vehicle Class", shortLabel: "Class", group: "vehicle", type: "select", width: 170, options: classOptions },
+  { key: "master_type_override", label: "Master Type", shortLabel: "Master", group: "vehicle", type: "select", width: 110, options: MASTER_TYPE_OPTIONS },
   { key: "vehicle_year", label: "Year", group: "vehicle", type: "number", width: 70, placeholder: "2024" },
   { key: "vehicle_make", label: "Make", group: "vehicle", type: "text", width: 100, placeholder: "Ford" },
   { key: "vehicle_model", label: "Model", group: "vehicle", type: "text", width: 100, placeholder: "F-150" },
@@ -249,6 +259,12 @@ function buildHeaderMap(headers: string[]): Record<FieldKey, string> {
     asset_tag: find(["assettag", "tag", "assetid", "unitnumber", "unit"]),
     asset_name: find(["assetname", "name", "description"]),
     vehicle_class: find(["vehicleclass", "class", "classtype", "category"]),
+    master_type_override: find([
+      "mastertypeoverride",
+      "mastertype",
+      "masterclass",
+      "vehicleortrailer",
+    ]),
     vehicle_year: find(["year", "modelyear", "vehicleyear"]),
     vehicle_make: find(["make", "manufacturer", "brand"]),
     vehicle_model: find(["model"]),
@@ -293,6 +309,7 @@ function createEmptyRow(): AssetRow {
     asset_tag: "",
     asset_name: "",
     vehicle_class: "",
+    master_type_override: "",
     vehicle_year: "",
     vehicle_make: "",
     vehicle_model: "",
@@ -460,6 +477,14 @@ function resolveStatus(value: unknown): string {
   return "active";
 }
 
+function resolveMasterType(value: unknown): string {
+  if (!value) return "";
+  const s = String(value).trim().toLowerCase();
+  if (s.startsWith("v")) return "Vehicle";
+  if (s.startsWith("t")) return "Trailer";
+  return "";
+}
+
 function validateRow(row: AssetRow): Partial<Record<FieldKey, string>> {
   const errors: Partial<Record<FieldKey, string>> = {};
   if (!row.acquisition_date) errors.acquisition_date = "Required";
@@ -583,6 +608,8 @@ export default function AssetImportWizardPage() {
         if (hm.asset_tag) row.asset_tag = String(raw[hm.asset_tag] ?? "").trim();
         if (hm.asset_name) row.asset_name = String(raw[hm.asset_name] ?? "").trim();
         if (hm.vehicle_class) row.vehicle_class = resolveVehicleClass(raw[hm.vehicle_class], customClasses);
+        if (hm.master_type_override)
+          row.master_type_override = resolveMasterType(raw[hm.master_type_override]);
         if (hm.vehicle_year) {
           const y = raw[hm.vehicle_year];
           row.vehicle_year = typeof y === "number" ? String(Math.round(y)) : String(y ?? "").trim();
@@ -699,7 +726,7 @@ export default function AssetImportWizardPage() {
     const { data: assets } = await supabase
       .from("fixed_assets")
       .select(
-        "asset_tag, asset_name, vehicle_class, vehicle_year, vehicle_make, vehicle_model, vehicle_trim, vin, license_plate, license_state, mileage_at_acquisition, title_number, registration_expiry, vehicle_notes, acquisition_date, acquisition_cost, in_service_date, book_depreciation_method, book_useful_life_months, book_salvage_value, book_accumulated_depreciation, tax_cost_basis, tax_depreciation_method, tax_useful_life_months, section_179_amount, bonus_depreciation_amount, tax_accumulated_depreciation, status"
+        "asset_tag, asset_name, vehicle_class, master_type_override, vehicle_year, vehicle_make, vehicle_model, vehicle_trim, vin, license_plate, license_state, mileage_at_acquisition, title_number, registration_expiry, vehicle_notes, acquisition_date, acquisition_cost, in_service_date, book_depreciation_method, book_useful_life_months, book_salvage_value, book_accumulated_depreciation, tax_cost_basis, tax_depreciation_method, tax_useful_life_months, section_179_amount, bonus_depreciation_amount, tax_accumulated_depreciation, status"
       )
       .eq("entity_id", entityId)
       .order("acquisition_date");
@@ -811,6 +838,13 @@ export default function AssetImportWizardPage() {
       // defaults so useful life / salvage track the reporting group's rule.
       if (colKey === "vehicle_class" || colKey === "acquisition_cost") {
         row = applyClassDefaults(row, rules, customClasses);
+      }
+      // If the new class has an inherent master type, drop any prior override
+      // since the class value wins.
+      if (colKey === "vehicle_class") {
+        if (!isMasterTypeEditable(row.vehicle_class, customClasses)) {
+          row.master_type_override = "";
+        }
       }
       // Re-validate
       row._errors = validateRow(row);
@@ -940,6 +974,12 @@ export default function AssetImportWizardPage() {
       book_accumulated_depreciation: row.book_accumulated_depreciation ? Number(row.book_accumulated_depreciation) : undefined,
       tax_accumulated_depreciation: row.tax_accumulated_depreciation ? Number(row.tax_accumulated_depreciation) : undefined,
       status: String(row.status || "active"),
+      master_type_override:
+        isMasterTypeEditable(row.vehicle_class, customClasses) &&
+        (row.master_type_override === "Vehicle" ||
+          row.master_type_override === "Trailer")
+          ? row.master_type_override
+          : null,
     }));
 
     setImportProgress(30);
@@ -1189,17 +1229,41 @@ export default function AssetImportWizardPage() {
                       {COLUMNS.map((col) => {
                         const isActive = activeCell?.row === rowIdx && activeCell?.col === col.key;
                         const error = row._errors[col.key];
-                        const value = String(row[col.key] ?? "");
+
+                        // Master Type is locked to the class-derived value when
+                        // the class has an inherent master type. Only classes
+                        // with null masterType (e.g. ADJ) allow the user to
+                        // pick Vehicle/Trailer explicitly.
+                        const masterTypeLocked =
+                          col.key === "master_type_override" &&
+                          !isMasterTypeEditable(row.vehicle_class, customClasses);
+                        const derivedMaster =
+                          col.key === "master_type_override"
+                            ? getVehicleClassification(
+                                row.vehicle_class,
+                                customClasses
+                              )?.masterType ?? ""
+                            : "";
+                        const value = masterTypeLocked
+                          ? derivedMaster
+                          : String(row[col.key] ?? "");
 
                         return (
                           <td
                             key={col.key}
-                            className={`border-b border-r p-0 ${error ? "bg-destructive/10" : ""}`}
+                            className={`border-b border-r p-0 ${error ? "bg-destructive/10" : ""} ${masterTypeLocked ? "bg-muted/40" : ""}`}
                             style={{ width: col.width, minWidth: col.width }}
-                            onClick={() => handleCellClick(rowIdx, col.key)}
-                            title={error || undefined}
+                            onClick={() => {
+                              if (masterTypeLocked) return;
+                              handleCellClick(rowIdx, col.key);
+                            }}
+                            title={
+                              masterTypeLocked
+                                ? "Master type is derived from the vehicle class. Set class to ADJ (Accounting Adjustment) to pick Vehicle/Trailer manually."
+                                : error || undefined
+                            }
                           >
-                            {isActive ? (
+                            {isActive && !masterTypeLocked ? (
                               <CellEditor
                                 col={col}
                                 value={value}
@@ -1209,9 +1273,9 @@ export default function AssetImportWizardPage() {
                               />
                             ) : (
                               <div
-                                className={`px-2 py-1 h-[30px] flex items-center text-xs truncate cursor-text ${
-                                  error ? "text-destructive" : ""
-                                } ${!value ? "text-muted-foreground/50" : ""}`}
+                                className={`px-2 py-1 h-[30px] flex items-center text-xs truncate ${
+                                  masterTypeLocked ? "cursor-not-allowed text-muted-foreground" : "cursor-text"
+                                } ${error ? "text-destructive" : ""} ${!value ? "text-muted-foreground/50" : ""}`}
                               >
                                 {formatCellDisplay(col, value) || col.placeholder || ""}
                               </div>

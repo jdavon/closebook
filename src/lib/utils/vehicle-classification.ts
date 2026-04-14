@@ -123,6 +123,37 @@ export function getMasterType(
   return getVehicleClassification(classCode, customClasses)?.masterType ?? null;
 }
 
+/**
+ * Resolve the effective master type for an asset — prefer the explicit
+ * override, otherwise fall back to the class-derived master type. Useful for
+ * Accounting Adjustment (class "ADJ") assets where the class has no inherent
+ * master type and the user pins it manually.
+ */
+export function getEffectiveMasterType(
+  classCode: VehicleClass | string | null,
+  masterTypeOverride: string | null | undefined,
+  customClasses?: VehicleClassification[]
+): VehicleMasterType | null {
+  if (masterTypeOverride === "Vehicle" || masterTypeOverride === "Trailer") {
+    return masterTypeOverride;
+  }
+  return getMasterType(classCode, customClasses);
+}
+
+/**
+ * Master type selection should only be user-editable when the class has no
+ * inherent master type (e.g. Accounting Adjustment). Otherwise the class
+ * dictates the master type.
+ */
+export function isMasterTypeEditable(
+  classCode: VehicleClass | string | null,
+  customClasses?: VehicleClassification[]
+): boolean {
+  if (!classCode) return false;
+  const c = getVehicleClassification(classCode, customClasses);
+  return c != null && c.masterType == null;
+}
+
 export function getClassLabel(
   classCode: VehicleClass | string,
   customClasses?: VehicleClassification[]
