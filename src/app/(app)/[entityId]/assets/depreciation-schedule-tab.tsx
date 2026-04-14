@@ -453,16 +453,17 @@ export function DepreciationScheduleTab({
         await supabase.from("fixed_asset_depreciation").insert(newEntries);
       }
 
-      // Update asset's accumulated depreciation
+      // Update asset's accumulated depreciation. book_net_value and
+      // tax_net_value are GENERATED ALWAYS AS ... STORED in the schema —
+      // Postgres recomputes them from the accumulated fields, so leaving
+      // them out of the update avoids a 400 for writing a generated column.
       if (schedule.length > 0) {
         const last = schedule[schedule.length - 1];
         await supabase
           .from("fixed_assets")
           .update({
             book_accumulated_depreciation: last.book_accumulated,
-            book_net_value: last.book_net_value,
             tax_accumulated_depreciation: last.tax_accumulated,
-            tax_net_value: last.tax_net_value,
           })
           .eq("id", asset.id);
       }
