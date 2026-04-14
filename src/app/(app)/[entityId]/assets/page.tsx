@@ -504,6 +504,30 @@ export default function AssetsPage() {
   const totalBookNbv = filteredAssets.reduce((s, a) => s + a.book_net_value, 0);
   const totalTaxNbv = filteredAssets.reduce((s, a) => s + a.tax_net_value, 0);
 
+  // Split by master type for the Vehicles / Trailers summary cards. Uses the
+  // same effective-master-type resolver as the filter/grouping logic so an
+  // Accounting Adjustment asset with a pinned override lands in the right
+  // bucket instead of falling through to neither.
+  const vehicleAssets = filteredAssets.filter(
+    (a) =>
+      getEffectiveMasterType(a.vehicle_class, a.master_type_override, customClasses) ===
+      "Vehicle"
+  );
+  const trailerAssets = filteredAssets.filter(
+    (a) =>
+      getEffectiveMasterType(a.vehicle_class, a.master_type_override, customClasses) ===
+      "Trailer"
+  );
+  const summarize = (list: typeof filteredAssets) => ({
+    count: list.length,
+    cost: list.reduce((s, a) => s + a.acquisition_cost, 0),
+    accum: list.reduce((s, a) => s + a.book_accumulated_depreciation, 0),
+    bookNbv: list.reduce((s, a) => s + a.book_net_value, 0),
+    taxNbv: list.reduce((s, a) => s + a.tax_net_value, 0),
+  });
+  const vehicleSummary = summarize(vehicleAssets);
+  const trailerSummary = summarize(trailerAssets);
+
   function downloadCSV(assetList: FixedAsset[], suffix: string) {
     const headers = [
       "Asset Tag",
@@ -681,40 +705,53 @@ export default function AssetsPage() {
 
         <TabsContent value="register" className="space-y-6">
 
-      {/* Summary Cards */}
-      <div className="grid grid-cols-4 gap-4">
-        <Card>
-          <CardContent className="pt-6">
-            <p className="text-sm text-muted-foreground">Total Cost</p>
-            <p className="text-2xl font-semibold tabular-nums">
-              {formatCurrency(totalCost)}
-            </p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-6">
-            <p className="text-sm text-muted-foreground">Book NBV</p>
-            <p className="text-2xl font-semibold tabular-nums">
-              {formatCurrency(totalBookNbv)}
-            </p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-6">
-            <p className="text-sm text-muted-foreground">Tax NBV</p>
-            <p className="text-2xl font-semibold tabular-nums">
-              {formatCurrency(totalTaxNbv)}
-            </p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-6">
-            <p className="text-sm text-muted-foreground">Assets</p>
-            <p className="text-2xl font-semibold tabular-nums">
-              {filteredAssets.length}
-            </p>
-          </CardContent>
-        </Card>
+      {/* Summary Cards — split by master type */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {([
+          { label: "Vehicles", data: vehicleSummary },
+          { label: "Trailers", data: trailerSummary },
+        ] as const).map(({ label, data }) => (
+          <Card key={label}>
+            <CardContent className="pt-6 space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="text-lg font-semibold">{label}</h3>
+                <Badge variant="secondary">
+                  {data.count} asset{data.count === 1 ? "" : "s"}
+                </Badge>
+              </div>
+              <div className="grid grid-cols-2 gap-x-6 gap-y-3">
+                <div>
+                  <p className="text-xs text-muted-foreground">Total Cost</p>
+                  <p className="text-xl font-semibold tabular-nums">
+                    {formatCurrency(data.cost)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">
+                    Accum. Depreciation
+                  </p>
+                  <p className="text-xl font-semibold tabular-nums">
+                    {data.accum > 0
+                      ? `(${formatCurrency(data.accum)})`
+                      : formatCurrency(0)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Book NBV</p>
+                  <p className="text-xl font-semibold tabular-nums">
+                    {formatCurrency(data.bookNbv)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Tax NBV</p>
+                  <p className="text-xl font-semibold tabular-nums">
+                    {formatCurrency(data.taxNbv)}
+                  </p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        ))}
       </div>
 
       {/* Filters */}
