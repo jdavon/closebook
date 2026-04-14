@@ -41,16 +41,25 @@ interface DeprEntry {
   period_year: number;
   period_month: number;
   book_depreciation: number;
+  book_accumulated: number;
   book_net_value: number;
 }
 
 interface MonthlyRollForward {
   year: number;
   month: number;
-  beginningNbv: number;
-  additions: number;
-  disposals: number;
+  // Cost roll-forward
+  beginningCost: number;
+  additionsCost: number;
+  disposalsCost: number;
+  endingCost: number;
+  // Accumulated depreciation roll-forward
+  beginningAccum: number;
   depreciation: number;
+  disposalsAccum: number;
+  endingAccum: number;
+  // Net book value (derived)
+  beginningNbv: number;
   endingNbv: number;
 }
 
@@ -98,8 +107,6 @@ function computeRollForward(
   assets: AssetRecord[],
   deprEntries: DeprEntry[],
   months: { year: number; month: number }[],
-  baselineYear: number,
-  baselineMonth: number,
   resolveGLGroup?: (asset: AssetRecord) => string | null
 ): MonthlyRollForward[] {
   // Filter assets to this group, using resolver if provided
@@ -119,72 +126,107 @@ function computeRollForward(
     deprByAssetMonth[d.fixed_asset_id][monthKey(d.period_year, d.period_month)] = d;
   }
 
-  // Calculate baseline NBV (as of baselineYear/baselineMonth)
-  let baselineNbv = 0;
-  for (const asset of groupAssets) {
-    const baseEntry =
-      deprByAssetMonth[asset.id]?.[monthKey(baselineYear, baselineMonth)];
-    if (baseEntry) {
-      baselineNbv += baseEntry.book_net_value;
-    } else {
-      // Fall back to current book_net_value on the asset record
-      baselineNbv += asset.book_net_value;
-    }
-  }
+  // --- Helpers for asset lifecycle boundaries ---
+  const isInServiceBy = (a: AssetRecord, y: number, m: number) => {
+    if (!a.in_service_date) return false;
+    const d = parseISODate(a.in_service_date);
+    return d.year < y || (d.year === y && d.month <= m);
+  };
+  const isDisposedBy = (a: AssetRecord, y: number, m: number) => {
+    if (!a.disposed_date || a.status !== "disposed") return false;
+    const d = parseISODate(a.disposed_date);
+    return d.year < y || (d.year === y && d.month <= m);
+  };
+  const isInServiceIn = (a: AssetRecord, y: number, m: number) => {
+    if (!a.in_service_date) return false;
+    const d = parseISODate(a.in_service_date);
+    return d.year === y && d.month === m;
+  };
+  const isDisposedIn = (a: AssetRecord, y: number, m: number) => {
+    if (!a.disposed_date || a.status !== "disposed") return false;
+    const d = parseISODate(a.disposed_date);
+    return d.year === y && d.month === m;
+  };
+  const prevPeriod = (y: number, m: number) =>
+    m === 1 ? { year: y - 1, month: 12 } : { year: y, month: m - 1 };
 
   const result: MonthlyRollForward[] = [];
-  let prevEndingNbv = baselineNbv;
 
   for (const { year, month } of months) {
-    // Additions: assets placed in service this month
-    let additions = 0;
-    for (const asset of groupAssets) {
-      if (!asset.in_service_date) continue;
-      const isd = parseISODate(asset.in_service_date);
-      if (isd.year === year && isd.month === month) {
-        additions += asset.acquisition_cost;
-      }
-    }
+    const { year: py, month: pm } = prevPeriod(year, month);
 
-    // Disposals: assets disposed this month (use their NBV at prior period)
-    let disposals = 0;
-    for (const asset of groupAssets) {
-      if (!asset.disposed_date || asset.status !== "disposed") continue;
-      const dd = parseISODate(asset.disposed_date);
-      if (dd.year === year && dd.month === month) {
-        // Use the prior month's NBV or the depreciation entry
-        const prevMonth = month === 1 ? 12 : month - 1;
-        const prevYear = month === 1 ? year - 1 : year;
-        const prevEntry =
-          deprByAssetMonth[asset.id]?.[monthKey(prevYear, prevMonth)];
-        disposals += prevEntry?.book_net_value ?? asset.book_net_value;
-      }
-    }
+    // Held at start of month = in service by end of prior month, not yet disposed
+    const heldAtStart = groupAssets.filter(
+      (a) => isInServiceBy(a, py, pm) && !isDisposedBy(a, py, pm)
+    );
 
-    // Depreciation for this month
+    // ---- COST ----
+    const beginningCost = heldAtStart.reduce(
+      (s, a) => s + Number(a.acquisition_cost),
+      0
+    );
+    const additionsAssets = groupAssets.filter((a) =>
+      isInServiceIn(a, year, month)
+    );
+    const additionsCost = additionsAssets.reduce(
+      (s, a) => s + Number(a.acquisition_cost),
+      0
+    );
+    const disposalsAssets = heldAtStart.filter((a) =>
+      isDisposedIn(a, year, month)
+    );
+    const disposalsCost = disposalsAssets.reduce(
+      (s, a) => s + Number(a.acquisition_cost),
+      0
+    );
+    const endingCost = beginningCost + additionsCost - disposalsCost;
+
+    // ---- ACCUMULATED DEPRECIATION ----
+    // Beginning: each held asset's accumulated at end of prior month
+    let beginningAccum = 0;
+    for (const a of heldAtStart) {
+      const prev = deprByAssetMonth[a.id]?.[monthKey(py, pm)];
+      if (prev) beginningAccum += Number(prev.book_accumulated);
+    }
+    // Depreciation: sum of book_depreciation from this month's entries across
+    // all group assets (held, added, and disposed-this-month).
     let depreciation = 0;
-    for (const asset of groupAssets) {
-      const entry =
-        deprByAssetMonth[asset.id]?.[monthKey(year, month)];
+    for (const a of groupAssets) {
+      const entry = deprByAssetMonth[a.id]?.[monthKey(year, month)];
+      if (entry) depreciation += Number(entry.book_depreciation);
+    }
+    // Disposals accumulated: the disposed asset's accumulated at disposal
+    // month (which already includes that month's depreciation). This keeps
+    // Beginning + Depreciation − Disposals Accum = Ending Accum exactly.
+    let disposalsAccum = 0;
+    for (const a of disposalsAssets) {
+      const entry = deprByAssetMonth[a.id]?.[monthKey(year, month)];
       if (entry) {
-        depreciation += entry.book_depreciation;
+        disposalsAccum += Number(entry.book_accumulated);
+      } else {
+        const prev = deprByAssetMonth[a.id]?.[monthKey(py, pm)];
+        if (prev) disposalsAccum += Number(prev.book_accumulated);
       }
     }
+    const endingAccum = beginningAccum + depreciation - disposalsAccum;
 
-    const beginningNbv = prevEndingNbv;
-    const endingNbv = beginningNbv + additions - disposals - depreciation;
+    const beginningNbv = beginningCost - beginningAccum;
+    const endingNbv = endingCost - endingAccum;
 
     result.push({
       year,
       month,
-      beginningNbv,
-      additions,
-      disposals,
+      beginningCost,
+      additionsCost,
+      disposalsCost,
+      endingCost,
+      beginningAccum,
       depreciation,
+      disposalsAccum,
+      endingAccum,
+      beginningNbv,
       endingNbv,
     });
-
-    prevEndingNbv = endingNbv;
   }
 
   return result;
@@ -231,10 +273,6 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
   const loadData = useCallback(async () => {
     setLoading(true);
 
-    // Baseline is the month before start
-    const baselineMonth = startMonth === 1 ? 12 : startMonth - 1;
-    const baselineYear = startMonth === 1 ? startYear - 1 : startYear;
-
     // Fetch all assets (including GL override fields)
     const { data: assetsData } = await supabase
       .from("fixed_assets")
@@ -249,7 +287,6 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
     const linkData = linkRes.ok ? await linkRes.json() : [];
     const accountToParent: Record<string, string> = {};
     for (const m of linkData as { recon_group: string; account_id: string }[]) {
-      // Map account_id → parent GL group key (e.g. "vehicles_net" or "trailers_net")
       const reconGroup = RECON_GROUPS.find((g) => g.key === m.recon_group);
       if (reconGroup) {
         accountToParent[m.account_id] = reconGroup.parentKey;
@@ -264,23 +301,22 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
       return getAssetGLGroup(asset.vehicle_class, asset.master_type_override);
     };
 
-    // Fetch all depreciation entries from baseline through end period
+    // Fetch ALL depreciation entries for these assets so we can look up the
+    // beginning-of-month accumulated (which may predate the chosen range)
+    // without another round trip.
     const assetIds = assets.map((a) => a.id);
     let allDepr: DeprEntry[] = [];
     if (assetIds.length > 0) {
-      // Fetch in batches if needed (Supabase .in() has limits)
       const batchSize = 100;
       for (let i = 0; i < assetIds.length; i += batchSize) {
         const batch = assetIds.slice(i, i + batchSize);
         const { data: deprData } = await supabase
           .from("fixed_asset_depreciation")
-          .select("fixed_asset_id, period_year, period_month, book_depreciation, book_net_value")
-          .in("fixed_asset_id", batch)
-          .gte("period_year", baselineYear)
-          .lte("period_year", endYear + 1);
-        allDepr = allDepr.concat(
-          ((deprData ?? []) as DeprEntry[])
-        );
+          .select(
+            "fixed_asset_id, period_year, period_month, book_depreciation, book_accumulated, book_net_value"
+          )
+          .in("fixed_asset_id", batch);
+        allDepr = allDepr.concat((deprData ?? []) as DeprEntry[]);
       }
     }
 
@@ -293,8 +329,6 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
         assets,
         allDepr,
         months,
-        baselineYear,
-        baselineMonth,
         resolveGLGroup
       );
     }
@@ -309,11 +343,26 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
   const months = generateMonthRange(startYear, startMonth, endYear, endMonth);
   const years = Array.from({ length: 5 }, (_, i) => now.getFullYear() - i + 1);
 
-  const ROW_LABELS = [
-    { key: "beginningNbv", label: "Beginning NBV", bold: false },
-    { key: "additions", label: "+ Additions", bold: false },
-    { key: "disposals", label: "- Disposals", bold: false },
-    { key: "depreciation", label: "- Depreciation", bold: false },
+  interface RowDef {
+    key: keyof MonthlyRollForward | "sep";
+    label: string;
+    bold?: boolean;
+    negative?: boolean;
+    separator?: boolean;
+  }
+
+  const ROW_LABELS: RowDef[] = [
+    { key: "beginningCost", label: "Beginning Cost" },
+    { key: "additionsCost", label: "+ Additions" },
+    { key: "disposalsCost", label: "− Disposals", negative: true },
+    { key: "endingCost", label: "Ending Cost", bold: true },
+    { key: "sep", label: "", separator: true },
+    { key: "beginningAccum", label: "Beginning Accum. Depreciation" },
+    { key: "depreciation", label: "+ Depreciation" },
+    { key: "disposalsAccum", label: "− Disposals Accum.", negative: true },
+    { key: "endingAccum", label: "Ending Accum. Depreciation", bold: true },
+    { key: "sep", label: "", separator: true },
+    { key: "beginningNbv", label: "Beginning NBV" },
     { key: "endingNbv", label: "Ending NBV", bold: true },
   ];
 
@@ -420,48 +469,57 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
                       </tr>
                     </thead>
                     <tbody>
-                      {ROW_LABELS.map(({ key, label, bold }) => (
-                        <tr
-                          key={key}
-                          className={`${
-                            bold ? "border-t-2 border-foreground/20 font-semibold" : ""
-                          }`}
-                        >
-                          <td
-                            className={`sticky left-0 bg-background py-2 pr-4 ${
-                              bold ? "font-semibold" : "text-muted-foreground"
+                      {ROW_LABELS.map((rowDef, rowIdx) => {
+                        if (rowDef.separator) {
+                          return (
+                            <tr key={`sep-${rowIdx}`}>
+                              <td
+                                colSpan={months.length + 1}
+                                className="py-1"
+                              />
+                            </tr>
+                          );
+                        }
+                        const { key, label, bold, negative } = rowDef;
+                        return (
+                          <tr
+                            key={`${key}-${rowIdx}`}
+                            className={`${
+                              bold ? "border-t border-foreground/30 font-semibold" : ""
                             }`}
                           >
-                            {label}
-                          </td>
-                          {groupData.map((row, idx) => {
-                            const value =
-                              row[key as keyof MonthlyRollForward] as number;
-                            const isNegativeRow =
-                              key === "disposals" || key === "depreciation";
-                            const displayValue = isNegativeRow
-                              ? value > 0
-                                ? `(${formatCurrency(value)})`
-                                : formatCurrency(0)
-                              : formatCurrency(value);
-
-                            return (
-                              <td
-                                key={idx}
-                                className={`text-right py-2 px-3 tabular-nums whitespace-nowrap ${
-                                  bold ? "font-semibold" : ""
-                                } ${
-                                  isNegativeRow && value > 0
-                                    ? "text-red-600"
-                                    : ""
-                                }`}
-                              >
-                                {displayValue}
-                              </td>
-                            );
-                          })}
-                        </tr>
-                      ))}
+                            <td
+                              className={`sticky left-0 bg-background py-2 pr-4 ${
+                                bold ? "font-semibold" : "text-muted-foreground"
+                              }`}
+                            >
+                              {label}
+                            </td>
+                            {groupData.map((row, idx) => {
+                              const value = row[
+                                key as keyof MonthlyRollForward
+                              ] as number;
+                              const displayValue = negative
+                                ? value > 0
+                                  ? `(${formatCurrency(value)})`
+                                  : formatCurrency(0)
+                                : formatCurrency(value);
+                              return (
+                                <td
+                                  key={idx}
+                                  className={`text-right py-2 px-3 tabular-nums whitespace-nowrap ${
+                                    bold ? "font-semibold" : ""
+                                  } ${
+                                    negative && value > 0 ? "text-red-600" : ""
+                                  }`}
+                                >
+                                  {displayValue}
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
