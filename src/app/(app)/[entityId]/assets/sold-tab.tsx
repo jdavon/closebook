@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ArrowRight, Car, Search } from "lucide-react";
+import { ArrowRight, Car, Download, Search } from "lucide-react";
 import { formatCurrency } from "@/lib/utils/dates";
 import {
   getVehicleClassification,
@@ -29,6 +29,16 @@ import {
   getEffectiveMasterType,
   REPORTING_GROUPS,
 } from "@/lib/utils/vehicle-classification";
+import {
+  addSheet,
+  createWorkbook,
+  downloadWorkbook,
+  formatLongDate,
+  NUMBER_FORMATS,
+  parseIsoDate,
+  type ColumnDef,
+} from "@/lib/utils/excel";
+import { toast } from "sonner";
 
 interface SoldTabProps {
   entityId: string;
@@ -125,6 +135,148 @@ export function SoldTab({ entityId }: SoldTabProps) {
   // Year options: current year and 4 years back
   const yearOptions = Array.from({ length: 5 }, (_, i) => String(currentYear - i));
 
+  async function handleExportExcel() {
+    if (filteredAssets.length === 0) {
+      toast.error("No sold assets to export");
+      return;
+    }
+    try {
+      const { data: entityRow } = await supabase
+        .from("entities")
+        .select("name")
+        .eq("id", entityId)
+        .single();
+      const entityName = (entityRow as { name?: string } | null)?.name ?? "";
+
+      type Row = (typeof filteredAssets)[number];
+      const columns: ColumnDef<Row>[] = [
+        {
+          header: "Asset Tag",
+          width: 14,
+          value: (r) => r.asset_tag ?? "",
+        },
+        {
+          header: "Class",
+          width: 8,
+          align: "center",
+          value: (r) =>
+            getVehicleClassification(r.vehicle_class)?.class ?? "",
+        },
+        {
+          header: "Class Description",
+          width: 26,
+          value: (r) =>
+            getVehicleClassification(r.vehicle_class)?.className ?? "",
+        },
+        {
+          header: "Reporting Group",
+          width: 18,
+          value: (r) =>
+            getVehicleClassification(r.vehicle_class)?.reportingGroup ?? "",
+        },
+        {
+          header: "Master Type",
+          width: 12,
+          value: (r) =>
+            getEffectiveMasterType(r.vehicle_class, r.master_type_override) ?? "",
+        },
+        {
+          header: "Vehicle",
+          width: 28,
+          value: (r) =>
+            r.vehicle_year || r.vehicle_make || r.vehicle_model
+              ? `${r.vehicle_year ?? ""} ${r.vehicle_make ?? ""} ${r.vehicle_model ?? ""}`.trim()
+              : r.asset_name,
+        },
+        {
+          header: "VIN",
+          width: 20,
+          value: (r) => r.vin ?? "",
+        },
+        {
+          header: "Sale Date",
+          width: 12,
+          format: NUMBER_FORMATS.date,
+          value: (r) => parseIsoDate(r.disposed_date) ?? "",
+        },
+        {
+          header: "Buyer",
+          width: 22,
+          value: (r) => r.disposed_buyer ?? "",
+        },
+        {
+          header: "Original Cost",
+          width: 16,
+          format: NUMBER_FORMATS.currency,
+          total: "sum",
+          value: (r) => Number(r.acquisition_cost) || 0,
+        },
+        {
+          header: "Book NBV at Sale",
+          width: 18,
+          format: NUMBER_FORMATS.currency,
+          total: "sum",
+          value: (r) => Number(r.book_net_value) || 0,
+        },
+        {
+          header: "Sale Price",
+          width: 16,
+          format: NUMBER_FORMATS.currency,
+          total: "sum",
+          value: (r) => Number(r.disposed_sale_price ?? 0) || 0,
+        },
+        {
+          header: "Book Gain/(Loss)",
+          width: 18,
+          format: NUMBER_FORMATS.currency,
+          total: "sum",
+          value: (r) => Number(r.disposed_book_gain_loss ?? 0) || 0,
+        },
+        {
+          header: "Tax Gain/(Loss)",
+          width: 18,
+          format: NUMBER_FORMATS.currency,
+          total: "sum",
+          value: (r) => Number(r.disposed_tax_gain_loss ?? 0) || 0,
+        },
+      ];
+
+      const wb = createWorkbook({
+        company: entityName,
+        title: `Disposed Assets — ${year}`,
+      });
+      addSheet(wb, {
+        name: "Disposed Assets",
+        columns,
+        rows: filteredAssets,
+        title: {
+          entityName,
+          reportTitle: "Disposed Assets Schedule",
+          subtitle: "Rental Fleet — Vehicles & Trailers",
+          period: `Year Ended December 31, ${year}`,
+          asOf: `Generated ${formatLongDate(new Date().toISOString().slice(0, 10))}`,
+        },
+        groupBy: (r) =>
+          getEffectiveMasterType(r.vehicle_class, r.master_type_override) ??
+          "Unallocated",
+        sort: (a, b) =>
+          (b.disposed_date ?? "").localeCompare(a.disposed_date ?? ""),
+        grandTotal: true,
+        footnote:
+          "Gain/(loss) computed as Sale Price less Book (or Tax) Net Book Value at disposal.",
+      });
+
+      await downloadWorkbook(
+        wb,
+        `disposed-assets-${year}-${entityId.slice(0, 8)}`
+      );
+      toast.success("Excel export downloaded");
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to export Excel");
+    }
+  }
+
   return (
     <div className="space-y-6">
       {/* Summary Cards */}
@@ -213,6 +365,15 @@ export function SoldTab({ entityId }: SoldTabProps) {
             ))}
           </SelectContent>
         </Select>
+        <Button
+          variant="outline"
+          className="ml-auto"
+          onClick={handleExportExcel}
+          disabled={filteredAssets.length === 0}
+        >
+          <Download className="mr-2 h-4 w-4" />
+          Export Excel
+        </Button>
       </div>
 
       {/* Sold Assets Table */}

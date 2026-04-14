@@ -85,6 +85,15 @@ import {
 } from "@/lib/utils/vehicle-classification";
 import type { VehicleClass } from "@/lib/types/database";
 import { AdditionsTab } from "./additions-tab";
+import {
+  addSheet,
+  createWorkbook,
+  downloadWorkbook,
+  formatLongDate,
+  NUMBER_FORMATS,
+  parseIsoDate,
+  type ColumnDef,
+} from "@/lib/utils/excel";
 import { ReconciliationTab } from "./reconciliation-tab";
 import { RollForwardTab } from "./roll-forward-tab";
 import { SoldTab } from "./sold-tab";
@@ -600,6 +609,161 @@ export default function AssetsPage() {
     downloadCSV((data as unknown as FixedAsset[]) ?? [], "all");
   }
 
+  async function handleExportExcel(scope: "filtered" | "all") {
+    try {
+      let rows: FixedAsset[] = filteredAssets;
+      if (scope === "all") {
+        const { data } = await supabase
+          .from("fixed_assets")
+          .select(
+            "id, asset_name, asset_tag, vehicle_year, vehicle_make, vehicle_model, vehicle_class, vin, acquisition_date, in_service_date, acquisition_cost, book_accumulated_depreciation, tax_cost_basis, tax_accumulated_depreciation, book_net_value, tax_net_value, status, disposed_date, master_type_override"
+          )
+          .eq("entity_id", entityId)
+          .order("asset_name")
+          .range(0, 2999);
+        rows = (data as unknown as FixedAsset[]) ?? [];
+      }
+      if (rows.length === 0) {
+        toast.error("No assets to export");
+        return;
+      }
+      const { data: entityRow } = await supabase
+        .from("entities")
+        .select("name")
+        .eq("id", entityId)
+        .single();
+      const entityName = (entityRow as { name?: string } | null)?.name ?? "";
+
+      const columns: ColumnDef<FixedAsset>[] = [
+        { header: "Asset Tag", width: 14, value: (r) => r.asset_tag ?? "" },
+        { header: "Asset Name", width: 28, value: (r) => r.asset_name },
+        {
+          header: "Class",
+          width: 8,
+          align: "center",
+          value: (r) =>
+            getVehicleClassification(r.vehicle_class, customClasses)?.class ??
+            "",
+        },
+        {
+          header: "Class Description",
+          width: 26,
+          value: (r) =>
+            getVehicleClassification(r.vehicle_class, customClasses)?.className ??
+            "",
+        },
+        {
+          header: "Reporting Group",
+          width: 18,
+          value: (r) =>
+            getVehicleClassification(r.vehicle_class, customClasses)
+              ?.reportingGroup ?? "",
+        },
+        {
+          header: "Master Type",
+          width: 12,
+          value: (r) =>
+            getEffectiveMasterType(
+              r.vehicle_class,
+              r.master_type_override,
+              customClasses
+            ) ?? "",
+        },
+        { header: "Year", width: 8, align: "center", value: (r) => r.vehicle_year ?? "" },
+        { header: "Make", width: 14, value: (r) => r.vehicle_make ?? "" },
+        { header: "Model", width: 16, value: (r) => r.vehicle_model ?? "" },
+        { header: "VIN", width: 20, value: (r) => r.vin ?? "" },
+        {
+          header: "In-Service Date",
+          width: 14,
+          format: NUMBER_FORMATS.date,
+          value: (r) => parseIsoDate(r.in_service_date) ?? "",
+        },
+        {
+          header: "Acquisition Cost",
+          width: 18,
+          format: NUMBER_FORMATS.currency,
+          total: "sum",
+          value: (r) => Number(r.acquisition_cost) || 0,
+        },
+        {
+          header: "Accum. Depreciation",
+          width: 20,
+          format: NUMBER_FORMATS.currency,
+          total: "sum",
+          value: (r) => Number(r.book_accumulated_depreciation) || 0,
+        },
+        {
+          header: "Book NBV",
+          width: 16,
+          format: NUMBER_FORMATS.currency,
+          total: "sum",
+          value: (r) => Number(r.book_net_value) || 0,
+        },
+        {
+          header: "Tax NBV",
+          width: 16,
+          format: NUMBER_FORMATS.currency,
+          total: "sum",
+          value: (r) => Number(r.tax_net_value) || 0,
+        },
+        {
+          header: "Status",
+          width: 14,
+          value: (r) => STATUS_LABELS[r.status] ?? r.status,
+        },
+        {
+          header: "Disposed Date",
+          width: 14,
+          format: NUMBER_FORMATS.date,
+          value: (r) => parseIsoDate(r.disposed_date) ?? "",
+        },
+      ];
+
+      const wb = createWorkbook({
+        company: entityName,
+        title:
+          scope === "all"
+            ? "Fixed Asset Register — All Statuses"
+            : "Fixed Asset Register — Current View",
+      });
+      addSheet(wb, {
+        name: "Register",
+        columns,
+        rows,
+        title: {
+          entityName,
+          reportTitle: "Fixed Asset Register",
+          subtitle:
+            scope === "all"
+              ? "All Statuses (Active, Disposed, Fully Depreciated, Inactive)"
+              : `Filtered View — ${rows.length} asset${rows.length === 1 ? "" : "s"}`,
+          period: asOfDate
+            ? `As of ${formatLongDate(asOfDate + "-01")}`
+            : undefined,
+          asOf: `Generated ${formatLongDate(new Date().toISOString().slice(0, 10))}`,
+        },
+        groupBy: (r) =>
+          getEffectiveMasterType(
+            r.vehicle_class,
+            r.master_type_override,
+            customClasses
+          ) ?? "Unallocated",
+        sort: (a, b) => a.asset_name.localeCompare(b.asset_name),
+        grandTotal: true,
+      });
+
+      await downloadWorkbook(
+        wb,
+        `fixed-asset-register-${scope}-${entityId.slice(0, 8)}`
+      );
+      toast.success("Excel export downloaded");
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to export Excel");
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -641,16 +805,22 @@ export default function AssetsPage() {
             <DropdownMenuTrigger asChild>
               <Button variant="outline">
                 <Download className="mr-2 h-4 w-4" />
-                Export CSV
+                Export
                 <ChevronDownIcon className="ml-2 h-3.5 w-3.5 opacity-50" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => handleExportExcel("filtered")}>
+                Excel — Current View ({filteredAssets.length} assets)
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => handleExportExcel("all")}>
+                Excel — All Statuses (incl. Sold)
+              </DropdownMenuItem>
               <DropdownMenuItem onClick={() => downloadCSV(filteredAssets, "filtered")}>
-                Current View ({filteredAssets.length} assets)
+                CSV — Current View
               </DropdownMenuItem>
               <DropdownMenuItem onClick={handleExportAll}>
-                All Statuses (incl. Sold)
+                CSV — All Statuses
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>

@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ArrowRight, Car, Search } from "lucide-react";
+import { ArrowRight, Car, Download, Search } from "lucide-react";
 import { formatCurrency } from "@/lib/utils/dates";
 import {
   getVehicleClassification,
@@ -32,6 +32,16 @@ import {
   type VehicleClassification,
   type CustomVehicleClassRow,
 } from "@/lib/utils/vehicle-classification";
+import {
+  addSheet,
+  createWorkbook,
+  downloadWorkbook,
+  formatLongDate,
+  NUMBER_FORMATS,
+  parseIsoDate,
+  type ColumnDef,
+} from "@/lib/utils/excel";
+import { toast } from "sonner";
 
 interface AdditionsTabProps {
   entityId: string;
@@ -172,6 +182,136 @@ export function AdditionsTab({ entityId }: AdditionsTabProps) {
     return `${m}/${d}/${y}`;
   }
 
+  async function handleExportExcel() {
+    if (filteredAssets.length === 0) {
+      toast.error("No additions to export");
+      return;
+    }
+    try {
+      const { data: entityRow } = await supabase
+        .from("entities")
+        .select("name")
+        .eq("id", entityId)
+        .single();
+      const entityName = (entityRow as { name?: string } | null)?.name ?? "";
+
+      type Row = (typeof filteredAssets)[number];
+      const columns: ColumnDef<Row>[] = [
+        { header: "Asset Tag", width: 14, value: (r) => r.asset_tag ?? "" },
+        {
+          header: "Class",
+          width: 8,
+          align: "center",
+          value: (r) =>
+            getVehicleClassification(r.vehicle_class, customClasses)?.class ?? "",
+        },
+        {
+          header: "Class Description",
+          width: 26,
+          value: (r) =>
+            getVehicleClassification(r.vehicle_class, customClasses)?.className ??
+            "",
+        },
+        {
+          header: "Reporting Group",
+          width: 18,
+          value: (r) =>
+            getVehicleClassification(r.vehicle_class, customClasses)
+              ?.reportingGroup ?? "",
+        },
+        {
+          header: "Master Type",
+          width: 12,
+          value: (r) =>
+            getEffectiveMasterType(
+              r.vehicle_class,
+              r.master_type_override,
+              customClasses
+            ) ?? "",
+        },
+        {
+          header: "Vehicle",
+          width: 28,
+          value: (r) =>
+            r.vehicle_year || r.vehicle_make || r.vehicle_model
+              ? `${r.vehicle_year ?? ""} ${r.vehicle_make ?? ""} ${r.vehicle_model ?? ""}`.trim()
+              : r.asset_name,
+        },
+        { header: "VIN", width: 20, value: (r) => r.vin ?? "" },
+        {
+          header: "Acquisition Date",
+          width: 14,
+          format: NUMBER_FORMATS.date,
+          value: (r) => parseIsoDate(r.acquisition_date) ?? "",
+        },
+        {
+          header: "In-Service Date",
+          width: 14,
+          format: NUMBER_FORMATS.date,
+          value: (r) => parseIsoDate(r.in_service_date) ?? "",
+        },
+        {
+          header: "Acquisition Cost",
+          width: 18,
+          format: NUMBER_FORMATS.currency,
+          total: "sum",
+          value: (r) => Number(r.acquisition_cost) || 0,
+        },
+        {
+          header: "Book NBV (Current)",
+          width: 18,
+          format: NUMBER_FORMATS.currency,
+          total: "sum",
+          value: (r) => Number(r.book_net_value) || 0,
+        },
+        {
+          header: "Tax NBV (Current)",
+          width: 18,
+          format: NUMBER_FORMATS.currency,
+          total: "sum",
+          value: (r) => Number(r.tax_net_value) || 0,
+        },
+        { header: "Status", width: 14, value: (r) => r.status },
+      ];
+
+      const wb = createWorkbook({
+        company: entityName,
+        title: `Fixed Asset Additions — ${year}`,
+      });
+      addSheet(wb, {
+        name: "Additions",
+        columns,
+        rows: filteredAssets,
+        title: {
+          entityName,
+          reportTitle: "Fixed Asset Additions",
+          subtitle: "Post-Opening Acquisitions",
+          period: `Year Ended December 31, ${year}`,
+          asOf: `Generated ${formatLongDate(new Date().toISOString().slice(0, 10))}`,
+        },
+        groupBy: (r) =>
+          getEffectiveMasterType(
+            r.vehicle_class,
+            r.master_type_override,
+            customClasses
+          ) ?? "Unallocated",
+        sort: (a, b) => a.in_service_date.localeCompare(b.in_service_date),
+        grandTotal: true,
+        footnote:
+          "Excludes assets in-service on or before the opening balance date (those are reported in the opening snapshot).",
+      });
+
+      await downloadWorkbook(
+        wb,
+        `fixed-asset-additions-${year}-${entityId.slice(0, 8)}`
+      );
+      toast.success("Excel export downloaded");
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to export Excel");
+    }
+  }
+
   return (
     <div className="space-y-6">
       {/* Summary Cards */}
@@ -259,6 +399,15 @@ export function AdditionsTab({ entityId }: AdditionsTabProps) {
             ))}
           </SelectContent>
         </Select>
+        <Button
+          variant="outline"
+          className="ml-auto"
+          onClick={handleExportExcel}
+          disabled={filteredAssets.length === 0}
+        >
+          <Download className="mr-2 h-4 w-4" />
+          Export Excel
+        </Button>
       </div>
 
       {/* Additions Table */}

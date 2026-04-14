@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Select,
@@ -16,7 +17,16 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { Download } from "lucide-react";
+import { toast } from "sonner";
 import { formatCurrency } from "@/lib/utils/dates";
+import {
+  addMatrixSheet,
+  createWorkbook,
+  downloadWorkbook,
+  formatLongDate,
+  type MatrixRow,
+} from "@/lib/utils/excel";
 import {
   GL_ACCOUNT_GROUPS,
   RECON_GROUPS,
@@ -720,6 +730,177 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
     { key: "endingNbv", label: "Ending NBV", bold: true },
   ];
 
+  async function handleExportExcel() {
+    if (Object.keys(rollForwardData).length === 0) {
+      toast.error("No roll-forward data to export");
+      return;
+    }
+    try {
+      const { data: entityRow } = await supabase
+        .from("entities")
+        .select("name")
+        .eq("id", entityId)
+        .single();
+      const entityName = (entityRow as { name?: string } | null)?.name ?? "";
+
+      const wb = createWorkbook({
+        company: entityName,
+        title: `Fixed Asset Roll-Forward — ${viewMode === "yearly" ? "Yearly" : "Monthly"}`,
+      });
+
+      const firstCol = months[0];
+      const lastCol = months[months.length - 1];
+      const periodLabel =
+        viewMode === "yearly"
+          ? firstCol && lastCol
+            ? firstCol.year === lastCol.year
+              ? `Year ${firstCol.year}`
+              : `Years ${firstCol.year}–${lastCol.year}`
+            : ""
+          : firstCol && lastCol
+            ? firstCol.year === lastCol.year &&
+              firstCol.month === lastCol.month
+              ? `${MONTH_LABELS[firstCol.month - 1]} ${firstCol.year}`
+              : `${MONTH_LABELS[firstCol.month - 1]} ${firstCol.year} – ${MONTH_LABELS[lastCol.month - 1]} ${lastCol.year}`
+            : "";
+
+      const periodColumns = months.map(({ year, month }) => ({
+        header:
+          viewMode === "yearly"
+            ? String(year)
+            : `${MONTH_LABELS[month - 1]} ${year}`,
+        width: viewMode === "yearly" ? 16 : 14,
+      }));
+
+      // Row definitions mirror ROW_LABELS minus separators, with presentation
+      // hints that translate to Excel number formats.
+      interface ExportRowDef {
+        key: keyof MonthlyRollForward;
+        label: string;
+        bold?: boolean;
+        totalStyle?: boolean;
+        presentation?: "positive" | "parenNegative" | "parenNegativeRed";
+      }
+      const exportRows: ExportRowDef[] = [
+        { key: "beginningCost", label: "Beginning Cost" },
+        { key: "additionsCost", label: "+ Additions" },
+        {
+          key: "disposalsCost",
+          label: "− Disposals",
+          presentation: "parenNegativeRed",
+        },
+        { key: "endingCost", label: "Ending Cost", bold: true, totalStyle: true },
+        {
+          key: "beginningAccum",
+          label: "Beginning Accum. Depreciation",
+          presentation: "parenNegativeRed",
+        },
+        {
+          key: "depreciation",
+          label: "+ Depreciation",
+          presentation: "parenNegative",
+        },
+        {
+          key: "disposalsAccum",
+          label: "− Disposals Accum.",
+          presentation: "parenNegativeRed",
+        },
+        {
+          key: "endingAccum",
+          label: "Ending Accum. Depreciation",
+          bold: true,
+          totalStyle: true,
+          presentation: "parenNegativeRed",
+        },
+        { key: "beginningNbv", label: "Beginning NBV" },
+        { key: "endingNbv", label: "Ending NBV", bold: true, totalStyle: true },
+      ];
+
+      const todayIso = new Date().toISOString().slice(0, 10);
+      for (const group of GL_ACCOUNT_GROUPS) {
+        const groupData = rollForwardData[group.key] ?? [];
+        if (groupData.length === 0) continue;
+
+        const matrixRows: MatrixRow[] = [];
+        // Cost section
+        matrixRows.push({
+          label: "Cost",
+          values: months.map(() => ""),
+          bold: true,
+        });
+        for (const def of exportRows.slice(0, 4)) {
+          matrixRows.push({
+            label: def.label,
+            values: groupData.map((r) => Number(r[def.key] as number) || 0),
+            bold: def.bold,
+            totalStyle: def.totalStyle,
+            presentation: def.presentation,
+            indent: def.bold ? 0 : 1,
+          });
+        }
+        // Spacer
+        matrixRows.push({ label: "", values: months.map(() => "") });
+        // Accumulated depreciation section
+        matrixRows.push({
+          label: "Accumulated Depreciation",
+          values: months.map(() => ""),
+          bold: true,
+        });
+        for (const def of exportRows.slice(4, 8)) {
+          matrixRows.push({
+            label: def.label,
+            values: groupData.map((r) => Number(r[def.key] as number) || 0),
+            bold: def.bold,
+            totalStyle: def.totalStyle,
+            presentation: def.presentation,
+            indent: def.bold ? 0 : 1,
+          });
+        }
+        // Spacer
+        matrixRows.push({ label: "", values: months.map(() => "") });
+        // NBV section
+        matrixRows.push({
+          label: "Net Book Value",
+          values: months.map(() => ""),
+          bold: true,
+        });
+        for (const def of exportRows.slice(8)) {
+          matrixRows.push({
+            label: def.label,
+            values: groupData.map((r) => Number(r[def.key] as number) || 0),
+            bold: def.bold,
+            totalStyle: def.totalStyle,
+            presentation: def.presentation,
+            indent: def.bold ? 0 : 1,
+          });
+        }
+
+        addMatrixSheet(wb, {
+          name: group.displayName,
+          title: {
+            entityName,
+            reportTitle: "Fixed Asset Roll-Forward",
+            subtitle: group.displayName,
+            period: periodLabel,
+            asOf: `Generated ${formatLongDate(todayIso)}`,
+          },
+          labelColumn: { header: "", width: 34 },
+          periodColumns,
+          rows: matrixRows,
+        });
+      }
+
+      await downloadWorkbook(
+        wb,
+        `asset-roll-forward-${viewMode}-${entityId.slice(0, 8)}`
+      );
+      toast.success("Excel export downloaded");
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to export Excel");
+    }
+  }
+
   return (
     <TooltipProvider delayDuration={150}>
     <div className="space-y-6">
@@ -809,6 +990,14 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
               <SelectItem value="yearly">Yearly</SelectItem>
             </SelectContent>
           </Select>
+          <Button
+            variant="outline"
+            onClick={handleExportExcel}
+            disabled={loading || Object.keys(rollForwardData).length === 0}
+          >
+            <Download className="mr-2 h-4 w-4" />
+            Export Excel
+          </Button>
         </div>
       </div>
 

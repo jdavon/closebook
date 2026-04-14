@@ -52,6 +52,14 @@ import {
   type VehicleClassification,
   type CustomVehicleClassRow,
 } from "@/lib/utils/vehicle-classification";
+import {
+  addSheet,
+  createWorkbook,
+  downloadWorkbook,
+  formatLongDate,
+  NUMBER_FORMATS,
+  parseIsoDate,
+} from "@/lib/utils/excel";
 import { toast } from "sonner";
 
 interface ReconciliationTabProps {
@@ -465,98 +473,243 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
     loadData();
   };
 
-  function handleExportCSV() {
+  async function handleExportExcel() {
     const periodLabel = getPeriodShortLabel(periodYear, periodMonth);
-    const headers = [
-      "Subledger Group",
-      "Asset Tag",
-      "Asset Name",
-      "Class",
-      "Class Name",
-      "Reporting Group",
-      "Master Type",
-      "Status",
-      "In Service Date",
-      "Depr Method",
-      "Useful Life (mo)",
-      "Acquisition Cost",
-      "Salvage Value",
-      `Monthly Depr (${periodLabel})`,
-      `Accum Depreciation (${periodLabel})`,
-      `Net Book Value (${periodLabel})`,
-    ];
+    try {
+      const { data: entityRow } = await supabase
+        .from("entities")
+        .select("name")
+        .eq("id", entityId)
+        .single();
+      const entityName = (entityRow as { name?: string } | null)?.name ?? "";
 
-    const rows: string[][] = [];
+      const wb = createWorkbook({
+        company: entityName,
+        title: `Fixed Asset Reconciliation — ${periodLabel}`,
+      });
 
-    for (const asset of allAssets) {
-      const depr = deprMapState[asset.id];
-      const classification = getVehicleClassification(asset.vehicle_class, customClasses);
-      const mt = getEffectiveMasterType(
-        asset.vehicle_class,
-        asset.master_type_override,
-        customClasses
-      );
-
-      // Determine which recon group this asset falls into
-      let groupLabel = "Unallocated";
-      const mtValue = mt;
-      if (mtValue) {
-        const costGroup = RECON_GROUPS.find(
-          (g) => g.masterType === mtValue && g.lineType === "cost"
-        );
-        groupLabel = costGroup ? costGroup.displayName.replace(" — Cost", "") : mtValue;
+      // Sheet 1 — GL vs Subledger reconciliation summary per recon group.
+      interface ReconRow {
+        group: string;
+        glBalance: number;
+        subledgerBalance: number;
+        variance: number;
+        status: string;
+        notes: string;
       }
+      const reconRows: ReconRow[] = RECON_GROUPS.map((g) => {
+        const glBal = glBalances[g.key] ?? 0;
+        const subBal = subledgerBalances[g.key]?.total ?? 0;
+        const variance = glBal - subBal;
+        const recon = reconciliations[g.key];
+        const mappings = mappedAccounts[g.key] ?? [];
+        const status = recon?.is_reconciled
+          ? "Reconciled"
+          : mappings.length === 0
+            ? "No Accounts Linked"
+            : Math.abs(variance) > 1
+              ? "Variance"
+              : "Pending";
+        return {
+          group: g.displayName,
+          glBalance: glBal,
+          subledgerBalance: subBal,
+          variance,
+          status,
+          notes: notes[g.key] ?? "",
+        };
+      });
 
-      const monthlyDepr = depr ? depr.book_depreciation : 0;
-      const accumDepr = depr
-        ? depr.book_accumulated
-        : asset.book_accumulated_depreciation;
-      const nbv = depr ? depr.book_net_value : asset.book_net_value;
+      addSheet<ReconRow>(wb, {
+        name: "Reconciliation Summary",
+        columns: [
+          { header: "Recon Group", width: 42, value: (r) => r.group },
+          {
+            header: "GL Balance",
+            width: 18,
+            format: NUMBER_FORMATS.currency,
+            total: "sum",
+            value: (r) => r.glBalance,
+          },
+          {
+            header: "Subledger Balance",
+            width: 18,
+            format: NUMBER_FORMATS.currency,
+            total: "sum",
+            value: (r) => r.subledgerBalance,
+          },
+          {
+            header: "Variance (GL − Sub)",
+            width: 18,
+            format: NUMBER_FORMATS.currency,
+            total: "sum",
+            value: (r) => r.variance,
+          },
+          { header: "Status", width: 18, value: (r) => r.status },
+          { header: "Notes", width: 48, value: (r) => r.notes },
+        ],
+        rows: reconRows,
+        title: {
+          entityName,
+          reportTitle: "Fixed Asset Reconciliation",
+          subtitle: "GL vs Subledger by Recon Group",
+          period: `Period: ${periodLabel}`,
+          asOf: `Generated ${formatLongDate(new Date().toISOString().slice(0, 10))}`,
+        },
+        grandTotal: true,
+        footnote:
+          "Variance > $1 is flagged. Status reflects the user-confirmed reconciliation state for the period.",
+      });
 
-      rows.push([
-        groupLabel,
-        asset.asset_tag ?? "",
-        asset.asset_name,
-        classification?.class ?? "",
-        classification?.className ?? "",
-        classification?.reportingGroup ?? "",
-        mt ?? "",
-        asset.status,
-        asset.in_service_date ?? "",
-        asset.book_depreciation_method.replace(/_/g, " "),
-        String(asset.book_useful_life_months || ""),
-        asset.acquisition_cost.toFixed(2),
-        asset.book_salvage_value.toFixed(2),
-        monthlyDepr.toFixed(2),
-        accumDepr.toFixed(2),
-        nbv.toFixed(2),
-      ]);
+      // Sheet 2 — subledger detail, one row per asset with period depreciation.
+      interface DetailRow {
+        group: string;
+        tag: string;
+        name: string;
+        classCode: string;
+        className: string;
+        reportingGroup: string;
+        masterType: string;
+        status: string;
+        inService: Date | string;
+        method: string;
+        ul: number;
+        cost: number;
+        salvage: number;
+        monthlyDepr: number;
+        accumDepr: number;
+        nbv: number;
+      }
+      const detailRows: DetailRow[] = allAssets.map((asset) => {
+        const depr = deprMapState[asset.id];
+        const classification = getVehicleClassification(
+          asset.vehicle_class,
+          customClasses
+        );
+        const mt = getEffectiveMasterType(
+          asset.vehicle_class,
+          asset.master_type_override,
+          customClasses
+        );
+        let groupLabel = "Unallocated";
+        if (mt) {
+          const costGroup = RECON_GROUPS.find(
+            (g) => g.masterType === mt && g.lineType === "cost"
+          );
+          groupLabel = costGroup
+            ? costGroup.displayName.replace(" — Cost", "")
+            : mt;
+        }
+        return {
+          group: groupLabel,
+          tag: asset.asset_tag ?? "",
+          name: asset.asset_name,
+          classCode: classification?.class ?? "",
+          className: classification?.className ?? "",
+          reportingGroup: classification?.reportingGroup ?? "",
+          masterType: mt ?? "",
+          status: asset.status,
+          inService: parseIsoDate(asset.in_service_date) ?? "",
+          method: asset.book_depreciation_method.replace(/_/g, " "),
+          ul: asset.book_useful_life_months || 0,
+          cost: Number(asset.acquisition_cost) || 0,
+          salvage: Number(asset.book_salvage_value) || 0,
+          monthlyDepr: depr ? Number(depr.book_depreciation) : 0,
+          accumDepr: depr
+            ? Number(depr.book_accumulated)
+            : Number(asset.book_accumulated_depreciation),
+          nbv: depr
+            ? Number(depr.book_net_value)
+            : Number(asset.book_net_value),
+        };
+      });
+
+      addSheet<DetailRow>(wb, {
+        name: "Subledger Detail",
+        columns: [
+          { header: "Asset Tag", width: 14, value: (r) => r.tag },
+          { header: "Asset Name", width: 28, value: (r) => r.name },
+          {
+            header: "Class",
+            width: 8,
+            align: "center",
+            value: (r) => r.classCode,
+          },
+          { header: "Class Description", width: 26, value: (r) => r.className },
+          { header: "Reporting Group", width: 18, value: (r) => r.reportingGroup },
+          { header: "Status", width: 12, value: (r) => r.status },
+          {
+            header: "In-Service Date",
+            width: 14,
+            format: NUMBER_FORMATS.date,
+            value: (r) => r.inService,
+          },
+          { header: "Method", width: 16, value: (r) => r.method },
+          {
+            header: "UL (mo)",
+            width: 10,
+            format: NUMBER_FORMATS.integer,
+            align: "right",
+            value: (r) => r.ul,
+          },
+          {
+            header: "Acquisition Cost",
+            width: 18,
+            format: NUMBER_FORMATS.currency,
+            total: "sum",
+            value: (r) => r.cost,
+          },
+          {
+            header: "Salvage",
+            width: 14,
+            format: NUMBER_FORMATS.currency,
+            total: "sum",
+            value: (r) => r.salvage,
+          },
+          {
+            header: `Monthly Depr (${periodLabel})`,
+            width: 20,
+            format: NUMBER_FORMATS.currency,
+            total: "sum",
+            value: (r) => r.monthlyDepr,
+          },
+          {
+            header: `Accum. Depreciation (${periodLabel})`,
+            width: 22,
+            format: NUMBER_FORMATS.currency,
+            total: "sum",
+            value: (r) => r.accumDepr,
+          },
+          {
+            header: `Net Book Value (${periodLabel})`,
+            width: 20,
+            format: NUMBER_FORMATS.currency,
+            total: "sum",
+            value: (r) => r.nbv,
+          },
+        ],
+        rows: detailRows,
+        title: {
+          entityName,
+          reportTitle: "Fixed Asset Subledger Detail",
+          subtitle: `Reconciliation — ${periodLabel}`,
+          asOf: `Generated ${formatLongDate(new Date().toISOString().slice(0, 10))}`,
+        },
+        groupBy: (r) => r.group,
+        sort: (a, b) =>
+          a.group.localeCompare(b.group) || a.name.localeCompare(b.name),
+        grandTotal: true,
+      });
+
+      await downloadWorkbook(
+        wb,
+        `asset-reconciliation-${periodYear}-${String(periodMonth).padStart(2, "0")}-${entityId.slice(0, 8)}`
+      );
+      toast.success("Excel export downloaded");
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to export Excel");
     }
-
-    // Sort by group then asset name
-    rows.sort((a, b) => a[0].localeCompare(b[0]) || a[2].localeCompare(b[2]));
-
-    const csvContent = [
-      headers.join(","),
-      ...rows.map((row) =>
-        row
-          .map((cell) => {
-            const str = String(cell);
-            return str.includes(",") || str.includes('"')
-              ? `"${str.replace(/"/g, '""')}"`
-              : str;
-          })
-          .join(",")
-      ),
-    ].join("\n");
-
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `asset-reconciliation-${periodYear}-${String(periodMonth).padStart(2, "0")}.csv`;
-    link.click();
-    URL.revokeObjectURL(url);
   }
 
   const toggleGroup = (key: string) => {
@@ -964,11 +1117,11 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
         </div>
         <Button
           variant="outline"
-          onClick={handleExportCSV}
+          onClick={handleExportExcel}
           disabled={loading || allAssets.length === 0}
         >
           <Download className="mr-2 h-4 w-4" />
-          Export Recon CSV
+          Export Excel
         </Button>
       </div>
 

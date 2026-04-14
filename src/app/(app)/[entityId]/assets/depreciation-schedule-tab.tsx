@@ -12,8 +12,17 @@ import {
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { RefreshCw, Calculator } from "lucide-react";
+import { RefreshCw, Calculator, Download } from "lucide-react";
 import { toast } from "sonner";
+import {
+  addMatrixSheet,
+  addSheet,
+  createWorkbook,
+  downloadWorkbook,
+  formatLongDate,
+  NUMBER_FORMATS,
+  type MatrixRow,
+} from "@/lib/utils/excel";
 import { formatCurrency, getCurrentPeriod, getPeriodShortLabel } from "@/lib/utils/dates";
 import {
   generateDepreciationSchedule,
@@ -627,6 +636,272 @@ export function DepreciationScheduleTab({
     return "$0.00";
   }
 
+  async function handleExportExcel() {
+    if (groupedAssets.length === 0) {
+      toast.error("No assets to export");
+      return;
+    }
+    try {
+      const { data: entityRow } = await supabase
+        .from("entities")
+        .select("name")
+        .eq("id", entityId)
+        .single();
+      const entityName = (entityRow as { name?: string } | null)?.name ?? "";
+
+      const wb = createWorkbook({
+        company: entityName,
+        title: `Depreciation Schedule — ${months[0] ? getPeriodShortLabel(months[0].year, months[0].month) : ""}–${months[months.length - 1] ? getPeriodShortLabel(months[months.length - 1].year, months[months.length - 1].month) : ""}`,
+      });
+
+      const firstLabel = months[0]
+        ? getPeriodShortLabel(months[0].year, months[0].month)
+        : "";
+      const lastLabel = months[months.length - 1]
+        ? getPeriodShortLabel(
+            months[months.length - 1].year,
+            months[months.length - 1].month
+          )
+        : "";
+      const periodLabel =
+        firstLabel && lastLabel && firstLabel !== lastLabel
+          ? `${firstLabel} – ${lastLabel}`
+          : firstLabel;
+
+      // Build sheets for both Depreciation and Net Book Value so the workbook
+      // is a complete record regardless of which view was on-screen.
+      const matrixColumns = months.map(({ year, month }) => ({
+        header: getPeriodShortLabel(year, month),
+        width: 14,
+        format: NUMBER_FORMATS.currency,
+      }));
+
+      for (const mode of ["depreciation", "net_book_value"] as const) {
+        const sheetTitle =
+          mode === "depreciation" ? "Monthly Depreciation" : "Net Book Value";
+        const rows: MatrixRow[] = [];
+        for (const { group, assets: groupAssets } of groupedAssets) {
+          rows.push({
+            label: group,
+            values: months.map(() => ""),
+            bold: true,
+          });
+          for (const asset of groupAssets) {
+            const label = asset.asset_tag
+              ? `${asset.asset_tag} — ${asset.asset_name}`
+              : asset.asset_name;
+            const values = months.map(({ year, month }) => {
+              if (isPastDisposal(asset, year, month)) return "";
+              const entry = scheduleMap[asset.id]?.[monthKey(year, month)];
+              if (!entry) return "";
+              return mode === "depreciation"
+                ? Number(entry.book_depreciation)
+                : Number(entry.book_net_value);
+            });
+            rows.push({ label, values, indent: 1 });
+          }
+          // Group subtotal
+          const groupTotals = months.map(({ year, month }) => {
+            let total = 0;
+            for (const asset of groupAssets) {
+              if (isPastDisposal(asset, year, month)) continue;
+              const entry = scheduleMap[asset.id]?.[monthKey(year, month)];
+              if (!entry) continue;
+              total +=
+                mode === "depreciation"
+                  ? Number(entry.book_depreciation)
+                  : Number(entry.book_net_value);
+            }
+            return total;
+          });
+          rows.push({
+            label: `${group} Total`,
+            values: groupTotals,
+            totalStyle: true,
+          });
+        }
+
+        // Grand total
+        const allVisible = groupedAssets.flatMap((g) => g.assets);
+        const grandTotals = months.map(({ year, month }) => {
+          let total = 0;
+          for (const asset of allVisible) {
+            if (isPastDisposal(asset, year, month)) continue;
+            const entry = scheduleMap[asset.id]?.[monthKey(year, month)];
+            if (!entry) continue;
+            total +=
+              mode === "depreciation"
+                ? Number(entry.book_depreciation)
+                : Number(entry.book_net_value);
+          }
+          return total;
+        });
+        rows.push({
+          label: "Grand Total",
+          values: grandTotals,
+          totalStyle: true,
+          bold: true,
+        });
+
+        addMatrixSheet(wb, {
+          name: sheetTitle,
+          title: {
+            entityName,
+            reportTitle: `Depreciation Schedule — ${sheetTitle}`,
+            subtitle: "Rental Fleet — Rule-Driven Book Calculation",
+            period: periodLabel ? `Periods: ${periodLabel}` : undefined,
+            asOf: `Generated ${formatLongDate(new Date().toISOString().slice(0, 10))}`,
+          },
+          labelColumn: { header: "Asset", width: 42 },
+          periodColumns: matrixColumns,
+          rows,
+        });
+      }
+
+      // Asset Register sheet — one row per asset with static attributes and
+      // ending-balance totals to make the workbook self-contained.
+      interface AssetMeta {
+        tag: string;
+        name: string;
+        classCode: string;
+        className: string;
+        reportingGroup: string;
+        inService: Date | string;
+        endDate: string;
+        ul: number;
+        method: string;
+        cost: number;
+        salvage: number;
+        openingAccum: number;
+        endingAccum: number;
+        endingNbv: number;
+        soldDate: Date | string;
+      }
+      const lastMonth = months[months.length - 1];
+      const metaRows: AssetMeta[] = [];
+      for (const { assets: groupAssets } of groupedAssets) {
+        for (const asset of groupAssets) {
+          const eff = resolveEffective(asset);
+          const lastEntry = lastMonth
+            ? scheduleMap[asset.id]?.[monthKey(lastMonth.year, lastMonth.month)]
+            : undefined;
+          const dp = disposedPeriod(asset);
+          metaRows.push({
+            tag: asset.asset_tag ?? "",
+            name: asset.asset_name,
+            classCode:
+              getReportingGroup(asset.vehicle_class, customClasses) ?? "",
+            className: "",
+            reportingGroup:
+              getReportingGroup(asset.vehicle_class, customClasses) ?? "",
+            inService: asset.in_service_date
+              ? new Date(
+                  Number(asset.in_service_date.slice(0, 4)),
+                  Number(asset.in_service_date.slice(5, 7)) - 1,
+                  Number(asset.in_service_date.slice(8, 10))
+                )
+              : "",
+            endDate: getEndServiceLabel(asset),
+            ul: eff.usefulLife || 0,
+            method: eff.method.replace(/_/g, " "),
+            cost: Number(asset.acquisition_cost) || 0,
+            salvage: Number(eff.salvageValue) || 0,
+            openingAccum: Number(openingBalances[asset.id]?.book ?? 0),
+            endingAccum: lastEntry ? Number(lastEntry.book_accumulated) : 0,
+            endingNbv: lastEntry ? Number(lastEntry.book_net_value) : 0,
+            soldDate: dp ? new Date(dp.year, dp.month - 1, 1) : "",
+          });
+        }
+      }
+
+      addSheet<AssetMeta>(wb, {
+        name: "Asset Register",
+        title: {
+          entityName,
+          reportTitle: "Depreciation Schedule — Asset Register",
+          subtitle: "Rule-Resolved Useful Life / Salvage / Method",
+          period: periodLabel ? `Periods: ${periodLabel}` : undefined,
+          asOf: `Generated ${formatLongDate(new Date().toISOString().slice(0, 10))}`,
+        },
+        columns: [
+          { header: "Asset Tag", width: 14, value: (r) => r.tag },
+          { header: "Asset Name", width: 28, value: (r) => r.name },
+          { header: "Reporting Group", width: 18, value: (r) => r.reportingGroup },
+          {
+            header: "In-Service Date",
+            width: 14,
+            format: NUMBER_FORMATS.date,
+            value: (r) => r.inService,
+          },
+          { header: "End Date", width: 14, value: (r) => r.endDate },
+          {
+            header: "UL (mo)",
+            width: 10,
+            format: NUMBER_FORMATS.integer,
+            value: (r) => r.ul,
+          },
+          { header: "Method", width: 16, value: (r) => r.method },
+          {
+            header: "Cost",
+            width: 16,
+            format: NUMBER_FORMATS.currency,
+            total: "sum",
+            value: (r) => r.cost,
+          },
+          {
+            header: "Salvage",
+            width: 14,
+            format: NUMBER_FORMATS.currency,
+            total: "sum",
+            value: (r) => r.salvage,
+          },
+          {
+            header: "Opening Accum.",
+            width: 16,
+            format: NUMBER_FORMATS.currency,
+            total: "sum",
+            value: (r) => r.openingAccum,
+          },
+          {
+            header: "Ending Accum.",
+            width: 16,
+            format: NUMBER_FORMATS.currency,
+            total: "sum",
+            value: (r) => r.endingAccum,
+          },
+          {
+            header: "Ending NBV",
+            width: 16,
+            format: NUMBER_FORMATS.currency,
+            total: "sum",
+            value: (r) => r.endingNbv,
+          },
+          {
+            header: "Sold Date",
+            width: 14,
+            format: NUMBER_FORMATS.month,
+            value: (r) => r.soldDate,
+          },
+        ],
+        rows: metaRows,
+        groupBy: (r) => r.reportingGroup || "Unassigned",
+        sort: (a, b) => a.name.localeCompare(b.name),
+        grandTotal: true,
+        footnote:
+          "Opening accumulated is the pinned manual-override balance at the opening period. Ending values reflect the last period in the range.",
+      });
+
+      await downloadWorkbook(
+        wb,
+        `depreciation-schedule-${lastMonth ? `${lastMonth.year}-${String(lastMonth.month).padStart(2, "0")}` : "latest"}-${entityId.slice(0, 8)}`
+      );
+      toast.success("Excel export downloaded");
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to export Excel");
+    }
+  }
+
   return (
     <div className="space-y-6">
       {/* Controls */}
@@ -741,6 +1016,15 @@ export function DepreciationScheduleTab({
               <SelectItem value="remaining_life">Remaining Useful Life</SelectItem>
             </SelectContent>
           </Select>
+
+          <Button
+            variant="outline"
+            onClick={handleExportExcel}
+            disabled={groupedAssets.length === 0}
+          >
+            <Download className="mr-2 h-4 w-4" />
+            Export Excel
+          </Button>
 
           <Button
             onClick={handleGenerateAll}
