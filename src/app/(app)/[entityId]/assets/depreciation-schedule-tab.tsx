@@ -613,6 +613,35 @@ export function DepreciationScheduleTab({
           </Select>
         </div>
 
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              const prev = now.getFullYear() - 1;
+              setStartYear(prev);
+              setStartMonth(1);
+              setEndYear(prev);
+              setEndMonth(12);
+            }}
+          >
+            Last Year
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              const thisYear = now.getFullYear();
+              setStartYear(thisYear);
+              setStartMonth(1);
+              setEndYear(thisYear);
+              setEndMonth(now.getMonth() + 1);
+            }}
+          >
+            YTD
+          </Button>
+        </div>
+
         <div className="flex items-center gap-4 ml-auto">
           <Select
             value={viewMode}
