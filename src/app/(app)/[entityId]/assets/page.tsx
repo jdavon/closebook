@@ -73,6 +73,12 @@ import {
 } from "@/components/ui/command";
 import { calculateDispositionGainLoss } from "@/lib/utils/depreciation";
 import { regenerateAssetSchedule } from "@/lib/utils/depreciation-regenerate";
+import {
+  generateDepreciationSchedule,
+  buildOpeningBalance,
+  type AssetForDepreciation,
+} from "@/lib/utils/depreciation";
+import type { DepreciationRule } from "./depreciation-rules-settings";
 import { formatCurrency, getCurrentPeriod } from "@/lib/utils/dates";
 import {
   getVehicleClassification,
@@ -166,6 +172,15 @@ export default function AssetsPage() {
   const [reportingGroupFilter, setReportingGroupFilter] = useState<string>("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [asOfDate, setAsOfDate] = useState<string>("");
+
+  // Register export wizard
+  const [registerExportOpen, setRegisterExportOpen] = useState(false);
+  const [registerExportAsOfDate, setRegisterExportAsOfDate] = useState("");
+  const [registerExportMasterType, setRegisterExportMasterType] = useState<
+    "all" | "Vehicle" | "Trailer"
+  >("all");
+  const [registerExportIncludeTax, setRegisterExportIncludeTax] = useState(false);
+  const [registerExporting, setRegisterExporting] = useState(false);
   const [asOfSnapshots, setAsOfSnapshots] = useState<
     Record<string, AsOfSnapshot>
   >({});
@@ -815,6 +830,315 @@ export default function AssetsPage() {
     }
   }
 
+  function openRegisterExportWizard() {
+    // Default as-of = today (or month-filter selection if active)
+    if (!registerExportAsOfDate) {
+      const today = new Date().toISOString().slice(0, 10);
+      setRegisterExportAsOfDate(asOfDate ? `${asOfDate}-01` : today);
+    }
+    setRegisterExportOpen(true);
+  }
+
+  async function handleRegisterExportWizard() {
+    if (!registerExportAsOfDate) {
+      toast.error("Pick a closing period");
+      return;
+    }
+    setRegisterExporting(true);
+    try {
+      const [asOfYear, asOfMonth] = registerExportAsOfDate
+        .split("-")
+        .map(Number);
+
+      // Pull every asset so the register represents the fleet as of the
+      // chosen date, regardless of the current on-screen filter. Apply
+      // scope and as-of filtering client-side.
+      const [assetsRes, rulesRes, settingsRes, entityRowRes] = await Promise.all([
+        supabase
+          .from("fixed_assets")
+          .select(
+            "id, asset_name, asset_tag, vehicle_year, vehicle_make, vehicle_model, vehicle_class, vin, acquisition_date, in_service_date, acquisition_cost, book_useful_life_months, book_salvage_value, book_depreciation_method, book_accumulated_depreciation, book_net_value, tax_cost_basis, tax_depreciation_method, tax_useful_life_months, tax_accumulated_depreciation, tax_net_value, section_179_amount, bonus_depreciation_amount, status, disposed_date, master_type_override"
+          )
+          .eq("entity_id", entityId)
+          .order("asset_name")
+          .range(0, 2999),
+        fetch(`/api/assets/depreciation-rules?entityId=${entityId}`),
+        fetch(`/api/assets/settings?entityId=${entityId}`),
+        supabase
+          .from("entities")
+          .select("name")
+          .eq("id", entityId)
+          .single(),
+      ]);
+
+      const allAssets = (assetsRes.data ?? []) as Array<FixedAsset & {
+        book_useful_life_months: number;
+        book_salvage_value: number;
+        book_depreciation_method: string;
+        tax_depreciation_method: string;
+        tax_useful_life_months: number | null;
+        section_179_amount: number;
+        bonus_depreciation_amount: number;
+      }>;
+      const rules: DepreciationRule[] = rulesRes.ok ? await rulesRes.json() : [];
+      const rulesMap = new Map<string, DepreciationRule>();
+      for (const r of rules) rulesMap.set(r.reporting_group, r);
+      const settings = settingsRes.ok ? await settingsRes.json() : null;
+      const openingDateIso: string | null =
+        (settings as { rental_asset_opening_date?: string } | null)
+          ?.rental_asset_opening_date ?? null;
+
+      // Held-at-as-of: in-service on/before as-of AND not disposed on/before as-of.
+      const asOfIso = registerExportAsOfDate;
+      const held = allAssets.filter((a) => {
+        if (!a.in_service_date) return false;
+        const isd = a.in_service_date.slice(0, 10);
+        if (isd > asOfIso) return false;
+        const dd = a.disposed_date?.slice(0, 10) ?? null;
+        if (a.status === "disposed" && dd && dd <= asOfIso) return false;
+        if (registerExportMasterType !== "all") {
+          const mt = getEffectiveMasterType(
+            a.vehicle_class,
+            a.master_type_override,
+            customClasses
+          );
+          if (mt !== registerExportMasterType) return false;
+        }
+        return true;
+      });
+
+      if (held.length === 0) {
+        toast.error("No assets held as of the selected date");
+        setRegisterExporting(false);
+        return;
+      }
+
+      // Opening balances — one batched lookup for every held asset.
+      const openingMap: Record<string, { book: number; tax: number }> = {};
+      if (openingDateIso) {
+        const [oy, om] = openingDateIso.split("-").map(Number);
+        const ids = held.map((a) => a.id);
+        for (let i = 0; i < ids.length; i += 500) {
+          const batch = ids.slice(i, i + 500);
+          const { data: opRows } = await supabase
+            .from("fixed_asset_depreciation")
+            .select("fixed_asset_id, book_accumulated, tax_accumulated")
+            .in("fixed_asset_id", batch)
+            .eq("period_year", oy)
+            .eq("period_month", om)
+            .eq("is_manual_override", true);
+          for (const r of (opRows ?? []) as {
+            fixed_asset_id: string;
+            book_accumulated: number | string;
+            tax_accumulated: number | string;
+          }[]) {
+            openingMap[r.fixed_asset_id] = {
+              book: Number(r.book_accumulated) || 0,
+              tax: Number(r.tax_accumulated) || 0,
+            };
+          }
+        }
+      }
+
+      // Rule-driven NBV as of the chosen date — matches Roll-Forward /
+      // Reconciliation / Additions wizard.
+      const snapshotMap: Record<
+        string,
+        { bookAccum: number; bookNbv: number; taxAccum: number; taxNbv: number }
+      > = {};
+      for (const a of held) {
+        const group = getReportingGroup(a.vehicle_class, customClasses);
+        const rule = group ? rulesMap.get(group) : undefined;
+        const rulePct = rule?.book_salvage_pct ?? null;
+        const ruleSalvage =
+          rulePct != null && rulePct >= 0
+            ? Math.round(
+                Number(a.acquisition_cost) * (Number(rulePct) / 100) * 100
+              ) / 100
+            : null;
+        const ul =
+          rule?.book_useful_life_months != null &&
+          rule.book_useful_life_months > 0
+            ? rule.book_useful_life_months
+            : a.book_useful_life_months;
+        const salvage =
+          ruleSalvage != null ? ruleSalvage : Number(a.book_salvage_value);
+        const method =
+          rule?.book_depreciation_method ?? a.book_depreciation_method;
+
+        const assetForCalc: AssetForDepreciation = {
+          acquisition_cost: Number(a.acquisition_cost),
+          in_service_date: a.in_service_date,
+          book_useful_life_months: ul,
+          book_salvage_value: salvage,
+          book_depreciation_method: method,
+          tax_cost_basis: a.tax_cost_basis != null ? Number(a.tax_cost_basis) : null,
+          tax_depreciation_method: a.tax_depreciation_method,
+          tax_useful_life_months: a.tax_useful_life_months,
+          section_179_amount: Number(a.section_179_amount ?? 0),
+          bonus_depreciation_amount: Number(a.bonus_depreciation_amount ?? 0),
+          disposed_date: a.disposed_date,
+        };
+
+        const op = openingMap[a.id];
+        const opening = openingDateIso
+          ? buildOpeningBalance(openingDateIso, op?.book ?? 0, op?.tax ?? 0)
+          : undefined;
+
+        const schedule = generateDepreciationSchedule(
+          assetForCalc,
+          asOfYear,
+          asOfMonth,
+          opening
+        );
+        const last = schedule[schedule.length - 1];
+        const cost = Number(a.acquisition_cost);
+        const taxBasis = a.tax_cost_basis != null ? Number(a.tax_cost_basis) : cost;
+        if (last) {
+          snapshotMap[a.id] = {
+            bookAccum: last.book_accumulated,
+            bookNbv: last.book_net_value,
+            taxAccum: last.tax_accumulated,
+            taxNbv: last.tax_net_value,
+          };
+        } else {
+          // Before any emit — accum = opening (could be 0)
+          snapshotMap[a.id] = {
+            bookAccum: op?.book ?? 0,
+            bookNbv: cost - (op?.book ?? 0),
+            taxAccum: op?.tax ?? 0,
+            taxNbv: taxBasis - (op?.tax ?? 0),
+          };
+        }
+      }
+
+      const entityName =
+        (entityRowRes.data as { name?: string } | null)?.name ?? "";
+
+      type Row = (typeof held)[number];
+      const columns: ColumnDef<Row>[] = [
+        { header: "Asset Tag", width: 14, value: (r) => r.asset_tag ?? "" },
+        { header: "Asset Name", width: 28, value: (r) => r.asset_name },
+        {
+          header: "Class",
+          width: 8,
+          align: "center",
+          value: (r) =>
+            getVehicleClassification(r.vehicle_class, customClasses)?.class ?? "",
+        },
+        {
+          header: "Class Description",
+          width: 26,
+          value: (r) =>
+            getVehicleClassification(r.vehicle_class, customClasses)?.className ??
+            "",
+        },
+        {
+          header: "Reporting Group",
+          width: 18,
+          value: (r) =>
+            getVehicleClassification(r.vehicle_class, customClasses)
+              ?.reportingGroup ?? "",
+        },
+        {
+          header: "Master Type",
+          width: 12,
+          value: (r) =>
+            getEffectiveMasterType(
+              r.vehicle_class,
+              r.master_type_override,
+              customClasses
+            ) ?? "",
+        },
+        { header: "Year", width: 8, align: "center", value: (r) => r.vehicle_year ?? "" },
+        { header: "Make", width: 14, value: (r) => r.vehicle_make ?? "" },
+        { header: "Model", width: 16, value: (r) => r.vehicle_model ?? "" },
+        { header: "VIN", width: 20, value: (r) => r.vin ?? "" },
+        {
+          header: "In-Service Date",
+          width: 14,
+          format: NUMBER_FORMATS.date,
+          value: (r) => parseIsoDate(r.in_service_date) ?? "",
+        },
+        {
+          header: "Acquisition Cost",
+          width: 18,
+          format: NUMBER_FORMATS.currency,
+          total: "sum",
+          value: (r) => Number(r.acquisition_cost) || 0,
+        },
+        {
+          header: `Accum. Depreciation (as of ${registerExportAsOfDate})`,
+          width: 26,
+          format: NUMBER_FORMATS.currency,
+          total: "sum",
+          value: (r) => snapshotMap[r.id]?.bookAccum ?? 0,
+        },
+        {
+          header: `Book NBV (as of ${registerExportAsOfDate})`,
+          width: 22,
+          format: NUMBER_FORMATS.currency,
+          total: "sum",
+          value: (r) => snapshotMap[r.id]?.bookNbv ?? 0,
+        },
+      ];
+      if (registerExportIncludeTax) {
+        columns.push(
+          {
+            header: `Tax Accum. Depreciation (as of ${registerExportAsOfDate})`,
+            width: 26,
+            format: NUMBER_FORMATS.currency,
+            total: "sum",
+            value: (r) => snapshotMap[r.id]?.taxAccum ?? 0,
+          },
+          {
+            header: `Tax NBV (as of ${registerExportAsOfDate})`,
+            width: 22,
+            format: NUMBER_FORMATS.currency,
+            total: "sum",
+            value: (r) => snapshotMap[r.id]?.taxNbv ?? 0,
+          }
+        );
+      }
+
+      const wb = createWorkbook({
+        company: entityName,
+        title: "Fixed Asset Register",
+      });
+      addSheet(wb, {
+        name: "Register",
+        columns,
+        rows: held,
+        title: {
+          entityName,
+          reportTitle: "Fixed Asset Register",
+          period: `As of ${formatLongDate(registerExportAsOfDate)}`,
+          asOf: `Generated ${formatLongDate(new Date().toISOString().slice(0, 10))}`,
+        },
+        groupBy: (r) =>
+          getEffectiveMasterType(
+            r.vehicle_class,
+            r.master_type_override,
+            customClasses
+          ) ?? "Unallocated",
+        sort: (a, b) => a.asset_name.localeCompare(b.asset_name),
+        grandTotal: true,
+      });
+
+      await downloadWorkbook(
+        wb,
+        `fixed-asset-register-as-of-${registerExportAsOfDate}-${entityId.slice(0, 8)}`
+      );
+      toast.success("Excel export downloaded");
+      setRegisterExportOpen(false);
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to export Excel");
+    } finally {
+      setRegisterExporting(false);
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -861,6 +1185,9 @@ export default function AssetsPage() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={openRegisterExportWizard}>
+                Excel — Register as of… (wizard)
+              </DropdownMenuItem>
               <DropdownMenuItem onClick={() => handleExportExcel("filtered")}>
                 Excel — Current View ({filteredAssets.length} assets)
               </DropdownMenuItem>
@@ -1238,6 +1565,91 @@ export default function AssetsPage() {
           <RollForwardTab entityId={entityId} />
         </TabsContent>
       </Tabs>
+
+      {/* Register Export Wizard */}
+      <Dialog open={registerExportOpen} onOpenChange={setRegisterExportOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Export Register</DialogTitle>
+            <DialogDescription>
+              Choose the closing period and scope for the register snapshot.
+              Accumulated depreciation and NBV are computed as of the closing
+              date using rule-driven depreciation.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="reg-export-as-of">Closing Period (as of)</Label>
+              <Input
+                id="reg-export-as-of"
+                type="date"
+                value={registerExportAsOfDate}
+                onChange={(e) => setRegisterExportAsOfDate(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                Assets in service on or before this date and still held are
+                included.
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>Scope</Label>
+              <Select
+                value={registerExportMasterType}
+                onValueChange={(v: "all" | "Vehicle" | "Trailer") =>
+                  setRegisterExportMasterType(v)
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Vehicles & Trailers (default)</SelectItem>
+                  <SelectItem value="Vehicle">Vehicles only</SelectItem>
+                  <SelectItem value="Trailer">Trailers only</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="flex items-start gap-2">
+              <Checkbox
+                id="reg-export-include-tax"
+                checked={registerExportIncludeTax}
+                onCheckedChange={(c) => setRegisterExportIncludeTax(c === true)}
+              />
+              <div className="grid gap-0.5 leading-none">
+                <Label
+                  htmlFor="reg-export-include-tax"
+                  className="cursor-pointer"
+                >
+                  Include Tax Accum. Depreciation & Tax NBV
+                </Label>
+                <p className="text-xs text-muted-foreground">
+                  Off by default. Book columns are always included.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="ghost"
+              onClick={() => setRegisterExportOpen(false)}
+              disabled={registerExporting}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleRegisterExportWizard}
+              disabled={registerExporting || !registerExportAsOfDate}
+            >
+              <Download className="mr-2 h-4 w-4" />
+              {registerExporting ? "Generating..." : "Download"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Sold Vehicle Dialog */}
       <Dialog open={soldOpen} onOpenChange={(open) => {

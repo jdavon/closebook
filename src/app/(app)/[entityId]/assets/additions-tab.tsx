@@ -474,13 +474,6 @@ export function AdditionsTab({ entityId }: AdditionsTabProps) {
       }
       baseColumns.push({ header: "Status", width: 14, value: (r) => r.status });
 
-      const scopeLabel =
-        exportMasterType === "Vehicle"
-          ? "Vehicles"
-          : exportMasterType === "Trailer"
-            ? "Trailers"
-            : "Vehicles & Trailers";
-
       const wb = createWorkbook({
         company: entityName,
         title: `Fixed Asset Additions — ${year}`,
@@ -492,7 +485,6 @@ export function AdditionsTab({ entityId }: AdditionsTabProps) {
         title: {
           entityName,
           reportTitle: "Fixed Asset Additions",
-          subtitle: `${scopeLabel} — Post-Opening Acquisitions`,
           period: `Year Ended December 31, ${year}`,
           asOf: `NBV as of ${formatLongDate(exportAsOfDate)}`,
         },
