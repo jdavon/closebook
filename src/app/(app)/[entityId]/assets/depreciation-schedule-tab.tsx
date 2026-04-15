@@ -769,85 +769,6 @@ export function DepreciationScheduleTab({
         return entry ? Number(entry.book_net_value) || 0 : "";
       };
 
-      // Leading summary sheet — Vehicles and Trailers totals that mirror the
-      // on-screen summary card.
-      {
-        const summaryRows: MatrixRow[] = [];
-        const visibleAssets = groupedAssets.flatMap((g) => g.assets);
-        const totalsByType = (
-          masterType: "Vehicle" | "Trailer",
-          mode: "depreciation" | "net_book_value"
-        ) => {
-          const catAssets = visibleAssets.filter(
-            (a) =>
-              getEffectiveMasterType(
-                a.vehicle_class,
-                a.master_type_override,
-                customClasses
-              ) === masterType
-          );
-          return periodColumns.map((col) => {
-            let total = 0;
-            for (const asset of catAssets) {
-              const v = columnValue(asset, col, mode);
-              if (typeof v === "number") total += v;
-            }
-            return total;
-          });
-        };
-
-        const depreciationLabel =
-          periodMode === "yearly" ? "Annual Depreciation" : "Monthly Depreciation";
-        const nbvLabel =
-          periodMode === "yearly" ? "Year-End Net Book Value" : "Net Book Value";
-
-        summaryRows.push({
-          label: depreciationLabel,
-          values: periodColumns.map(() => ""),
-          bold: true,
-        });
-        const vehDepr = totalsByType("Vehicle", "depreciation");
-        const trailerDepr = totalsByType("Trailer", "depreciation");
-        summaryRows.push({ label: "Vehicles", values: vehDepr, indent: 1 });
-        summaryRows.push({ label: "Trailers", values: trailerDepr, indent: 1 });
-        summaryRows.push({
-          label: `Total ${depreciationLabel}`,
-          values: periodColumns.map((_, i) => vehDepr[i] + trailerDepr[i]),
-          totalStyle: true,
-          bold: true,
-        });
-        summaryRows.push({ label: "", values: periodColumns.map(() => "") });
-        summaryRows.push({
-          label: nbvLabel,
-          values: periodColumns.map(() => ""),
-          bold: true,
-        });
-        const vehNbv = totalsByType("Vehicle", "net_book_value");
-        const trailerNbv = totalsByType("Trailer", "net_book_value");
-        summaryRows.push({ label: "Vehicles", values: vehNbv, indent: 1 });
-        summaryRows.push({ label: "Trailers", values: trailerNbv, indent: 1 });
-        summaryRows.push({
-          label: `Total ${nbvLabel}`,
-          values: periodColumns.map((_, i) => vehNbv[i] + trailerNbv[i]),
-          totalStyle: true,
-          bold: true,
-        });
-
-        addMatrixSheet(wb, {
-          name: "Summary",
-          title: {
-            entityName,
-            reportTitle: "Depreciation Schedule — Summary",
-            subtitle: `Vehicles & Trailers by ${periodMode === "yearly" ? "Year" : "Month"}`,
-            period: periodLabel ? `Periods: ${periodLabel}` : undefined,
-            asOf: `Generated ${formatLongDate(new Date().toISOString().slice(0, 10))}`,
-          },
-          labelColumn: { header: "", width: 34 },
-          periodColumns: matrixColumns,
-          rows: summaryRows,
-        });
-      }
-
       // Bucket reporting groups under their master category so the detail
       // sheets emit: Vehicle → (Car, Cargo Van, …) → assets → group totals →
       // Vehicle Total; then the same for Trailer; then Grand Total.
@@ -979,13 +900,110 @@ export function DepreciationScheduleTab({
           title: {
             entityName,
             reportTitle: `Depreciation Schedule — ${sheetTitle}`,
-            subtitle: "Rental Fleet — Rule-Driven Book Calculation",
+            subtitle:
+              "Vehicles & Trailers with reporting-group subtotals and asset detail",
             period: periodLabel ? `Periods: ${periodLabel}` : undefined,
             asOf: `Generated ${formatLongDate(new Date().toISOString().slice(0, 10))}`,
           },
           labelColumn: { header: "Asset", width: 42 },
           periodColumns: matrixColumns,
           rows,
+        });
+      }
+
+      // Summary sheet — roll-up totals by master category and reporting group
+      // (no individual assets). Appears after the detail sheets so the first
+      // tab a reviewer lands on is the full Monthly/Annual Depreciation detail.
+      {
+        const summaryRows: MatrixRow[] = [];
+        const depreciationLabel =
+          periodMode === "yearly" ? "Annual Depreciation" : "Monthly Depreciation";
+        const nbvLabel =
+          periodMode === "yearly" ? "Year-End Net Book Value" : "Net Book Value";
+
+        const pushSection = (
+          sectionTitle: string,
+          mode: "depreciation" | "net_book_value"
+        ) => {
+          summaryRows.push({
+            label: sectionTitle,
+            values: periodColumns.map(() => ""),
+            bold: true,
+          });
+          for (const bucket of bucketOrder) {
+            const bucketGroups = buckets.get(bucket);
+            if (!bucketGroups || bucketGroups.length === 0) continue;
+            // Master category header
+            summaryRows.push({
+              label: bucketLabel(bucket),
+              values: periodColumns.map(() => ""),
+              bold: true,
+              indent: 1,
+            });
+            // One row per reporting group
+            for (const { group, assets: groupAssets } of bucketGroups) {
+              const values = periodColumns.map((col) => {
+                let total = 0;
+                for (const asset of groupAssets) {
+                  const v = columnValue(asset, col, mode);
+                  if (typeof v === "number") total += v;
+                }
+                return total;
+              });
+              summaryRows.push({ label: group, values, indent: 2 });
+            }
+            // Master category subtotal
+            const bucketAssets = bucketGroups.flatMap((g) => g.assets);
+            const bucketTotals = periodColumns.map((col) => {
+              let total = 0;
+              for (const asset of bucketAssets) {
+                const v = columnValue(asset, col, mode);
+                if (typeof v === "number") total += v;
+              }
+              return total;
+            });
+            summaryRows.push({
+              label: `${bucketLabel(bucket)} Total`,
+              values: bucketTotals,
+              totalStyle: true,
+              bold: true,
+              indent: 1,
+            });
+          }
+          // Section grand total
+          const allAssets = groupedAssets.flatMap((g) => g.assets);
+          const sectionTotals = periodColumns.map((col) => {
+            let total = 0;
+            for (const asset of allAssets) {
+              const v = columnValue(asset, col, mode);
+              if (typeof v === "number") total += v;
+            }
+            return total;
+          });
+          summaryRows.push({
+            label: `Total ${sectionTitle}`,
+            values: sectionTotals,
+            totalStyle: true,
+            bold: true,
+          });
+        };
+
+        pushSection(depreciationLabel, "depreciation");
+        summaryRows.push({ label: "", values: periodColumns.map(() => "") });
+        pushSection(nbvLabel, "net_book_value");
+
+        addMatrixSheet(wb, {
+          name: "Summary",
+          title: {
+            entityName,
+            reportTitle: "Depreciation Schedule — Summary",
+            subtitle: `Roll-up by Master Category and Reporting Group (${periodMode === "yearly" ? "Yearly" : "Monthly"})`,
+            period: periodLabel ? `Periods: ${periodLabel}` : undefined,
+            asOf: `Generated ${formatLongDate(new Date().toISOString().slice(0, 10))}`,
+          },
+          labelColumn: { header: "", width: 34 },
+          periodColumns: matrixColumns,
+          rows: summaryRows,
         });
       }
 
