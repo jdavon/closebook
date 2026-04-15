@@ -216,6 +216,7 @@ export function DepreciationScheduleTab({
   const [endYear, setEndYear] = useState(now.getFullYear());
   const [endMonth, setEndMonth] = useState(now.getMonth() + 1);
   const [viewMode, setViewMode] = useState<ViewMode>("depreciation");
+  const [periodMode, setPeriodMode] = useState<"monthly" | "yearly">("monthly");
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
 
@@ -231,10 +232,55 @@ export function DepreciationScheduleTab({
     Record<string, Record<string, DepreciationEntry>>
   >({});
 
+  // In yearly mode we always span full calendar years (clamped to the current
+  // month on the ongoing year so we don't materialize empty future periods).
+  const effectiveStartMonth = periodMode === "yearly" ? 1 : startMonth;
+  const effectiveEndMonth =
+    periodMode === "yearly"
+      ? endYear === now.getFullYear()
+        ? now.getMonth() + 1
+        : 12
+      : endMonth;
+
   const months = useMemo(
-    () => generateMonthRange(startYear, startMonth, endYear, endMonth),
-    [startYear, startMonth, endYear, endMonth]
+    () =>
+      generateMonthRange(
+        startYear,
+        effectiveStartMonth,
+        endYear,
+        effectiveEndMonth
+      ),
+    [startYear, effectiveStartMonth, endYear, effectiveEndMonth]
   );
+
+  // Columns the table renders — one per month in monthly mode, one per year
+  // in yearly mode, carrying the months that aggregate into it.
+  interface PeriodColumn {
+    year: number;
+    month?: number;
+    constituentMonths: { year: number; month: number }[];
+  }
+  const periodColumns = useMemo<PeriodColumn[]>(() => {
+    if (periodMode === "monthly") {
+      return months.map((m) => ({
+        year: m.year,
+        month: m.month,
+        constituentMonths: [m],
+      }));
+    }
+    const byYear = new Map<number, { year: number; month: number }[]>();
+    for (const m of months) {
+      const list = byYear.get(m.year);
+      if (list) list.push(m);
+      else byYear.set(m.year, [m]);
+    }
+    return Array.from(byYear.keys())
+      .sort((a, b) => a - b)
+      .map((year) => ({
+        year,
+        constituentMonths: byYear.get(year)!,
+      }));
+  }, [months, periodMode]);
 
   const years = Array.from({ length: 5 }, (_, i) => now.getFullYear() - i + 1);
 
@@ -527,51 +573,59 @@ export function DepreciationScheduleTab({
     return resolveEffectiveValues(asset, rule);
   }
 
-  function getCellValue(
-    asset: AssetRow,
-    year: number,
-    month: number
-  ): string {
-    // After disposal the asset is off the books — render blank so the row
-    // shows the final month's depreciation then goes empty.
-    if (isPastDisposal(asset, year, month)) return "";
-
-    const key = monthKey(year, month);
-    const entry = scheduleMap[asset.id]?.[key];
-
+  function getCellValue(asset: AssetRow, col: PeriodColumn): string {
+    // Depreciation: sum the column's constituent months (one month in monthly
+    // mode, up to twelve in yearly). NBV and Remaining Life are point-in-time
+    // measures — take the last month of the column.
     if (viewMode === "depreciation") {
-      if (!entry) return "---";
-      return formatCurrency(entry.book_depreciation);
+      let total = 0;
+      let hasAny = false;
+      for (const m of col.constituentMonths) {
+        if (isPastDisposal(asset, m.year, m.month)) continue;
+        const entry = scheduleMap[asset.id]?.[monthKey(m.year, m.month)];
+        if (entry) {
+          total += Number(entry.book_depreciation);
+          hasAny = true;
+        }
+      }
+      if (!hasAny) return "---";
+      if (total === 0) {
+        // An in-service asset that happens to contribute zero across the
+        // entire column is still meaningfully zero — show the formatted value.
+        return formatCurrency(0);
+      }
+      return formatCurrency(total);
     }
 
+    const last = col.constituentMonths[col.constituentMonths.length - 1];
+    if (!last) return "---";
+    if (isPastDisposal(asset, last.year, last.month)) return "";
+
     if (viewMode === "net_book_value") {
+      const entry = scheduleMap[asset.id]?.[monthKey(last.year, last.month)];
       if (!entry) return "---";
       return formatCurrency(entry.book_net_value);
     }
 
-    // remaining_life
+    // remaining_life — at end of the column
     if (!asset.in_service_date) return "---";
     const isd = parseISODate(asset.in_service_date);
     const { usefulLife } = resolveEffective(asset);
-
     if (!usefulLife || usefulLife <= 0) return "---";
 
-    const elapsed = monthsBetween(isd.year, isd.month, year, month);
+    const elapsed = monthsBetween(isd.year, isd.month, last.year, last.month);
     if (elapsed < 0) return `${usefulLife} mo`;
     const remaining = Math.max(0, usefulLife - elapsed);
     return `${remaining} mo`;
   }
 
-  function getCellClass(
-    asset: AssetRow,
-    year: number,
-    month: number
-  ): string {
+  function getCellClass(asset: AssetRow, col: PeriodColumn): string {
     if (viewMode === "remaining_life") {
+      const last = col.constituentMonths[col.constituentMonths.length - 1];
       const { usefulLife } = resolveEffective(asset);
-      if (usefulLife > 0 && asset.in_service_date) {
+      if (last && usefulLife > 0 && asset.in_service_date) {
         const isd = parseISODate(asset.in_service_date);
-        const elapsed = monthsBetween(isd.year, isd.month, year, month);
+        const elapsed = monthsBetween(isd.year, isd.month, last.year, last.month);
         const remaining = Math.max(0, usefulLife - elapsed);
         if (remaining === 0) return "text-red-600 font-medium";
         if (remaining <= 6) return "text-amber-600";
@@ -580,22 +634,27 @@ export function DepreciationScheduleTab({
     return "";
   }
 
-  function getGroupMonthlyTotal(
+  function getGroupColumnTotal(
     groupAssets: AssetRow[],
-    year: number,
-    month: number
+    col: PeriodColumn
   ): number {
-    const key = monthKey(year, month);
+    if (viewMode === "net_book_value") {
+      const last = col.constituentMonths[col.constituentMonths.length - 1];
+      if (!last) return 0;
+      let total = 0;
+      for (const asset of groupAssets) {
+        if (isPastDisposal(asset, last.year, last.month)) continue;
+        const entry = scheduleMap[asset.id]?.[monthKey(last.year, last.month)];
+        if (entry) total += Number(entry.book_net_value);
+      }
+      return total;
+    }
     let total = 0;
     for (const asset of groupAssets) {
-      if (isPastDisposal(asset, year, month)) continue;
-      const entry = scheduleMap[asset.id]?.[key];
-      if (entry) {
-        if (viewMode === "net_book_value") {
-          total += entry.book_net_value;
-        } else {
-          total += entry.book_depreciation;
-        }
+      for (const m of col.constituentMonths) {
+        if (isPastDisposal(asset, m.year, m.month)) continue;
+        const entry = scheduleMap[asset.id]?.[monthKey(m.year, m.month)];
+        if (entry) total += Number(entry.book_depreciation);
       }
     }
     return total;
@@ -671,20 +730,51 @@ export function DepreciationScheduleTab({
           : firstLabel;
 
       // Build sheets for both Depreciation and Net Book Value so the workbook
-      // is a complete record regardless of which view was on-screen.
-      const matrixColumns = months.map(({ year, month }) => ({
-        header: getPeriodShortLabel(year, month),
-        width: 14,
+      // is a complete record regardless of which view was on-screen. Columns
+      // follow the current period mode (one per month or one per year).
+      const matrixColumns = periodColumns.map((col) => ({
+        header:
+          periodMode === "yearly"
+            ? String(col.year)
+            : getPeriodShortLabel(col.year, col.month!),
+        width: periodMode === "yearly" ? 16 : 14,
         format: NUMBER_FORMATS.currency,
       }));
 
-      // Leading summary sheet — monthly totals for Vehicles and Trailers that
-      // mirror the on-screen summary card. Simple, single-page view intended
-      // as the first thing a reviewer sees.
+      // Value resolvers using the same semantics as the on-screen table:
+      //   depreciation = sum across constituent months
+      //   net_book_value = value at the end of the column
+      const columnValue = (
+        asset: AssetRow,
+        col: PeriodColumn,
+        mode: "depreciation" | "net_book_value"
+      ): number | "" => {
+        if (mode === "depreciation") {
+          let total = 0;
+          let hasAny = false;
+          for (const m of col.constituentMonths) {
+            if (isPastDisposal(asset, m.year, m.month)) continue;
+            const entry = scheduleMap[asset.id]?.[monthKey(m.year, m.month)];
+            if (entry) {
+              total += Number(entry.book_depreciation) || 0;
+              hasAny = true;
+            }
+          }
+          return hasAny ? total : "";
+        }
+        const last = col.constituentMonths[col.constituentMonths.length - 1];
+        if (!last) return "";
+        if (isPastDisposal(asset, last.year, last.month)) return "";
+        const entry = scheduleMap[asset.id]?.[monthKey(last.year, last.month)];
+        return entry ? Number(entry.book_net_value) || 0 : "";
+      };
+
+      // Leading summary sheet — Vehicles and Trailers totals that mirror the
+      // on-screen summary card.
       {
         const summaryRows: MatrixRow[] = [];
         const visibleAssets = groupedAssets.flatMap((g) => g.assets);
-        const depByType = (
+        const totalsByType = (
           masterType: "Vehicle" | "Trailer",
           mode: "depreciation" | "net_book_value"
         ) => {
@@ -696,49 +786,49 @@ export function DepreciationScheduleTab({
                 customClasses
               ) === masterType
           );
-          return months.map(({ year, month }) => {
+          return periodColumns.map((col) => {
             let total = 0;
             for (const asset of catAssets) {
-              if (isPastDisposal(asset, year, month)) continue;
-              const entry = scheduleMap[asset.id]?.[monthKey(year, month)];
-              if (!entry) continue;
-              total +=
-                mode === "depreciation"
-                  ? Number(entry.book_depreciation) || 0
-                  : Number(entry.book_net_value) || 0;
+              const v = columnValue(asset, col, mode);
+              if (typeof v === "number") total += v;
             }
             return total;
           });
         };
 
+        const depreciationLabel =
+          periodMode === "yearly" ? "Annual Depreciation" : "Monthly Depreciation";
+        const nbvLabel =
+          periodMode === "yearly" ? "Year-End Net Book Value" : "Net Book Value";
+
         summaryRows.push({
-          label: "Monthly Depreciation",
-          values: months.map(() => ""),
+          label: depreciationLabel,
+          values: periodColumns.map(() => ""),
           bold: true,
         });
-        const vehDepr = depByType("Vehicle", "depreciation");
-        const trailerDepr = depByType("Trailer", "depreciation");
+        const vehDepr = totalsByType("Vehicle", "depreciation");
+        const trailerDepr = totalsByType("Trailer", "depreciation");
         summaryRows.push({ label: "Vehicles", values: vehDepr, indent: 1 });
         summaryRows.push({ label: "Trailers", values: trailerDepr, indent: 1 });
         summaryRows.push({
-          label: "Total Monthly Depreciation",
-          values: months.map((_, i) => vehDepr[i] + trailerDepr[i]),
+          label: `Total ${depreciationLabel}`,
+          values: periodColumns.map((_, i) => vehDepr[i] + trailerDepr[i]),
           totalStyle: true,
           bold: true,
         });
-        summaryRows.push({ label: "", values: months.map(() => "") });
+        summaryRows.push({ label: "", values: periodColumns.map(() => "") });
         summaryRows.push({
-          label: "Net Book Value",
-          values: months.map(() => ""),
+          label: nbvLabel,
+          values: periodColumns.map(() => ""),
           bold: true,
         });
-        const vehNbv = depByType("Vehicle", "net_book_value");
-        const trailerNbv = depByType("Trailer", "net_book_value");
+        const vehNbv = totalsByType("Vehicle", "net_book_value");
+        const trailerNbv = totalsByType("Trailer", "net_book_value");
         summaryRows.push({ label: "Vehicles", values: vehNbv, indent: 1 });
         summaryRows.push({ label: "Trailers", values: trailerNbv, indent: 1 });
         summaryRows.push({
-          label: "Total Net Book Value",
-          values: months.map((_, i) => vehNbv[i] + trailerNbv[i]),
+          label: `Total ${nbvLabel}`,
+          values: periodColumns.map((_, i) => vehNbv[i] + trailerNbv[i]),
           totalStyle: true,
           bold: true,
         });
@@ -748,7 +838,7 @@ export function DepreciationScheduleTab({
           title: {
             entityName,
             reportTitle: "Depreciation Schedule — Summary",
-            subtitle: "Vehicles & Trailers by Month",
+            subtitle: `Vehicles & Trailers by ${periodMode === "yearly" ? "Year" : "Month"}`,
             period: periodLabel ? `Periods: ${periodLabel}` : undefined,
             asOf: `Generated ${formatLongDate(new Date().toISOString().slice(0, 10))}`,
           },
@@ -760,39 +850,34 @@ export function DepreciationScheduleTab({
 
       for (const mode of ["depreciation", "net_book_value"] as const) {
         const sheetTitle =
-          mode === "depreciation" ? "Monthly Depreciation" : "Net Book Value";
+          mode === "depreciation"
+            ? periodMode === "yearly"
+              ? "Annual Depreciation"
+              : "Monthly Depreciation"
+            : periodMode === "yearly"
+              ? "Year-End Net Book Value"
+              : "Net Book Value";
         const rows: MatrixRow[] = [];
         for (const { group, assets: groupAssets } of groupedAssets) {
           rows.push({
             label: group,
-            values: months.map(() => ""),
+            values: periodColumns.map(() => ""),
             bold: true,
           });
           for (const asset of groupAssets) {
             const label = asset.asset_tag
               ? `${asset.asset_tag} — ${asset.asset_name}`
               : asset.asset_name;
-            const values = months.map(({ year, month }) => {
-              if (isPastDisposal(asset, year, month)) return "";
-              const entry = scheduleMap[asset.id]?.[monthKey(year, month)];
-              if (!entry) return "";
-              return mode === "depreciation"
-                ? Number(entry.book_depreciation)
-                : Number(entry.book_net_value);
-            });
+            const values = periodColumns.map((col) =>
+              columnValue(asset, col, mode)
+            );
             rows.push({ label, values, indent: 1 });
           }
-          // Group subtotal
-          const groupTotals = months.map(({ year, month }) => {
+          const groupTotals = periodColumns.map((col) => {
             let total = 0;
             for (const asset of groupAssets) {
-              if (isPastDisposal(asset, year, month)) continue;
-              const entry = scheduleMap[asset.id]?.[monthKey(year, month)];
-              if (!entry) continue;
-              total +=
-                mode === "depreciation"
-                  ? Number(entry.book_depreciation)
-                  : Number(entry.book_net_value);
+              const v = columnValue(asset, col, mode);
+              if (typeof v === "number") total += v;
             }
             return total;
           });
@@ -803,18 +888,12 @@ export function DepreciationScheduleTab({
           });
         }
 
-        // Grand total
         const allVisible = groupedAssets.flatMap((g) => g.assets);
-        const grandTotals = months.map(({ year, month }) => {
+        const grandTotals = periodColumns.map((col) => {
           let total = 0;
           for (const asset of allVisible) {
-            if (isPastDisposal(asset, year, month)) continue;
-            const entry = scheduleMap[asset.id]?.[monthKey(year, month)];
-            if (!entry) continue;
-            total +=
-              mode === "depreciation"
-                ? Number(entry.book_depreciation)
-                : Number(entry.book_net_value);
+            const v = columnValue(asset, col, mode);
+            if (typeof v === "number") total += v;
           }
           return total;
         });
@@ -990,21 +1069,23 @@ export function DepreciationScheduleTab({
       <div className="flex items-center gap-4 flex-wrap">
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium">From:</span>
-          <Select
-            value={String(startMonth)}
-            onValueChange={(v) => setStartMonth(Number(v))}
-          >
-            <SelectTrigger className="w-[130px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {MONTHS_FULL.map((m, i) => (
-                <SelectItem key={i + 1} value={String(i + 1)}>
-                  {m}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          {periodMode === "monthly" && (
+            <Select
+              value={String(startMonth)}
+              onValueChange={(v) => setStartMonth(Number(v))}
+            >
+              <SelectTrigger className="w-[130px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {MONTHS_FULL.map((m, i) => (
+                  <SelectItem key={i + 1} value={String(i + 1)}>
+                    {m}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
           <Select
             value={String(startYear)}
             onValueChange={(v) => setStartYear(Number(v))}
@@ -1023,21 +1104,23 @@ export function DepreciationScheduleTab({
         </div>
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium">To:</span>
-          <Select
-            value={String(endMonth)}
-            onValueChange={(v) => setEndMonth(Number(v))}
-          >
-            <SelectTrigger className="w-[130px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {MONTHS_FULL.map((m, i) => (
-                <SelectItem key={i + 1} value={String(i + 1)}>
-                  {m}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          {periodMode === "monthly" && (
+            <Select
+              value={String(endMonth)}
+              onValueChange={(v) => setEndMonth(Number(v))}
+            >
+              <SelectTrigger className="w-[130px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {MONTHS_FULL.map((m, i) => (
+                  <SelectItem key={i + 1} value={String(i + 1)}>
+                    {m}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
           <Select
             value={String(endYear)}
             onValueChange={(v) => setEndYear(Number(v))}
@@ -1086,15 +1169,35 @@ export function DepreciationScheduleTab({
 
         <div className="flex items-center gap-4 ml-auto">
           <Select
-            value={viewMode}
-            onValueChange={(v) => setViewMode(v as ViewMode)}
+            value={periodMode}
+            onValueChange={(v) => setPeriodMode(v as "monthly" | "yearly")}
           >
-            <SelectTrigger className="w-[200px]">
+            <SelectTrigger className="w-[140px]">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="depreciation">Monthly Depreciation</SelectItem>
-              <SelectItem value="net_book_value">Net Book Value</SelectItem>
+              <SelectItem value="monthly">Monthly</SelectItem>
+              <SelectItem value="yearly">Yearly</SelectItem>
+            </SelectContent>
+          </Select>
+          <Select
+            value={viewMode}
+            onValueChange={(v) => setViewMode(v as ViewMode)}
+          >
+            <SelectTrigger className="w-[220px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="depreciation">
+                {periodMode === "yearly"
+                  ? "Annual Depreciation"
+                  : "Monthly Depreciation"}
+              </SelectItem>
+              <SelectItem value="net_book_value">
+                {periodMode === "yearly"
+                  ? "Year-End Net Book Value"
+                  : "Net Book Value"}
+              </SelectItem>
               <SelectItem value="remaining_life">Remaining Useful Life</SelectItem>
             </SelectContent>
           </Select>
@@ -1153,14 +1256,6 @@ export function DepreciationScheduleTab({
               { label: "Vehicles", masterType: "Vehicle" },
               { label: "Trailers", masterType: "Trailer" },
             ];
-            const valueFor = (asset: AssetRow, year: number, month: number) => {
-              if (isPastDisposal(asset, year, month)) return 0;
-              const entry = scheduleMap[asset.id]?.[monthKey(year, month)];
-              if (!entry) return 0;
-              return viewMode === "net_book_value"
-                ? Number(entry.book_net_value) || 0
-                : Number(entry.book_depreciation) || 0;
-            };
             const assetMaster = (a: AssetRow) =>
               getEffectiveMasterType(
                 a.vehicle_class,
@@ -1175,21 +1270,22 @@ export function DepreciationScheduleTab({
               return {
                 ...cat,
                 count: catAssets.length,
-                monthly: months.map(({ year, month }) =>
-                  catAssets.reduce(
-                    (s, a) => s + valueFor(a, year, month),
-                    0
-                  )
+                periodValues: periodColumns.map((col) =>
+                  getGroupColumnTotal(catAssets, col)
                 ),
               };
             });
-            const grand = months.map((_, idx) =>
-              catTotals.reduce((s, c) => s + c.monthly[idx], 0)
+            const grand = periodColumns.map((_, idx) =>
+              catTotals.reduce((s, c) => s + c.periodValues[idx], 0)
             );
             const metricLabel =
               viewMode === "net_book_value"
-                ? "Monthly Net Book Value"
-                : "Monthly Depreciation";
+                ? periodMode === "yearly"
+                  ? "Year-End Net Book Value"
+                  : "Monthly Net Book Value"
+                : periodMode === "yearly"
+                  ? "Annual Depreciation"
+                  : "Monthly Depreciation";
             return (
               <Card>
                 <CardHeader className="pb-3">
@@ -1211,12 +1307,14 @@ export function DepreciationScheduleTab({
                           <th className="text-right py-2 px-2 min-w-[80px] font-medium whitespace-nowrap">
                             Assets
                           </th>
-                          {months.map(({ year, month }) => (
+                          {periodColumns.map((col) => (
                             <th
-                              key={`sum-h-${monthKey(year, month)}`}
+                              key={`sum-h-${col.year}-${col.month ?? "y"}`}
                               className="text-right py-2 px-3 min-w-[110px] font-medium whitespace-nowrap"
                             >
-                              {getPeriodShortLabel(year, month)}
+                              {periodMode === "yearly"
+                                ? String(col.year)
+                                : getPeriodShortLabel(col.year, col.month!)}
                             </th>
                           ))}
                         </tr>
@@ -1233,7 +1331,7 @@ export function DepreciationScheduleTab({
                             <td className="text-right py-2 px-2 tabular-nums text-muted-foreground whitespace-nowrap">
                               {cat.count}
                             </td>
-                            {cat.monthly.map((v, i) => (
+                            {cat.periodValues.map((v, i) => (
                               <td
                                 key={`sum-${cat.masterType}-${i}`}
                                 className="text-right py-2 px-3 tabular-nums whitespace-nowrap"
@@ -1302,12 +1400,14 @@ export function DepreciationScheduleTab({
                       <th className="text-center py-2 px-2 min-w-[90px] font-medium whitespace-nowrap">
                         Sold Date
                       </th>
-                      {months.map(({ year, month }) => (
+                      {periodColumns.map((col) => (
                         <th
-                          key={monthKey(year, month)}
+                          key={`hdr-${col.year}-${col.month ?? "y"}`}
                           className="text-right py-2 px-3 min-w-[110px] font-medium whitespace-nowrap"
                         >
-                          {getPeriodShortLabel(year, month)}
+                          {periodMode === "yearly"
+                            ? String(col.year)
+                            : getPeriodShortLabel(col.year, col.month!)}
                         </th>
                       ))}
                     </tr>
@@ -1344,16 +1444,15 @@ export function DepreciationScheduleTab({
                             return dp ? getPeriodShortLabel(dp.year, dp.month) : "";
                           })()}
                         </td>
-                        {months.map(({ year, month }) => (
+                        {periodColumns.map((col) => (
                           <td
-                            key={monthKey(year, month)}
+                            key={`cell-${asset.id}-${col.year}-${col.month ?? "y"}`}
                             className={`text-right py-2 px-3 tabular-nums whitespace-nowrap ${getCellClass(
                               asset,
-                              year,
-                              month
+                              col
                             )}`}
                           >
-                            {getCellValue(asset, year, month)}
+                            {getCellValue(asset, col)}
                           </td>
                         ))}
                       </tr>
@@ -1379,14 +1478,14 @@ export function DepreciationScheduleTab({
                       <td className="py-2 px-2"></td>
                       <td className="py-2 px-2"></td>
                       <td className="py-2 px-2"></td>
-                      {months.map(({ year, month }) => (
+                      {periodColumns.map((col) => (
                         <td
-                          key={monthKey(year, month)}
+                          key={`grp-tot-${col.year}-${col.month ?? "y"}`}
                           className="text-right py-2 px-3 tabular-nums whitespace-nowrap font-semibold"
                         >
                           {viewMode !== "remaining_life"
                             ? formatCurrency(
-                                getGroupMonthlyTotal(groupAssets, year, month)
+                                getGroupColumnTotal(groupAssets, col)
                               )
                             : ""}
                         </td>
@@ -1424,25 +1523,14 @@ export function DepreciationScheduleTab({
                     <th className="py-2 px-2 min-w-[90px]"></th>
                     <th className="py-2 px-2 min-w-[90px]"></th>
                     <th className="py-2 px-2 min-w-[90px]"></th>
-                    {months.map(({ year, month }) => {
-                      let total = 0;
+                    {periodColumns.map((col) => {
                       const visibleAssets = groupedAssets.flatMap(
                         (g) => g.assets
                       );
-                      for (const asset of visibleAssets) {
-                        if (isPastDisposal(asset, year, month)) continue;
-                        const key = monthKey(year, month);
-                        const entry = scheduleMap[asset.id]?.[key];
-                        if (entry) {
-                          total +=
-                            viewMode === "net_book_value"
-                              ? entry.book_net_value
-                              : entry.book_depreciation;
-                        }
-                      }
+                      const total = getGroupColumnTotal(visibleAssets, col);
                       return (
                         <th
-                          key={monthKey(year, month)}
+                          key={`grand-${col.year}-${col.month ?? "y"}`}
                           className="text-right py-2 px-3 font-semibold tabular-nums whitespace-nowrap"
                         >
                           {formatCurrency(total)}

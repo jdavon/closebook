@@ -54,6 +54,7 @@ interface SoldAsset {
   vehicle_class: string | null;
   vin: string | null;
   acquisition_cost: number;
+  book_accumulated_depreciation: number;
   book_net_value: number;
   disposed_date: string | null;
   disposed_sale_price: number | null;
@@ -79,7 +80,7 @@ export function SoldTab({ entityId }: SoldTabProps) {
     const { data } = await supabase
       .from("fixed_assets")
       .select(
-        "id, asset_name, asset_tag, vehicle_year, vehicle_make, vehicle_model, vehicle_class, vin, acquisition_cost, book_net_value, disposed_date, disposed_sale_price, disposed_book_gain_loss, disposed_tax_gain_loss, disposed_buyer, master_type_override"
+        "id, asset_name, asset_tag, vehicle_year, vehicle_make, vehicle_model, vehicle_class, vin, acquisition_cost, book_accumulated_depreciation, book_net_value, disposed_date, disposed_sale_price, disposed_book_gain_loss, disposed_tax_gain_loss, disposed_buyer, master_type_override"
       )
       .eq("entity_id", entityId)
       .eq("status", "disposed")
@@ -128,6 +129,11 @@ export function SoldTab({ entityId }: SoldTabProps) {
   });
 
   const totalCost = filteredAssets.reduce((s, a) => s + a.acquisition_cost, 0);
+  const totalAccumDepr = filteredAssets.reduce(
+    (s, a) => s + (a.book_accumulated_depreciation ?? 0),
+    0
+  );
+  const totalNbv = filteredAssets.reduce((s, a) => s + (a.book_net_value ?? 0), 0);
   const totalProceeds = filteredAssets.reduce((s, a) => s + (a.disposed_sale_price ?? 0), 0);
   const totalBookGainLoss = filteredAssets.reduce((s, a) => s + (a.disposed_book_gain_loss ?? 0), 0);
   const totalTaxGainLoss = filteredAssets.reduce((s, a) => s + (a.disposed_tax_gain_loss ?? 0), 0);
@@ -210,6 +216,13 @@ export function SoldTab({ entityId }: SoldTabProps) {
           format: NUMBER_FORMATS.currency,
           total: "sum",
           value: (r) => Number(r.acquisition_cost) || 0,
+        },
+        {
+          header: "Accum. Depreciation",
+          width: 18,
+          format: NUMBER_FORMATS.currency,
+          total: "sum",
+          value: (r) => Number(r.book_accumulated_depreciation) || 0,
         },
         {
           header: "Book NBV at Sale",
@@ -402,6 +415,8 @@ export function SoldTab({ entityId }: SoldTabProps) {
                   <TableHead>Sale Date</TableHead>
                   <TableHead>Buyer</TableHead>
                   <TableHead className="text-right">Cost</TableHead>
+                  <TableHead className="text-right">Accum. Depreciation</TableHead>
+                  <TableHead className="text-right">Book NBV at Sale</TableHead>
                   <TableHead className="text-right">Sale Price</TableHead>
                   <TableHead className="text-right">Book Gain/(Loss)</TableHead>
                   <TableHead className="text-right">Tax Gain/(Loss)</TableHead>
@@ -447,6 +462,14 @@ export function SoldTab({ entityId }: SoldTabProps) {
                       <TableCell className="text-right tabular-nums">
                         {formatCurrency(asset.acquisition_cost)}
                       </TableCell>
+                      <TableCell className="text-right tabular-nums text-red-600">
+                        {(asset.book_accumulated_depreciation ?? 0) > 0
+                          ? `(${formatCurrency(asset.book_accumulated_depreciation)})`
+                          : formatCurrency(0)}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {formatCurrency(asset.book_net_value ?? 0)}
+                      </TableCell>
                       <TableCell className="text-right tabular-nums">
                         {formatCurrency(asset.disposed_sale_price ?? 0)}
                       </TableCell>
@@ -483,6 +506,14 @@ export function SoldTab({ entityId }: SoldTabProps) {
                   <TableCell colSpan={6}>Total</TableCell>
                   <TableCell className="text-right tabular-nums">
                     {formatCurrency(totalCost)}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums text-red-600">
+                    {totalAccumDepr > 0
+                      ? `(${formatCurrency(totalAccumDepr)})`
+                      : formatCurrency(0)}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {formatCurrency(totalNbv)}
                   </TableCell>
                   <TableCell className="text-right tabular-nums">
                     {formatCurrency(totalProceeds)}
