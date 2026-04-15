@@ -58,7 +58,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { formatCurrency } from "@/lib/utils/dates";
 import {
   Popover,
   PopoverContent,
@@ -73,6 +72,8 @@ import {
   CommandList,
 } from "@/components/ui/command";
 import { calculateDispositionGainLoss } from "@/lib/utils/depreciation";
+import { regenerateAssetSchedule } from "@/lib/utils/depreciation-regenerate";
+import { formatCurrency, getCurrentPeriod } from "@/lib/utils/dates";
 import {
   getVehicleClassification,
   getReportingGroup,
@@ -453,12 +454,48 @@ export default function AssetsPage() {
     const salePrice = parseFloat(soldPrice) || 0;
     const taxBasis = soldAssetData.tax_cost_basis ?? soldAssetData.acquisition_cost;
 
+    // Book policy: no depreciation in disposal month → accumulated at
+    // disposal = end-of-prior-month balance. Tax follows MACRS through
+    // disposal month. Pull both from the subledger, not the stored header.
+    const [dispYear, dispMonth] = soldDate.split("-").map(Number);
+    const [priorBookRes, priorTaxRes] = await Promise.all([
+      supabase
+        .from("fixed_asset_depreciation")
+        .select("book_accumulated")
+        .eq("fixed_asset_id", soldAssetData.id)
+        .or(
+          `period_year.lt.${dispYear},and(period_year.eq.${dispYear},period_month.lt.${dispMonth})`
+        )
+        .order("period_year", { ascending: false })
+        .order("period_month", { ascending: false })
+        .limit(1),
+      supabase
+        .from("fixed_asset_depreciation")
+        .select("tax_accumulated")
+        .eq("fixed_asset_id", soldAssetData.id)
+        .or(
+          `period_year.lt.${dispYear},and(period_year.eq.${dispYear},period_month.lte.${dispMonth})`
+        )
+        .order("period_year", { ascending: false })
+        .order("period_month", { ascending: false })
+        .limit(1),
+    ]);
+
+    const atDisposalBookAccum =
+      priorBookRes.data && priorBookRes.data.length > 0
+        ? Number(priorBookRes.data[0].book_accumulated)
+        : soldAssetData.book_accumulated_depreciation;
+    const atDisposalTaxAccum =
+      priorTaxRes.data && priorTaxRes.data.length > 0
+        ? Number(priorTaxRes.data[0].tax_accumulated)
+        : soldAssetData.tax_accumulated_depreciation;
+
     const { bookGainLoss, taxGainLoss } = calculateDispositionGainLoss(
       soldAssetData.acquisition_cost,
-      soldAssetData.book_accumulated_depreciation,
+      atDisposalBookAccum,
       soldAssetData.book_salvage_value,
       taxBasis,
-      soldAssetData.tax_accumulated_depreciation,
+      atDisposalTaxAccum,
       salePrice
     );
 
@@ -483,7 +520,21 @@ export default function AssetsPage() {
     if (error) {
       toast.error(error.message);
     } else {
-      toast.success(`${soldAssetData.asset_name} marked as sold`);
+      // Rebuild the subledger. Schedule stops at disposal month (book_depr=0)
+      // and trims anything past — keeping the Sold, Roll-Forward, Reconciliation
+      // and Depreciation tabs aligned automatically.
+      const cp = getCurrentPeriod();
+      const regen = await regenerateAssetSchedule(
+        supabase,
+        soldAssetData.id,
+        cp.year,
+        cp.month
+      );
+      if (!regen.ok) {
+        toast.error(`Marked sold, but schedule regenerate failed: ${regen.error}`);
+      } else {
+        toast.success(`${soldAssetData.asset_name} marked as sold`);
+      }
       setSoldOpen(false);
       setSoldAssetId("");
       setSoldAssetData(null);

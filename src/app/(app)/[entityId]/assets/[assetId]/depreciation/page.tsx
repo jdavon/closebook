@@ -27,6 +27,13 @@ import {
   buildOpeningBalance,
   type AssetForDepreciation,
 } from "@/lib/utils/depreciation";
+import {
+  getReportingGroup,
+  customRowsToClassifications,
+  type VehicleClassification,
+  type CustomVehicleClassRow,
+} from "@/lib/utils/vehicle-classification";
+import type { DepreciationRule } from "../../depreciation-rules-settings";
 
 interface DepreciationRow {
   id: string;
@@ -45,6 +52,7 @@ interface DepreciationRow {
 interface AssetSummary {
   id: string;
   asset_name: string;
+  vehicle_class: string | null;
   acquisition_cost: number;
   in_service_date: string;
   book_useful_life_months: number;
@@ -74,31 +82,45 @@ export default function DepreciationSchedulePage() {
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
 
+  const [rules, setRules] = useState<DepreciationRule[]>([]);
+  const [customClasses, setCustomClasses] = useState<VehicleClassification[]>([]);
+
   const loadData = useCallback(async () => {
-    const [assetResult, entriesResult, settingsResult] = await Promise.all([
-      supabase
-        .from("fixed_assets")
-        .select(
-          "id, asset_name, acquisition_cost, in_service_date, book_useful_life_months, book_salvage_value, book_depreciation_method, book_accumulated_depreciation, tax_cost_basis, tax_depreciation_method, tax_useful_life_months, tax_accumulated_depreciation, section_179_amount, bonus_depreciation_amount, status, disposed_date"
-        )
-        .eq("id", assetId)
-        .single(),
-      supabase
-        .from("fixed_asset_depreciation")
-        .select("*")
-        .eq("fixed_asset_id", assetId)
-        .order("period_year")
-        .order("period_month"),
-      fetch(`/api/assets/settings?entityId=${entityId}`).then((r) =>
-        r.ok ? r.json() : null
-      ),
-    ]);
+    const [assetResult, entriesResult, settingsResult, rulesRes, classesRes] =
+      await Promise.all([
+        supabase
+          .from("fixed_assets")
+          .select(
+            "id, asset_name, vehicle_class, acquisition_cost, in_service_date, book_useful_life_months, book_salvage_value, book_depreciation_method, book_accumulated_depreciation, tax_cost_basis, tax_depreciation_method, tax_useful_life_months, tax_accumulated_depreciation, section_179_amount, bonus_depreciation_amount, status, disposed_date"
+          )
+          .eq("id", assetId)
+          .single(),
+        supabase
+          .from("fixed_asset_depreciation")
+          .select("*")
+          .eq("fixed_asset_id", assetId)
+          .order("period_year")
+          .order("period_month"),
+        fetch(`/api/assets/settings?entityId=${entityId}`).then((r) =>
+          r.ok ? r.json() : null
+        ),
+        fetch(`/api/assets/depreciation-rules?entityId=${entityId}`).then(
+          (r) => (r.ok ? r.json() : [])
+        ),
+        fetch(`/api/assets/classes?entityId=${entityId}`).then((r) =>
+          r.ok ? r.json() : []
+        ),
+      ]);
 
     setAsset(assetResult.data as unknown as AssetSummary);
     setEntries((entriesResult.data as unknown as DepreciationRow[]) ?? []);
     if (settingsResult?.rental_asset_opening_date) {
       setOpeningDate(settingsResult.rental_asset_opening_date);
     }
+    setRules(rulesRes as DepreciationRule[]);
+    setCustomClasses(
+      customRowsToClassifications(classesRes as CustomVehicleClassRow[])
+    );
     setLoading(false);
   }, [supabase, assetId, entityId]);
 
@@ -112,12 +134,35 @@ export default function DepreciationSchedulePage() {
 
     const currentPeriod = getCurrentPeriod();
 
+    // Apply reporting-group rule (if any) so this page matches the
+    // Depreciation Schedule tab and Roll-Forward. Rule wins over the
+    // asset's stored UL / salvage / method.
+    const group = getReportingGroup(asset.vehicle_class, customClasses);
+    const rule = group
+      ? rules.find((r) => r.reporting_group === group)
+      : undefined;
+    const ruleSalvagePct = rule?.book_salvage_pct ?? null;
+    const ruleSalvage =
+      ruleSalvagePct != null && ruleSalvagePct >= 0
+        ? Math.round(
+            asset.acquisition_cost * (Number(ruleSalvagePct) / 100) * 100
+          ) / 100
+        : null;
+    const usefulLife =
+      rule?.book_useful_life_months != null && rule.book_useful_life_months > 0
+        ? rule.book_useful_life_months
+        : asset.book_useful_life_months;
+    const salvageValue =
+      ruleSalvage != null ? ruleSalvage : asset.book_salvage_value;
+    const method =
+      rule?.book_depreciation_method ?? asset.book_depreciation_method;
+
     const assetForCalc: AssetForDepreciation = {
       acquisition_cost: asset.acquisition_cost,
       in_service_date: asset.in_service_date,
-      book_useful_life_months: asset.book_useful_life_months,
-      book_salvage_value: asset.book_salvage_value,
-      book_depreciation_method: asset.book_depreciation_method,
+      book_useful_life_months: usefulLife,
+      book_salvage_value: salvageValue,
+      book_depreciation_method: method,
       tax_cost_basis: asset.tax_cost_basis,
       tax_depreciation_method: asset.tax_depreciation_method,
       tax_useful_life_months: asset.tax_useful_life_months,

@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
-  calculateMonthlyBookDepreciation,
+  generateDepreciationSchedule,
+  buildOpeningBalance,
   type AssetForDepreciation,
 } from "@/lib/utils/depreciation";
 import {
@@ -97,15 +98,32 @@ async function computeDepreciationEntries(
   periodYear: number,
   periodMonth: number
 ) {
+  // Also include disposed assets — if disposed within this period, the
+  // disposal month's book_depreciation is 0 and generateDepreciationSchedule
+  // will correctly skip it. If disposed before, no entry is emitted.
   const { data: assets } = await admin
     .from("fixed_assets")
     .select("*")
     .eq("entity_id", entityId)
-    .eq("status", "active");
+    .in("status", ["active", "disposed", "fully_depreciated"]);
 
   if (!assets || assets.length === 0) {
     return { module: "depreciation", entries: [], totalDebit: 0, totalCredit: 0 };
   }
+
+  // Opening balance — anchor schedule generation so we match the subledger
+  // (and Roll-Forward / Depreciation tabs).
+  const { data: entityRow } = await admin
+    .from("entities")
+    .select("rental_asset_opening_date")
+    .eq("id", entityId)
+    .single();
+  const openingDateIso =
+    (entityRow as { rental_asset_opening_date?: string } | null)
+      ?.rental_asset_opening_date ?? null;
+  const [oy, om] = openingDateIso
+    ? openingDateIso.split("-").map(Number)
+    : [0, 0];
 
   const entries: WorksheetEntry[] = [];
   let totalAmount = 0;
@@ -125,7 +143,40 @@ async function computeDepreciationEntries(
       disposed_date: asset.disposed_date,
     };
 
-    const monthlyDepr = calculateMonthlyBookDepreciation(assetData, periodYear, periodMonth);
+    // Pull the opening book_accumulated for this asset so the schedule
+    // picks up the freeze-at-opening behavior — same math the Roll-Forward
+    // and Depreciation tabs use. Falls back to 0 if no opening row.
+    let openingBook = 0;
+    let openingTax = 0;
+    if (openingDateIso) {
+      const { data: opRow } = await admin
+        .from("fixed_asset_depreciation")
+        .select("book_accumulated, tax_accumulated")
+        .eq("fixed_asset_id", asset.id)
+        .eq("period_year", oy)
+        .eq("period_month", om)
+        .eq("is_manual_override", true)
+        .maybeSingle();
+      if (opRow) {
+        openingBook = Number((opRow as { book_accumulated: number | string }).book_accumulated);
+        openingTax = Number((opRow as { tax_accumulated: number | string }).tax_accumulated);
+      }
+    }
+
+    const opening = openingDateIso
+      ? buildOpeningBalance(openingDateIso, openingBook, openingTax)
+      : undefined;
+
+    const schedule = generateDepreciationSchedule(
+      assetData,
+      periodYear,
+      periodMonth,
+      opening
+    );
+    const periodEntry = schedule.find(
+      (e) => e.period_year === periodYear && e.period_month === periodMonth
+    );
+    const monthlyDepr = periodEntry ? periodEntry.book_depreciation : 0;
     if (monthlyDepr <= 0) continue;
 
     totalAmount += monthlyDepr;

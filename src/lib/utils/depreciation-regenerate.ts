@@ -12,10 +12,16 @@ import {
   buildOpeningBalance,
   type AssetForDepreciation,
 } from "./depreciation";
+import {
+  getReportingGroup,
+  customRowsToClassifications,
+  type CustomVehicleClassRow,
+} from "./vehicle-classification";
 
 type AssetRow = {
   id: string;
   entity_id: string;
+  vehicle_class: string | null;
   acquisition_cost: number | string;
   in_service_date: string;
   book_useful_life_months: number;
@@ -27,6 +33,13 @@ type AssetRow = {
   section_179_amount: number | string;
   bonus_depreciation_amount: number | string;
   disposed_date: string | null;
+};
+
+type DepreciationRuleRow = {
+  reporting_group: string;
+  book_useful_life_months: number | null;
+  book_salvage_pct: number | string | null;
+  book_depreciation_method: string;
 };
 
 /**
@@ -51,13 +64,47 @@ export async function regenerateAssetSchedule(
   const { data: asset, error: assetErr } = await supabase
     .from("fixed_assets")
     .select(
-      "id, entity_id, acquisition_cost, in_service_date, book_useful_life_months, book_salvage_value, book_depreciation_method, tax_cost_basis, tax_depreciation_method, tax_useful_life_months, section_179_amount, bonus_depreciation_amount, disposed_date"
+      "id, entity_id, vehicle_class, acquisition_cost, in_service_date, book_useful_life_months, book_salvage_value, book_depreciation_method, tax_cost_basis, tax_depreciation_method, tax_useful_life_months, section_179_amount, bonus_depreciation_amount, disposed_date"
     )
     .eq("id", assetId)
     .single();
   if (assetErr || !asset) return { ok: false, error: assetErr?.message ?? "Asset not found" };
 
   const a = asset as AssetRow;
+
+  // Fetch reporting-group rules and custom classes so the regenerated
+  // subledger matches what the Roll-Forward, Depreciation Schedule, and
+  // Reconciliation tabs compute in-memory.
+  const { data: rulesData } = await supabase
+    .from("asset_depreciation_rules")
+    .select("reporting_group, book_useful_life_months, book_salvage_pct, book_depreciation_method")
+    .eq("entity_id", a.entity_id);
+  const rules = (rulesData as DepreciationRuleRow[] | null) ?? [];
+
+  const { data: customClassRows } = await supabase
+    .from("custom_vehicle_classes")
+    .select("*")
+    .eq("entity_id", a.entity_id);
+  const customClasses = customRowsToClassifications(
+    (customClassRows as CustomVehicleClassRow[] | null) ?? []
+  );
+
+  const group = getReportingGroup(a.vehicle_class, customClasses);
+  const rule = group ? rules.find((r) => r.reporting_group === group) : undefined;
+  const ruleSalvagePct = rule?.book_salvage_pct;
+  const acquisitionCostNum = Number(a.acquisition_cost);
+  const ruleSalvage =
+    ruleSalvagePct != null && Number(ruleSalvagePct) >= 0
+      ? Math.round(acquisitionCostNum * (Number(ruleSalvagePct) / 100) * 100) / 100
+      : null;
+  const effectiveUsefulLife =
+    rule?.book_useful_life_months != null && rule.book_useful_life_months > 0
+      ? rule.book_useful_life_months
+      : a.book_useful_life_months;
+  const effectiveSalvage =
+    ruleSalvage != null ? ruleSalvage : Number(a.book_salvage_value);
+  const effectiveMethod =
+    rule?.book_depreciation_method ?? a.book_depreciation_method;
 
   const { data: entity, error: entErr } = await supabase
     .from("entities")
@@ -94,11 +141,11 @@ export async function regenerateAssetSchedule(
   );
 
   const assetForCalc: AssetForDepreciation = {
-    acquisition_cost: Number(a.acquisition_cost),
+    acquisition_cost: acquisitionCostNum,
     in_service_date: a.in_service_date,
-    book_useful_life_months: a.book_useful_life_months,
-    book_salvage_value: Number(a.book_salvage_value),
-    book_depreciation_method: a.book_depreciation_method,
+    book_useful_life_months: effectiveUsefulLife,
+    book_salvage_value: effectiveSalvage,
+    book_depreciation_method: effectiveMethod,
     tax_cost_basis: a.tax_cost_basis != null ? Number(a.tax_cost_basis) : null,
     tax_depreciation_method: a.tax_depreciation_method,
     tax_useful_life_months: a.tax_useful_life_months,

@@ -54,6 +54,12 @@ import {
   type CustomVehicleClassRow,
 } from "@/lib/utils/vehicle-classification";
 import {
+  generateDepreciationSchedule,
+  buildOpeningBalance,
+  type AssetForDepreciation,
+} from "@/lib/utils/depreciation";
+import type { DepreciationRule } from "./depreciation-rules-settings";
+import {
   addSheet,
   createWorkbook,
   downloadWorkbook,
@@ -255,22 +261,131 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
       return true;
     });
 
-    // 5. Fetch depreciation entries for this period
+    // 5. Build per-asset rule-driven depreciation schedule through the period.
+    //    Reads the entity's opening-balance cutoff and each asset's pinned
+    //    opening row, then generates in-memory via generateDepreciationSchedule
+    //    — same path the Roll-Forward and Depreciation Schedule tabs use, so
+    //    reconciliation stays in lockstep regardless of when the subledger
+    //    was last regenerated.
     const assetIds = assets.map((a) => a.id);
     const deprMap: Record<string, DeprRow> = {};
-    if (assetIds.length > 0) {
+
+    const rulesRes = await fetch(
+      `/api/assets/depreciation-rules?entityId=${entityId}`
+    );
+    const rules: DepreciationRule[] = rulesRes.ok ? await rulesRes.json() : [];
+    const rulesMap = new Map<string, DepreciationRule>();
+    for (const r of rules) rulesMap.set(r.reporting_group, r);
+
+    const settingsRes = await fetch(`/api/assets/settings?entityId=${entityId}`);
+    const settings = settingsRes.ok ? await settingsRes.json() : null;
+    const openingDateIso: string | null =
+      (settings as { rental_asset_opening_date?: string } | null)
+        ?.rental_asset_opening_date ?? null;
+
+    const openingMap: Record<string, { book: number; tax: number }> = {};
+    if (openingDateIso && assetIds.length > 0) {
+      const [oy, om] = openingDateIso.split("-").map(Number);
       for (let i = 0; i < assetIds.length; i += 500) {
         const batch = assetIds.slice(i, i + 500);
-        const { data: deprData } = await supabase
+        const { data: opRows } = await supabase
           .from("fixed_asset_depreciation")
-          .select("fixed_asset_id, book_depreciation, book_accumulated, book_net_value")
-          .eq("period_year", periodYear)
-          .eq("period_month", periodMonth)
-          .in("fixed_asset_id", batch);
-
-        for (const d of (deprData ?? []) as DeprRow[]) {
-          deprMap[d.fixed_asset_id] = d;
+          .select("fixed_asset_id, book_accumulated, tax_accumulated")
+          .in("fixed_asset_id", batch)
+          .eq("period_year", oy)
+          .eq("period_month", om)
+          .eq("is_manual_override", true);
+        for (const r of (opRows ?? []) as {
+          fixed_asset_id: string;
+          book_accumulated: number | string;
+          tax_accumulated: number | string;
+        }[]) {
+          openingMap[r.fixed_asset_id] = {
+            book: Number(r.book_accumulated) || 0,
+            tax: Number(r.tax_accumulated) || 0,
+          };
         }
+      }
+    }
+
+    // Schedule doesn't emit the opening period itself — emitting starts the
+    // month after. If the user picks the opening period, seed deprMap from
+    // the pinned opening balance directly.
+    const atOpeningPeriod =
+      openingDateIso != null &&
+      (() => {
+        const [oy, om] = openingDateIso.split("-").map(Number);
+        return periodYear === oy && periodMonth === om;
+      })();
+    if (atOpeningPeriod) {
+      for (const asset of assets) {
+        const op = openingMap[asset.id];
+        if (!op) continue;
+        deprMap[asset.id] = {
+          fixed_asset_id: asset.id,
+          book_depreciation: 0,
+          book_accumulated: op.book,
+          book_net_value: asset.acquisition_cost - op.book,
+        };
+      }
+    }
+
+    for (const asset of assets) {
+      if (!asset.in_service_date) continue;
+      if (atOpeningPeriod) break;
+      const group = getReportingGroup(asset.vehicle_class, cc);
+      const rule = group ? rulesMap.get(group) : undefined;
+      const ruleSalvagePct = rule?.book_salvage_pct ?? null;
+      const ruleSalvage =
+        ruleSalvagePct != null && ruleSalvagePct >= 0
+          ? Math.round(
+              asset.acquisition_cost * (Number(ruleSalvagePct) / 100) * 100
+            ) / 100
+          : null;
+      const ul =
+        rule?.book_useful_life_months != null && rule.book_useful_life_months > 0
+          ? rule.book_useful_life_months
+          : asset.book_useful_life_months;
+      const salvage =
+        ruleSalvage != null ? ruleSalvage : asset.book_salvage_value;
+      const method =
+        rule?.book_depreciation_method ?? asset.book_depreciation_method;
+
+      const assetForCalc: AssetForDepreciation = {
+        acquisition_cost: asset.acquisition_cost,
+        in_service_date: asset.in_service_date,
+        book_useful_life_months: ul,
+        book_salvage_value: salvage,
+        book_depreciation_method: method,
+        tax_cost_basis: null,
+        tax_depreciation_method: "none",
+        tax_useful_life_months: null,
+        section_179_amount: 0,
+        bonus_depreciation_amount: 0,
+        disposed_date: asset.disposed_date,
+      };
+
+      const op = openingMap[asset.id];
+      const opening = openingDateIso
+        ? buildOpeningBalance(openingDateIso, op?.book ?? 0, op?.tax ?? 0)
+        : undefined;
+
+      const schedule = generateDepreciationSchedule(
+        assetForCalc,
+        periodYear,
+        periodMonth,
+        opening
+      );
+      const periodEntry = schedule.find(
+        (e) => e.period_year === periodYear && e.period_month === periodMonth
+      );
+      if (periodEntry) {
+        deprMap[asset.id] = {
+          fixed_asset_id: asset.id,
+          book_depreciation: periodEntry.book_depreciation,
+          book_accumulated: periodEntry.book_accumulated,
+          book_net_value: periodEntry.book_net_value,
+        };
       }
     }
 
