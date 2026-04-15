@@ -36,6 +36,16 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
 import {
   ArrowLeft,
@@ -43,6 +53,7 @@ import {
   Trash2,
   Calculator,
   FileText,
+  RotateCcw,
 } from "lucide-react";
 import { formatCurrency } from "@/lib/utils/dates";
 import { calculateDispositionGainLoss } from "@/lib/utils/depreciation";
@@ -215,6 +226,8 @@ export default function AssetDetailPage() {
   const [dispositionMethod, setDispositionMethod] = useState<DispositionMethod>("sale");
   const [disposedBuyer, setDisposedBuyer] = useState("");
   const [disposing, setDisposing] = useState(false);
+  const [undoOpen, setUndoOpen] = useState(false);
+  const [undoing, setUndoing] = useState(false);
 
   const loadData = useCallback(async () => {
     const [assetResult, accountsResult] = await Promise.all([
@@ -530,6 +543,53 @@ export default function AssetDetailPage() {
     setDisposing(false);
   }
 
+  async function handleUndoDispose() {
+    if (!asset || !asset.disposed_date) return;
+    setUndoing(true);
+
+    // The disposal-month book row was zeroed on disposal; delete it so a
+    // schedule regenerate can rebuild book depreciation from that month
+    // forward. Tax rows past disposal were deleted on disposal and will be
+    // regenerated too.
+    const [dispYear, dispMonth] = asset.disposed_date
+      .split("T")[0]
+      .split("-")
+      .map(Number);
+
+    const { error } = await supabase
+      .from("fixed_assets")
+      .update({
+        status: "active",
+        disposed_date: null,
+        disposed_sale_price: null,
+        disposed_book_gain_loss: null,
+        disposed_tax_gain_loss: null,
+        disposition_method: null,
+        disposed_buyer: null,
+      })
+      .eq("id", assetId);
+
+    if (error) {
+      toast.error(error.message);
+      setUndoing(false);
+      return;
+    }
+
+    await supabase
+      .from("fixed_asset_depreciation")
+      .delete()
+      .eq("fixed_asset_id", assetId)
+      .eq("period_year", dispYear)
+      .eq("period_month", dispMonth);
+
+    toast.success(
+      "Sale reversed — regenerate the depreciation schedule to rebuild months from disposal forward."
+    );
+    setUndoOpen(false);
+    loadData();
+    setUndoing(false);
+  }
+
   if (loading) return <p className="text-muted-foreground p-6">Loading...</p>;
   if (!asset) return <p className="text-muted-foreground p-6">Asset not found</p>;
 
@@ -783,8 +843,16 @@ export default function AssetDetailPage() {
       {/* Disposition Details (if disposed) */}
       {isDisposed && asset.disposed_date && (
         <Card>
-          <CardHeader>
+          <CardHeader className="flex flex-row items-center justify-between">
             <CardTitle className="text-lg">Disposition Details</CardTitle>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setUndoOpen(true)}
+            >
+              <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
+              Undo Sale
+            </Button>
           </CardHeader>
           <CardContent>
             <div className="grid grid-cols-6 gap-4 text-sm">
@@ -1332,6 +1400,29 @@ export default function AssetDetailPage() {
           </Card>
         </TabsContent>
       </Tabs>
+
+      <AlertDialog open={undoOpen} onOpenChange={setUndoOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Undo sale of this asset?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This clears the disposal date, sale price, buyer, and gain/loss —
+              the asset returns to active. Depreciation from the disposal
+              month forward will be missing until you regenerate the schedule.
+              If a disposal JE was already posted, reverse it manually.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={undoing}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleUndoDispose}
+              disabled={undoing}
+            >
+              {undoing ? "Reversing..." : "Undo Sale"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
