@@ -848,6 +848,37 @@ export function DepreciationScheduleTab({
         });
       }
 
+      // Bucket reporting groups under their master category so the detail
+      // sheets emit: Vehicle → (Car, Cargo Van, …) → assets → group totals →
+      // Vehicle Total; then the same for Trailer; then Grand Total.
+      type MasterBucket = "Vehicle" | "Trailer" | "Unassigned";
+      const bucketOrder: MasterBucket[] = ["Vehicle", "Trailer", "Unassigned"];
+      const bucketLabel = (b: MasterBucket) =>
+        b === "Unassigned" ? "Unassigned" : b === "Vehicle" ? "Vehicles" : "Trailers";
+      const bucketForGroup = (
+        groupAssets: AssetRow[]
+      ): MasterBucket => {
+        for (const a of groupAssets) {
+          const mt = getEffectiveMasterType(
+            a.vehicle_class,
+            a.master_type_override,
+            customClasses
+          );
+          if (mt === "Vehicle" || mt === "Trailer") return mt;
+        }
+        return "Unassigned";
+      };
+      const buckets = new Map<
+        MasterBucket,
+        { group: string; assets: AssetRow[] }[]
+      >();
+      for (const g of groupedAssets) {
+        const b = bucketForGroup(g.assets);
+        const list = buckets.get(b);
+        if (list) list.push(g);
+        else buckets.set(b, [g]);
+      }
+
       for (const mode of ["depreciation", "net_book_value"] as const) {
         const sheetTitle =
           mode === "depreciation"
@@ -858,34 +889,73 @@ export function DepreciationScheduleTab({
               ? "Year-End Net Book Value"
               : "Net Book Value";
         const rows: MatrixRow[] = [];
-        for (const { group, assets: groupAssets } of groupedAssets) {
+
+        for (const bucket of bucketOrder) {
+          const bucketGroups = buckets.get(bucket);
+          if (!bucketGroups || bucketGroups.length === 0) continue;
+
+          // Master category header
           rows.push({
-            label: group,
+            label: bucketLabel(bucket),
             values: periodColumns.map(() => ""),
             bold: true,
           });
-          for (const asset of groupAssets) {
-            const label = asset.asset_tag
-              ? `${asset.asset_tag} — ${asset.asset_name}`
-              : asset.asset_name;
-            const values = periodColumns.map((col) =>
-              columnValue(asset, col, mode)
-            );
-            rows.push({ label, values, indent: 1 });
-          }
-          const groupTotals = periodColumns.map((col) => {
-            let total = 0;
+
+          for (const { group, assets: groupAssets } of bucketGroups) {
+            // Reporting group header
+            rows.push({
+              label: group,
+              values: periodColumns.map(() => ""),
+              bold: true,
+              indent: 1,
+            });
+            // Individual assets
             for (const asset of groupAssets) {
+              const label = asset.asset_tag
+                ? `${asset.asset_tag} — ${asset.asset_name}`
+                : asset.asset_name;
+              const values = periodColumns.map((col) =>
+                columnValue(asset, col, mode)
+              );
+              rows.push({ label, values, indent: 2 });
+            }
+            // Reporting group subtotal
+            const groupTotals = periodColumns.map((col) => {
+              let total = 0;
+              for (const asset of groupAssets) {
+                const v = columnValue(asset, col, mode);
+                if (typeof v === "number") total += v;
+              }
+              return total;
+            });
+            rows.push({
+              label: `${group} Total`,
+              values: groupTotals,
+              totalStyle: true,
+              indent: 1,
+            });
+          }
+
+          // Master category subtotal (sum across all reporting groups in the
+          // bucket) — emphasized with bold + totalStyle so it stands out from
+          // the reporting-group subtotals above.
+          const bucketAssets = bucketGroups.flatMap((g) => g.assets);
+          const bucketTotals = periodColumns.map((col) => {
+            let total = 0;
+            for (const asset of bucketAssets) {
               const v = columnValue(asset, col, mode);
               if (typeof v === "number") total += v;
             }
             return total;
           });
           rows.push({
-            label: `${group} Total`,
-            values: groupTotals,
+            label: `${bucketLabel(bucket)} Total`,
+            values: bucketTotals,
+            bold: true,
             totalStyle: true,
           });
+          // Spacer between buckets for readability
+          rows.push({ label: "", values: periodColumns.map(() => "") });
         }
 
         const allVisible = groupedAssets.flatMap((g) => g.assets);
