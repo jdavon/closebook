@@ -721,8 +721,9 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
     { key: "depreciation", label: "+ Depreciation", paren: true },
     {
       key: "disposalsAccum",
-      label: "− Disposals Accum.",
-      negative: true,
+      // Disposals reduce the contra-asset accumulated-depr balance — they're
+      // the "add back" in the contra view, so display as a positive number.
+      label: "+ Disposals Accum.",
       contributorsKey: "disposalsAccumAssets",
     },
     { key: "endingAccum", label: "Ending Accum. Depreciation", bold: true },
@@ -803,8 +804,8 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
         },
         {
           key: "disposalsAccum",
-          label: "− Disposals Accum.",
-          presentation: "parenNegativeRed",
+          label: "+ Disposals Accum.",
+          presentation: "positive",
         },
         {
           key: "endingAccum",
