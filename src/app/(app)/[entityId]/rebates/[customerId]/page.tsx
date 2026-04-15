@@ -1092,9 +1092,18 @@ export default function CustomerDetailPage() {
   const currentQtr = getCurrentQuarter();
   const qtrSummary = quarterlySummaries.find((q) => q.quarter === currentQtr);
 
-  // Cumulative totals
+  // Cumulative totals.
+  // totalRevenue = rebate-applicable revenue (sum of final_amount). Used for
+  // tier selection, tier-progress bar, and gap-to-next-tier math.
+  // totalListRevenue = all revenue generated (sum of list_total). Shown on
+  // the "Total Revenue" summary card so it matches the rebate tracker summary
+  // page and reflects actual customer revenue, not the post-exclusion base.
   const totalRevenue = invoices.reduce(
     (s, inv) => s + (inv.final_amount || 0),
+    0,
+  );
+  const totalListRevenue = invoices.reduce(
+    (s, inv) => s + (inv.list_total || 0),
     0,
   );
   const totalRebate = invoices.reduce(
@@ -1239,7 +1248,7 @@ export default function CustomerDetailPage() {
           <CardHeader className="pb-2">
             <CardDescription>Total Revenue</CardDescription>
             <CardTitle className="text-2xl">
-              {formatCurrency(totalRevenue)}
+              {formatCurrency(totalListRevenue)}
             </CardTitle>
           </CardHeader>
         </Card>
