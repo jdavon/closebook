@@ -108,11 +108,14 @@ Customer → Deal → Quote/Order → Contract → Invoice
 
 ## Equipment Type Classification (from Order Descriptions)
 ```
-"VEHICLE", "CARGO VAN", "PROMASTER", "3 TON", "3-TON", "LOADED CUBE" → vehicle
-"GRIP", "G&L", "G & L", "G+L" → grip_lighting
-"STUDIO", "PROD CUBE", "CAMERA CUBE", "WARDROBE CUBE" → studio
-Default → pro_supplies
+"VEHICLE", "CARGO VAN", "PROMASTER", "3 TON", "3-TON",
+  "LOADED CUBE", "PROD CUBE", "CAMERA CUBE", "WARDROBE CUBE" → vehicle
+"GRIP", "G&L", "G & L", "G+L"                                → grip_lighting
+"STUDIO"                                                     → studio
+Default                                                      → pro_supplies
 ```
+All "CUBE" variants are cube trucks — they roll up to vehicle, not studio.
+Precedence is Vehicle → G&L → Studio → Pro Supplies (first match wins).
 
 ## API Integration SOPs
 Reference documentation in `docs/rentalworks-api/`:

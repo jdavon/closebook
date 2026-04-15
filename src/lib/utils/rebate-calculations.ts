@@ -106,13 +106,17 @@ export interface RebateCalculationResult {
 export function classifyEquipmentType(orderDesc: string): EquipmentType {
   if (!orderDesc) return "pro_supplies";
   const d = orderDesc.toUpperCase();
+  // All "CUBE" variants are cube trucks — classified as vehicle.
   if (
     d.includes("VEHICLE") ||
     d.includes("CARGO VAN") ||
     d.includes("PROMASTER") ||
     d.includes("3 TON") ||
     d.includes("3-TON") ||
-    d.includes("LOADED CUBE")
+    d.includes("LOADED CUBE") ||
+    d.includes("PROD CUBE") ||
+    d.includes("CAMERA CUBE") ||
+    d.includes("WARDROBE CUBE")
   )
     return "vehicle";
   if (
@@ -122,13 +126,7 @@ export function classifyEquipmentType(orderDesc: string): EquipmentType {
     d.includes("G+L")
   )
     return "grip_lighting";
-  if (
-    d.includes("STUDIO") ||
-    d.includes("PROD CUBE") ||
-    d.includes("CAMERA CUBE") ||
-    d.includes("WARDROBE CUBE")
-  )
-    return "studio";
+  if (d.includes("STUDIO")) return "studio";
   return "pro_supplies";
 }
 
