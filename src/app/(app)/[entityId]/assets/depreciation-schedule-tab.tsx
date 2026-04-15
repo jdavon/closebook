@@ -200,6 +200,7 @@ function resolveAssetForCalc(
     tax_useful_life_months: asset.tax_useful_life_months,
     section_179_amount: asset.section_179_amount,
     bonus_depreciation_amount: asset.bonus_depreciation_amount,
+    disposed_date: asset.disposed_date,
   };
 }
 

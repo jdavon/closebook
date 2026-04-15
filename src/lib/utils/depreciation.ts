@@ -12,6 +12,9 @@ export interface AssetForDepreciation {
   tax_useful_life_months: number | null;
   section_179_amount: number;
   bonus_depreciation_amount: number;
+  // Book policy: no depreciation in the month of disposal or any month after.
+  // Tax depreciation ignores this — MACRS has its own disposal conventions.
+  disposed_date: string | null;
 }
 
 export interface DepreciationEntry {
@@ -63,6 +66,14 @@ export function calculateMonthlyBookDepreciation(
   // Not yet in service or past useful life
   if (monthsElapsed < 0) return 0;
   if (monthsElapsed >= asset.book_useful_life_months) return 0;
+
+  // Book policy: no depreciation in the disposal month or any month after.
+  // Final accumulated depreciation is frozen at the end of the month prior
+  // to disposal, so gain/loss = sale price − (cost − accum at prior month-end).
+  if (asset.disposed_date) {
+    const disp = parseDate(asset.disposed_date);
+    if (year > disp.year || (year === disp.year && month >= disp.month)) return 0;
+  }
 
   const depreciableBasis = asset.acquisition_cost - asset.book_salvage_value;
   if (depreciableBasis <= 0) return 0;
@@ -302,6 +313,15 @@ export function generateDepreciationSchedule(
         tax_accumulated: Math.round(taxAccum * 100) / 100,
         tax_net_value: Math.round((taxBasis - taxAccum) * 100) / 100,
       });
+    }
+
+    // Stop emitting entries after the disposal month — the asset is off the
+    // books. The disposal month row itself is still written (book_depreciation
+    // will be 0 under the no-depreciation-in-disposal-month policy) so the
+    // subledger shows the final accumulated balance at disposal.
+    if (asset.disposed_date) {
+      const disp = parseDate(asset.disposed_date);
+      if (cy > disp.year || (cy === disp.year && cm >= disp.month)) break;
     }
 
     cm++;

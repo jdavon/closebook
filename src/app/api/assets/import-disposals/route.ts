@@ -144,14 +144,23 @@ export async function POST(request: NextRequest) {
 
     const method = resolveMethod(row.disposition_method);
 
-    // Look up accumulated depreciation at the disposal month.
-    // Prefer the depreciation entry for the disposal period; fall back to the
-    // most recent entry on or before disposal; finally fall back to the
-    // asset header's cumulative value.
+    // Book policy: no depreciation in the disposal month, so final book
+    // accumulated = end-of-prior-month balance (lt). Tax depreciation follows
+    // MACRS conventions and accrues through the disposal month (lte).
     const [dispYear, dispMonth] = disposedDate.split("-").map(Number);
-    const { data: priorEntries } = await supabase
+    const { data: priorBookEntries } = await supabase
       .from("fixed_asset_depreciation")
-      .select("period_year, period_month, book_accumulated, tax_accumulated")
+      .select("book_accumulated")
+      .eq("fixed_asset_id", asset.id)
+      .or(
+        `period_year.lt.${dispYear},and(period_year.eq.${dispYear},period_month.lt.${dispMonth})`
+      )
+      .order("period_year", { ascending: false })
+      .order("period_month", { ascending: false })
+      .limit(1);
+    const { data: priorTaxEntries } = await supabase
+      .from("fixed_asset_depreciation")
+      .select("tax_accumulated")
       .eq("fixed_asset_id", asset.id)
       .or(
         `period_year.lt.${dispYear},and(period_year.eq.${dispYear},period_month.lte.${dispMonth})`
@@ -161,12 +170,12 @@ export async function POST(request: NextRequest) {
       .limit(1);
 
     const atDisposalBookAccum =
-      priorEntries && priorEntries.length > 0
-        ? Number(priorEntries[0].book_accumulated)
+      priorBookEntries && priorBookEntries.length > 0
+        ? Number(priorBookEntries[0].book_accumulated)
         : Number(asset.book_accumulated_depreciation ?? 0);
     const atDisposalTaxAccum =
-      priorEntries && priorEntries.length > 0
-        ? Number(priorEntries[0].tax_accumulated)
+      priorTaxEntries && priorTaxEntries.length > 0
+        ? Number(priorTaxEntries[0].tax_accumulated)
         : Number(asset.tax_accumulated_depreciation ?? 0);
 
     const taxBasis = Number(asset.tax_cost_basis ?? asset.acquisition_cost);
@@ -206,8 +215,16 @@ export async function POST(request: NextRequest) {
       continue;
     }
 
-    // Trim any depreciation entries after the disposal month so the schedule
-    // doesn't continue accruing expense post-sale.
+    // Zero out book depreciation in the disposal month (tax stays — MACRS
+    // accrues through the disposal month), then delete any rows strictly
+    // after disposal so post-sale expense doesn't feed the roll-forward or
+    // JE worksheet.
+    await supabase
+      .from("fixed_asset_depreciation")
+      .update({ book_depreciation: 0, book_accumulated: atDisposalBookAccum })
+      .eq("fixed_asset_id", asset.id)
+      .eq("period_year", dispYear)
+      .eq("period_month", dispMonth);
     await supabase
       .from("fixed_asset_depreciation")
       .delete()

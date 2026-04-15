@@ -443,12 +443,49 @@ export default function AssetDetailPage() {
     const salePrice = parseFloat(disposedSalePrice) || 0;
     const taxBasis = asset.tax_cost_basis ?? asset.acquisition_cost;
 
+    // Book policy: no depreciation in disposal month → book accumulated uses
+    // end-of-prior-month (lt). Tax follows MACRS conventions and accrues
+    // through disposal month (lte). Read from subledger, not the asset header
+    // (which drifts as schedules regenerate).
+    const [dispYear, dispMonth] = disposedDate.split("-").map(Number);
+    const [priorBookRes, priorTaxRes] = await Promise.all([
+      supabase
+        .from("fixed_asset_depreciation")
+        .select("book_accumulated")
+        .eq("fixed_asset_id", assetId)
+        .or(
+          `period_year.lt.${dispYear},and(period_year.eq.${dispYear},period_month.lt.${dispMonth})`
+        )
+        .order("period_year", { ascending: false })
+        .order("period_month", { ascending: false })
+        .limit(1),
+      supabase
+        .from("fixed_asset_depreciation")
+        .select("tax_accumulated")
+        .eq("fixed_asset_id", assetId)
+        .or(
+          `period_year.lt.${dispYear},and(period_year.eq.${dispYear},period_month.lte.${dispMonth})`
+        )
+        .order("period_year", { ascending: false })
+        .order("period_month", { ascending: false })
+        .limit(1),
+    ]);
+
+    const atDisposalBookAccum =
+      priorBookRes.data && priorBookRes.data.length > 0
+        ? Number(priorBookRes.data[0].book_accumulated)
+        : asset.book_accumulated_depreciation;
+    const atDisposalTaxAccum =
+      priorTaxRes.data && priorTaxRes.data.length > 0
+        ? Number(priorTaxRes.data[0].tax_accumulated)
+        : asset.tax_accumulated_depreciation;
+
     const { bookGainLoss, taxGainLoss } = calculateDispositionGainLoss(
       asset.acquisition_cost,
-      asset.book_accumulated_depreciation,
+      atDisposalBookAccum,
       asset.book_salvage_value,
       taxBasis,
-      asset.tax_accumulated_depreciation,
+      atDisposalTaxAccum,
       salePrice
     );
 
@@ -467,11 +504,29 @@ export default function AssetDetailPage() {
 
     if (error) {
       toast.error(error.message);
-    } else {
-      toast.success("Asset disposed");
-      setDisposeOpen(false);
-      loadData();
+      setDisposing(false);
+      return;
     }
+
+    // Zero book depreciation in the disposal month (tax stays), then delete
+    // any rows strictly after disposal.
+    await supabase
+      .from("fixed_asset_depreciation")
+      .update({ book_depreciation: 0, book_accumulated: atDisposalBookAccum })
+      .eq("fixed_asset_id", assetId)
+      .eq("period_year", dispYear)
+      .eq("period_month", dispMonth);
+    await supabase
+      .from("fixed_asset_depreciation")
+      .delete()
+      .eq("fixed_asset_id", assetId)
+      .or(
+        `period_year.gt.${dispYear},and(period_year.eq.${dispYear},period_month.gt.${dispMonth})`
+      );
+
+    toast.success("Asset disposed");
+    setDisposeOpen(false);
+    loadData();
     setDisposing(false);
   }
 

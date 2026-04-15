@@ -257,6 +257,7 @@ export async function POST(request: NextRequest) {
       tax_useful_life_months: taxUsefulLifeMonths,
       section_179_amount: section179,
       bonus_depreciation_amount: bonusDepr,
+      disposed_date: null,
     };
 
     // An asset placed in service on or before the opening date is an "existing"

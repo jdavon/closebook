@@ -221,6 +221,7 @@ export default function NewAssetPage() {
           : null,
         section_179_amount: parseFloat(section179) || 0,
         bonus_depreciation_amount: parseFloat(bonusDepr) || 0,
+        disposed_date: null,
       },
       currentPeriod.year,
       currentPeriod.month

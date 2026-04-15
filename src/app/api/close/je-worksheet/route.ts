@@ -122,6 +122,7 @@ async function computeDepreciationEntries(
       tax_useful_life_months: asset.tax_useful_life_months,
       section_179_amount: Number(asset.section_179_amount ?? 0),
       bonus_depreciation_amount: Number(asset.bonus_depreciation_amount ?? 0),
+      disposed_date: asset.disposed_date,
     };
 
     const monthlyDepr = calculateMonthlyBookDepreciation(assetData, periodYear, periodMonth);

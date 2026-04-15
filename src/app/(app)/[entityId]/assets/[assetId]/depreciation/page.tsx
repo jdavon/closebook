@@ -58,6 +58,7 @@ interface AssetSummary {
   section_179_amount: number;
   bonus_depreciation_amount: number;
   status: string;
+  disposed_date: string | null;
 }
 
 export default function DepreciationSchedulePage() {
@@ -78,7 +79,7 @@ export default function DepreciationSchedulePage() {
       supabase
         .from("fixed_assets")
         .select(
-          "id, asset_name, acquisition_cost, in_service_date, book_useful_life_months, book_salvage_value, book_depreciation_method, book_accumulated_depreciation, tax_cost_basis, tax_depreciation_method, tax_useful_life_months, tax_accumulated_depreciation, section_179_amount, bonus_depreciation_amount, status"
+          "id, asset_name, acquisition_cost, in_service_date, book_useful_life_months, book_salvage_value, book_depreciation_method, book_accumulated_depreciation, tax_cost_basis, tax_depreciation_method, tax_useful_life_months, tax_accumulated_depreciation, section_179_amount, bonus_depreciation_amount, status, disposed_date"
         )
         .eq("id", assetId)
         .single(),
@@ -122,6 +123,7 @@ export default function DepreciationSchedulePage() {
       tax_useful_life_months: asset.tax_useful_life_months,
       section_179_amount: asset.section_179_amount,
       bonus_depreciation_amount: asset.bonus_depreciation_amount,
+      disposed_date: asset.disposed_date,
     };
 
     // Read the opening balance from the subledger row at the opening
