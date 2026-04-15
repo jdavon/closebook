@@ -88,34 +88,33 @@ function monthlyBookDepr(asset, y, m) {
 function runSchedule(a, throughY, throughM, mode) {
   const calc = resolveAssetForCalc(a);
   const opening = openingMap[a.id] ?? 0;
-  let bookAccum = opening;
+  // Effective ceiling — freeze at opening if it's above the rule ceiling.
+  const ruleCeiling = calc.acquisition_cost - calc.book_salvage_value;
+  const ceiling = mode === "freeze" ? Math.max(ruleCeiling, opening) : ruleCeiling;
+  let bookAccum = 0;
   const ins = parse(a.in_service_date);
   let cy = ins.y, cm = ins.m;
   const entries = {};
   let emitting = false, openingApplied = false;
   while (cy < throughY || (cy === throughY && cm <= throughM)) {
     const rawDepr = monthlyBookDepr(calc, cy, cm);
-    let delta = 0;
+    let baseline = bookAccum;
     if (!openingApplied) {
       if (cy > 2024 || (cy === 2024 && cm >= 13)) {
         bookAccum = opening + rawDepr;
+        baseline = opening;
         openingApplied = true; emitting = true;
-        delta = rawDepr;
       }
     } else {
       bookAccum += rawDepr;
-      delta = rawDepr;
     }
     if (emitting) {
-      const before = bookAccum;
-      bookAccum = Math.min(bookAccum, calc.acquisition_cost - calc.book_salvage_value);
-      if (bookAccum < before) delta -= (before - bookAccum);
-      // Allow negative delta — reflects a reversal when opening was above
-      // the new rule's salvage cap.
+      bookAccum = Math.min(bookAccum, ceiling);
+      const delta = bookAccum - baseline;
       entries[monthKey(cy, cm)] = {
-        book_depreciation: mode === "fixed"
-          ? Math.round(delta * 100) / 100
-          : Math.round(rawDepr * 100) / 100,
+        book_depreciation: mode === "buggy"
+          ? Math.round(rawDepr * 100) / 100
+          : Math.round(delta * 100) / 100,
         book_accumulated: Math.round(bookAccum * 100) / 100,
       };
     }
@@ -223,8 +222,8 @@ console.log(`  Jan: beg=${buggy.jan.beg.toFixed(2)} + depr=${buggy.jan.depr.toFi
 console.log(`  Feb: beg=${buggy.feb.beg.toFixed(2)} + depr=${buggy.feb.depr.toFixed(2)} - disp=${buggy.feb.dispAccum.toFixed(2)} = end=${buggy.feb.end.toFixed(2)}`);
 console.log(`  Jan-end vs Feb-beg delta: ${(buggy.jan.end - buggy.feb.beg).toFixed(2)}`);
 
-console.log("\nMODE: FIXED (depr clamped to actual cap-adjusted delta)");
-const fixed = computeRF("fixed");
-console.log(`  Jan: beg=${fixed.jan.beg.toFixed(2)} + depr=${fixed.jan.depr.toFixed(2)} - disp=${fixed.jan.dispAccum.toFixed(2)} = end=${fixed.jan.end.toFixed(2)}`);
-console.log(`  Feb: beg=${fixed.feb.beg.toFixed(2)} + depr=${fixed.feb.depr.toFixed(2)} - disp=${fixed.feb.dispAccum.toFixed(2)} = end=${fixed.feb.end.toFixed(2)}`);
-console.log(`  Jan-end vs Feb-beg delta: ${(fixed.jan.end - fixed.feb.beg).toFixed(2)}`);
+console.log("\nMODE: FREEZE (effective ceiling = max(rule ceiling, opening))");
+const frozen = computeRF("freeze");
+console.log(`  Jan: beg=${frozen.jan.beg.toFixed(2)} + depr=${frozen.jan.depr.toFixed(2)} - disp=${frozen.jan.dispAccum.toFixed(2)} = end=${frozen.jan.end.toFixed(2)}`);
+console.log(`  Feb: beg=${frozen.feb.beg.toFixed(2)} + depr=${frozen.feb.depr.toFixed(2)} - disp=${frozen.feb.dispAccum.toFixed(2)} = end=${frozen.feb.end.toFixed(2)}`);
+console.log(`  Jan-end vs Feb-beg delta: ${(frozen.jan.end - frozen.feb.beg).toFixed(2)}`);

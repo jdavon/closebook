@@ -268,6 +268,16 @@ export function generateDepreciationSchedule(
   const inService = parseDate(asset.in_service_date);
   const taxBasis = asset.tax_cost_basis ?? asset.acquisition_cost;
 
+  // Effective ceiling — never let the cap pull accumulated BELOW the opening
+  // balance. If a historical opening was imported above (cost − salvage), we
+  // freeze accumulated at that opening rather than reversing the excess.
+  // Subsequent periods emit book_depreciation = 0 as long as the freeze holds.
+  const bookCeiling = Math.max(
+    asset.acquisition_cost - asset.book_salvage_value,
+    opening?.openingBookAccum ?? 0
+  );
+  const taxCeiling = Math.max(taxBasis, opening?.openingTaxAccum ?? 0);
+
   let bookAccum = 0;
   let taxAccum = 0;
   let cy = inService.year;
@@ -283,14 +293,11 @@ export function generateDepreciationSchedule(
     const rawBookDepr = calculateMonthlyBookDepreciation(asset, cy, cm);
     const rawTaxDepr = calculateMonthlyTaxDepreciation(asset, cy, cm);
 
-    // Baseline used to compute emitted depreciation as the change in
-    // accumulated. For a normal month: prior bookAccum. For the opening
-    // emit: the pinned opening balance (so depreciation is just this
-    // month's contribution). This keeps the roll-forward identity
-    // `ending = beginning + depreciation − disposals` consistent even
-    // when a historical opening exceeds the new rule's salvage cap —
-    // in that case, depreciation is negative in the first emitted period,
-    // representing a one-time reversal of over-accumulated depreciation.
+    // Baseline for computing emitted depreciation as the change in
+    // accumulated. Normal month: prior bookAccum. Opening emit: the pinned
+    // opening balance (so depreciation reflects only this month's
+    // contribution). Keeps the roll-forward identity
+    // `ending = beginning + depreciation − disposals` balanced.
     let bookBaseline = bookAccum;
     let taxBaseline = taxAccum;
 
@@ -309,8 +316,8 @@ export function generateDepreciationSchedule(
     }
 
     if (emitting) {
-      bookAccum = Math.min(bookAccum, asset.acquisition_cost - asset.book_salvage_value);
-      taxAccum = Math.min(taxAccum, taxBasis);
+      bookAccum = Math.min(bookAccum, bookCeiling);
+      taxAccum = Math.min(taxAccum, taxCeiling);
 
       const emittedBookDepr = bookAccum - bookBaseline;
       const emittedTaxDepr = taxAccum - taxBaseline;
