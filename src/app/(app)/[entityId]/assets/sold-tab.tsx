@@ -245,13 +245,6 @@ export function SoldTab({ entityId }: SoldTabProps) {
           total: "sum",
           value: (r) => Number(r.disposed_book_gain_loss ?? 0) || 0,
         },
-        {
-          header: "Tax Gain/(Loss)",
-          width: 18,
-          format: NUMBER_FORMATS.currency,
-          total: "sum",
-          value: (r) => Number(r.disposed_tax_gain_loss ?? 0) || 0,
-        },
       ];
 
       const wb = createWorkbook({
