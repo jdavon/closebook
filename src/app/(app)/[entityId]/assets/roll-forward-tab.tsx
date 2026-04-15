@@ -718,7 +718,7 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
     { key: "endingCost", label: "Ending Cost", bold: true },
     { key: "sep", label: "", separator: true },
     { key: "beginningAccum", label: "Beginning Accum. Depreciation", negative: true },
-    { key: "depreciation", label: "+ Depreciation", paren: true },
+    { key: "depreciation", label: "+ Depreciation", negative: true },
     {
       key: "disposalsAccum",
       // Disposals reduce the contra-asset accumulated-depr balance — they're
@@ -800,7 +800,7 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
         {
           key: "depreciation",
           label: "+ Depreciation",
-          presentation: "parenNegative",
+          presentation: "parenNegativeRed",
         },
         {
           key: "disposalsAccum",
