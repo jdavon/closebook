@@ -439,7 +439,7 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
 
     const { data: userData } = await supabase.auth.getUser();
 
-    await supabase.from("asset_reconciliations").upsert(
+    const { error } = await supabase.from("asset_reconciliations").upsert(
       {
         entity_id: entityId,
         period_year: periodYear,
@@ -457,6 +457,11 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
     );
 
     setSaving(null);
+    if (error) {
+      toast.error(`Failed to mark reconciled: ${error.message}`);
+      return;
+    }
+    toast.success("Marked reconciled");
     loadData();
   };
 
@@ -464,7 +469,7 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
     setSaving(groupKey);
     const recon = reconciliations[groupKey];
     if (recon) {
-      await supabase
+      const { error } = await supabase
         .from("asset_reconciliations")
         .update({
           is_reconciled: false,
@@ -472,8 +477,15 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
           reconciled_by: null,
         })
         .eq("id", recon.id);
+      setSaving(null);
+      if (error) {
+        toast.error(`Failed to unreconcile: ${error.message}`);
+        return;
+      }
+      toast.success("Unreconciled");
+    } else {
+      setSaving(null);
     }
-    setSaving(null);
     loadData();
   };
 
