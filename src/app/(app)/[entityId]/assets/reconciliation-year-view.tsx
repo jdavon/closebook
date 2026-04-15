@@ -31,10 +31,17 @@ import { formatCurrency } from "@/lib/utils/dates";
 import { RECON_GROUPS } from "@/lib/utils/asset-gl-groups";
 import {
   getEffectiveMasterType,
+  getReportingGroup,
   customRowsToClassifications,
   type VehicleClassification,
   type CustomVehicleClassRow,
 } from "@/lib/utils/vehicle-classification";
+import {
+  generateDepreciationSchedule,
+  buildOpeningBalance,
+  type AssetForDepreciation,
+} from "@/lib/utils/depreciation";
+import type { DepreciationRule } from "./depreciation-rules-settings";
 
 type CellStatus =
   | "reconciled"
@@ -56,6 +63,9 @@ interface AssetRow {
   vehicle_class: string | null;
   in_service_date: string | null;
   acquisition_cost: number;
+  book_useful_life_months: number;
+  book_salvage_value: number;
+  book_depreciation_method: string;
   book_accumulated_depreciation: number;
   book_net_value: number;
   status: string;
@@ -116,21 +126,24 @@ export function ReconciliationYearView({
     setLoading(true);
 
     // Parallel-fetch everything we need for the entity/year
-    const [linksRes, classesRes, assetsRes, reconsRes] = await Promise.all([
-      fetch(`/api/assets/recon-links?entityId=${entityId}`),
-      fetch(`/api/assets/classes?entityId=${entityId}`),
-      supabase
-        .from("fixed_assets")
-        .select(
-          "id, vehicle_class, in_service_date, acquisition_cost, book_accumulated_depreciation, book_net_value, status, disposed_date, cost_account_id, accum_depr_account_id, master_type_override"
-        )
-        .eq("entity_id", entityId),
-      supabase
-        .from("asset_reconciliations")
-        .select("gl_account_group, period_month, is_reconciled")
-        .eq("entity_id", entityId)
-        .eq("period_year", year),
-    ]);
+    const [linksRes, classesRes, assetsRes, reconsRes, rulesRes, settingsRes] =
+      await Promise.all([
+        fetch(`/api/assets/recon-links?entityId=${entityId}`),
+        fetch(`/api/assets/classes?entityId=${entityId}`),
+        supabase
+          .from("fixed_assets")
+          .select(
+            "id, vehicle_class, in_service_date, acquisition_cost, book_useful_life_months, book_salvage_value, book_depreciation_method, book_accumulated_depreciation, book_net_value, status, disposed_date, cost_account_id, accum_depr_account_id, master_type_override"
+          )
+          .eq("entity_id", entityId),
+        supabase
+          .from("asset_reconciliations")
+          .select("gl_account_group, period_month, is_reconciled")
+          .eq("entity_id", entityId)
+          .eq("period_year", year),
+        fetch(`/api/assets/depreciation-rules?entityId=${entityId}`),
+        fetch(`/api/assets/settings?entityId=${entityId}`),
+      ]);
 
     // -- account → recon_group mappings
     const linkRows: Array<{ recon_group: string; account_id: string }> =
@@ -159,23 +172,117 @@ export function ReconciliationYearView({
     const assets: AssetRow[] = (assetsRes.data ?? []) as AssetRow[];
     const allAccountIds = Object.keys(accountToGroup);
 
-    // -- depreciation entries for all 12 months, all assets, this year
-    const deprByAssetMonth: Record<string, Record<number, DeprRow>> = {};
-    if (assets.length > 0) {
+    // Rules + opening date — same inputs the Roll-Forward and monthly
+    // Reconciliation tabs use. Subledger is ignored; accumulated for each
+    // (asset, month) is computed in-memory so the year view can't drift
+    // from the monthly view just because the subledger is stale.
+    const rules: DepreciationRule[] = rulesRes.ok ? await rulesRes.json() : [];
+    const rulesMap = new Map<string, DepreciationRule>();
+    for (const r of rules) rulesMap.set(r.reporting_group, r);
+
+    const settings = settingsRes.ok ? await settingsRes.json() : null;
+    const openingDateIso: string | null =
+      (settings as { rental_asset_opening_date?: string } | null)
+        ?.rental_asset_opening_date ?? null;
+    const [openY, openM] = openingDateIso
+      ? openingDateIso.split("-").map(Number)
+      : [0, 0];
+
+    // -- pinned opening balance per asset (is_manual_override row at opening)
+    const openingMap: Record<string, { book: number; tax: number }> = {};
+    if (openingDateIso && assets.length > 0) {
       const assetIds = assets.map((a) => a.id);
       for (let i = 0; i < assetIds.length; i += 500) {
         const batch = assetIds.slice(i, i + 500);
-        const { data } = await supabase
+        const { data: opRows } = await supabase
           .from("fixed_asset_depreciation")
-          .select("fixed_asset_id, period_month, book_accumulated")
-          .eq("period_year", year)
-          .in("fixed_asset_id", batch);
-        for (const d of (data ?? []) as DeprRow[]) {
-          if (!deprByAssetMonth[d.fixed_asset_id])
-            deprByAssetMonth[d.fixed_asset_id] = {};
-          deprByAssetMonth[d.fixed_asset_id][d.period_month] = d;
+          .select("fixed_asset_id, book_accumulated, tax_accumulated")
+          .in("fixed_asset_id", batch)
+          .eq("period_year", openY)
+          .eq("period_month", openM)
+          .eq("is_manual_override", true);
+        for (const r of (opRows ?? []) as {
+          fixed_asset_id: string;
+          book_accumulated: number | string;
+          tax_accumulated: number | string;
+        }[]) {
+          openingMap[r.fixed_asset_id] = {
+            book: Number(r.book_accumulated) || 0,
+            tax: Number(r.tax_accumulated) || 0,
+          };
         }
       }
+    }
+
+    // -- build per-asset rule-driven schedule through Dec of the target year
+    const deprByAssetMonth: Record<string, Record<number, DeprRow>> = {};
+    for (const asset of assets) {
+      if (!asset.in_service_date) continue;
+      const group = getReportingGroup(asset.vehicle_class, customClasses);
+      const rule = group ? rulesMap.get(group) : undefined;
+      const ruleSalvagePct = rule?.book_salvage_pct ?? null;
+      const ruleSalvage =
+        ruleSalvagePct != null && ruleSalvagePct >= 0
+          ? Math.round(
+              asset.acquisition_cost * (Number(ruleSalvagePct) / 100) * 100
+            ) / 100
+          : null;
+      const ul =
+        rule?.book_useful_life_months != null && rule.book_useful_life_months > 0
+          ? rule.book_useful_life_months
+          : asset.book_useful_life_months;
+      const salvage =
+        ruleSalvage != null ? ruleSalvage : asset.book_salvage_value;
+      const method =
+        rule?.book_depreciation_method ?? asset.book_depreciation_method;
+
+      const assetForCalc: AssetForDepreciation = {
+        acquisition_cost: asset.acquisition_cost,
+        in_service_date: asset.in_service_date,
+        book_useful_life_months: ul,
+        book_salvage_value: salvage,
+        book_depreciation_method: method,
+        tax_cost_basis: null,
+        tax_depreciation_method: "none",
+        tax_useful_life_months: null,
+        section_179_amount: 0,
+        bonus_depreciation_amount: 0,
+        disposed_date: asset.disposed_date,
+      };
+
+      const op = openingMap[asset.id];
+      const opening = openingDateIso
+        ? buildOpeningBalance(openingDateIso, op?.book ?? 0, op?.tax ?? 0)
+        : undefined;
+
+      const schedule = generateDepreciationSchedule(
+        assetForCalc,
+        year,
+        12,
+        opening
+      );
+
+      const byMonth: Record<number, DeprRow> = {};
+      for (const e of schedule) {
+        if (e.period_year === year) {
+          byMonth[e.period_month] = {
+            fixed_asset_id: asset.id,
+            period_month: e.period_month,
+            book_accumulated: e.book_accumulated,
+          };
+        }
+      }
+      // Opening period isn't emitted by the schedule — seed it from the
+      // pinned opening balance so a year view that includes the opening
+      // month shows the correct accumulated.
+      if (openingDateIso && year === openY && op) {
+        byMonth[openM] = {
+          fixed_asset_id: asset.id,
+          period_month: openM,
+          book_accumulated: op.book,
+        };
+      }
+      deprByAssetMonth[asset.id] = byMonth;
     }
 
     // -- GL balances for mapped accounts, all 12 months
