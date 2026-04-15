@@ -44,6 +44,7 @@ import {
   UNALLOCATED_KEY,
   type ReconGroup,
 } from "@/lib/utils/asset-gl-groups";
+import { ReconciliationYearView } from "./reconciliation-year-view";
 import {
   getEffectiveMasterType,
   getVehicleClassification,
@@ -126,6 +127,7 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
   const now = new Date();
   const [periodYear, setPeriodYear] = useState(now.getFullYear());
   const [periodMonth, setPeriodMonth] = useState(now.getMonth() + 1);
+  const [viewMode, setViewMode] = useState<"month" | "year">("month");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<string | null>(null);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
@@ -382,8 +384,10 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
   }, [supabase, entityId, periodYear, periodMonth]);
 
   useEffect(() => {
-    loadData();
-  }, [loadData]);
+    if (viewMode === "month") {
+      loadData();
+    }
+  }, [loadData, viewMode]);
 
   // -- Account linking (same pattern as debt reconciliation) --
 
@@ -1050,6 +1054,45 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
 
   return (
     <div className="space-y-6">
+      {/* View Toggle */}
+      <div className="inline-flex items-center rounded-lg border p-1 bg-muted/30">
+        <button
+          type="button"
+          onClick={() => setViewMode("month")}
+          className={`px-3 py-1 text-sm rounded-md transition-colors ${
+            viewMode === "month"
+              ? "bg-background shadow-sm font-medium"
+              : "text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          Month View
+        </button>
+        <button
+          type="button"
+          onClick={() => setViewMode("year")}
+          className={`px-3 py-1 text-sm rounded-md transition-colors ${
+            viewMode === "year"
+              ? "bg-background shadow-sm font-medium"
+              : "text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          Year View
+        </button>
+      </div>
+
+      {viewMode === "year" ? (
+        <ReconciliationYearView
+          entityId={entityId}
+          year={periodYear}
+          onYearChange={setPeriodYear}
+          onJumpToMonth={(y, m) => {
+            setPeriodYear(y);
+            setPeriodMonth(m);
+            setViewMode("month");
+          }}
+        />
+      ) : (
+        <>
       {/* Period Selector */}
       <div className="flex items-center justify-between gap-4">
         <div className="flex items-center gap-2">
@@ -1360,6 +1403,8 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
             );
           })()}
         </div>
+      )}
+        </>
       )}
     </div>
   );
