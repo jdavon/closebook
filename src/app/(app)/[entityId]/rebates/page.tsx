@@ -89,7 +89,8 @@ interface RebateTier {
 interface QuarterlySummary {
   id: string;
   quarter: string;
-  total_revenue: number;
+  total_revenue: number;       // rebate-applicable revenue (sum of final_amount)
+  total_list_revenue: number;  // all revenue generated (sum of list_total)
   total_rebate: number;
   invoice_count: number;
   tier_label: string | null;
@@ -591,12 +592,13 @@ export default function RebateTrackerPage({ entityId: entityIdProp, isEmbed, emb
 
   const selectedYear = parseInt(selectedQuarter.split(" ")[0]);
 
-  // Compute totals from quarterly summaries
+  // Revenue displays on this page show ALL revenue generated (list_total),
+  // not just rebate-applicable revenue. Rebate columns still use total_rebate.
   const getCustomerYTDRevenue = (customerId: string) => {
     const sums = quarterlySummaries[customerId] || [];
     return sums
       .filter((s) => s.quarter.startsWith(String(selectedYear)))
-      .reduce((total, s) => total + (s.total_revenue || 0), 0);
+      .reduce((total, s) => total + (s.total_list_revenue || 0), 0);
   };
 
   const getCustomerYTDRebate = (customerId: string) => {
@@ -609,7 +611,7 @@ export default function RebateTrackerPage({ entityId: entityIdProp, isEmbed, emb
   const getCustomerQtrRevenue = (customerId: string) => {
     const sums = quarterlySummaries[customerId] || [];
     const qtr = sums.find((s) => s.quarter === selectedQuarter);
-    return qtr?.total_revenue || 0;
+    return qtr?.total_list_revenue || 0;
   };
 
   const getCustomerQtrRebate = (customerId: string) => {
@@ -620,7 +622,7 @@ export default function RebateTrackerPage({ entityId: entityIdProp, isEmbed, emb
 
   const getCustomerTotalRevenue = (customerId: string) => {
     const sums = quarterlySummaries[customerId] || [];
-    return sums.reduce((total, s) => total + (s.total_revenue || 0), 0);
+    return sums.reduce((total, s) => total + (s.total_list_revenue || 0), 0);
   };
 
   const totalYTDRevenue = customers.reduce(

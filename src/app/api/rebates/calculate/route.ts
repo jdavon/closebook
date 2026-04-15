@@ -235,6 +235,7 @@ async function calculateForCustomer(
         year: qs.year,
         quarter_num: qs.quarter_num,
         total_revenue: qs.total_revenue,
+        total_list_revenue: qs.total_list_revenue,
         total_rebate: qs.total_rebate,
         invoice_count: qs.invoice_count,
         tier_label: qs.tier_label,

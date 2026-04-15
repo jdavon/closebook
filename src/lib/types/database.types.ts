@@ -3860,6 +3860,7 @@ export type Database = {
           year: number
           quarter_num: number
           total_revenue: number | null
+          total_list_revenue: number
           total_rebate: number | null
           invoice_count: number | null
           tier_label: string | null
@@ -3876,6 +3877,7 @@ export type Database = {
           year: number
           quarter_num: number
           total_revenue?: number | null
+          total_list_revenue?: number
           total_rebate?: number | null
           invoice_count?: number | null
           tier_label?: string | null
@@ -3892,6 +3894,7 @@ export type Database = {
           year?: number
           quarter_num?: number
           total_revenue?: number | null
+          total_list_revenue?: number
           total_rebate?: number | null
           invoice_count?: number | null
           tier_label?: string | null

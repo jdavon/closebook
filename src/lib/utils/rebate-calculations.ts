@@ -469,7 +469,8 @@ export interface QuarterlySummary {
   quarter: string;
   year: number;
   quarter_num: number;
-  total_revenue: number;
+  total_revenue: number;       // rebate-applicable: sum(final_amount) after exclusions, tax, discount
+  total_list_revenue: number;  // all revenue: sum(list_total), includes excluded invoices/items
   total_rebate: number;
   invoice_count: number;
   tier_label: string;
@@ -487,6 +488,7 @@ export function aggregateByQuarter(results: RebateCalculationResult[]): Quarterl
         year: parsed?.year ?? 0,
         quarter_num: parsed?.quarterNum ?? 0,
         total_revenue: 0,
+        total_list_revenue: 0,
         total_rebate: 0,
         invoice_count: 0,
         tier_label: r.tier_label,
@@ -494,6 +496,7 @@ export function aggregateByQuarter(results: RebateCalculationResult[]): Quarterl
     }
     const summary = map.get(q)!;
     summary.total_revenue += r.final_amount;
+    summary.total_list_revenue += r.list_total;
     summary.total_rebate += r.net_rebate;
     summary.invoice_count += 1;
     summary.tier_label = r.tier_label; // last invoice's tier
