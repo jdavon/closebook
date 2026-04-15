@@ -21,6 +21,16 @@ import {
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { ArrowRight, Car, Download, Search } from "lucide-react";
 import { formatCurrency } from "@/lib/utils/dates";
 import {
@@ -56,6 +66,9 @@ interface SoldAsset {
   acquisition_cost: number;
   book_accumulated_depreciation: number;
   book_net_value: number;
+  tax_cost_basis: number | null;
+  tax_accumulated_depreciation: number;
+  tax_net_value: number;
   disposed_date: string | null;
   disposed_sale_price: number | null;
   disposed_book_gain_loss: number | null;
@@ -75,12 +88,18 @@ export function SoldTab({ entityId }: SoldTabProps) {
   const [masterTypeFilter, setMasterTypeFilter] = useState("all");
   const [reportingGroupFilter, setReportingGroupFilter] = useState("all");
 
+  // Export wizard
+  const [exportOpen, setExportOpen] = useState(false);
+  const [exportMasterType, setExportMasterType] = useState<"all" | "Vehicle" | "Trailer">("all");
+  const [exportIncludeTax, setExportIncludeTax] = useState(false);
+  const [exporting, setExporting] = useState(false);
+
   const loadSoldAssets = useCallback(async () => {
     setLoading(true);
     const { data } = await supabase
       .from("fixed_assets")
       .select(
-        "id, asset_name, asset_tag, vehicle_year, vehicle_make, vehicle_model, vehicle_class, vin, acquisition_cost, book_accumulated_depreciation, book_net_value, disposed_date, disposed_sale_price, disposed_book_gain_loss, disposed_tax_gain_loss, disposed_buyer, master_type_override"
+        "id, asset_name, asset_tag, vehicle_year, vehicle_make, vehicle_model, vehicle_class, vin, acquisition_cost, book_accumulated_depreciation, book_net_value, tax_cost_basis, tax_accumulated_depreciation, tax_net_value, disposed_date, disposed_sale_price, disposed_book_gain_loss, disposed_tax_gain_loss, disposed_buyer, master_type_override"
       )
       .eq("entity_id", entityId)
       .eq("status", "disposed")
@@ -141,12 +160,35 @@ export function SoldTab({ entityId }: SoldTabProps) {
   // Year options: current year and 4 years back
   const yearOptions = Array.from({ length: 5 }, (_, i) => String(currentYear - i));
 
+  function openExportWizard() {
+    if (filteredAssets.length === 0) {
+      toast.error("No sold assets to export");
+      return;
+    }
+    setExportOpen(true);
+  }
+
   async function handleExportExcel() {
     if (filteredAssets.length === 0) {
       toast.error("No sold assets to export");
       return;
     }
+    setExporting(true);
     try {
+      // Scope filter — the on-screen filters still apply; this narrows
+      // further. "all" = Vehicles & Trailers.
+      const toExport = filteredAssets.filter((a) => {
+        if (exportMasterType === "all") return true;
+        const mt = getEffectiveMasterType(a.vehicle_class, a.master_type_override);
+        return mt === exportMasterType;
+      });
+
+      if (toExport.length === 0) {
+        toast.error("Nothing to export for the selected scope");
+        setExporting(false);
+        return;
+      }
+
       const { data: entityRow } = await supabase
         .from("entities")
         .select("name")
@@ -154,7 +196,7 @@ export function SoldTab({ entityId }: SoldTabProps) {
         .single();
       const entityName = (entityRow as { name?: string } | null)?.name ?? "";
 
-      type Row = (typeof filteredAssets)[number];
+      type Row = (typeof toExport)[number];
       const columns: ColumnDef<Row>[] = [
         {
           header: "Asset Tag",
@@ -247,6 +289,47 @@ export function SoldTab({ entityId }: SoldTabProps) {
         },
       ];
 
+      if (exportIncludeTax) {
+        columns.push(
+          {
+            header: "Tax Cost Basis",
+            width: 18,
+            format: NUMBER_FORMATS.currency,
+            total: "sum",
+            value: (r) =>
+              Number(r.tax_cost_basis ?? r.acquisition_cost) || 0,
+          },
+          {
+            header: "Tax Accum. Depreciation",
+            width: 20,
+            format: NUMBER_FORMATS.currency,
+            total: "sum",
+            value: (r) => Number(r.tax_accumulated_depreciation) || 0,
+          },
+          {
+            header: "Tax NBV at Sale",
+            width: 18,
+            format: NUMBER_FORMATS.currency,
+            total: "sum",
+            value: (r) => Number(r.tax_net_value) || 0,
+          },
+          {
+            header: "Tax Gain/(Loss)",
+            width: 18,
+            format: NUMBER_FORMATS.currency,
+            total: "sum",
+            value: (r) => Number(r.disposed_tax_gain_loss ?? 0) || 0,
+          }
+        );
+      }
+
+      const scopeLabel =
+        exportMasterType === "Vehicle"
+          ? "Vehicles"
+          : exportMasterType === "Trailer"
+            ? "Trailers"
+            : "Vehicles & Trailers";
+
       const wb = createWorkbook({
         company: entityName,
         title: `Disposed Assets — ${year}`,
@@ -254,11 +337,11 @@ export function SoldTab({ entityId }: SoldTabProps) {
       addSheet(wb, {
         name: "Disposed Assets",
         columns,
-        rows: filteredAssets,
+        rows: toExport,
         title: {
           entityName,
           reportTitle: "Disposed Assets Schedule",
-          subtitle: "Rental Fleet — Vehicles & Trailers",
+          subtitle: `Rental Fleet — ${scopeLabel}`,
           period: `Year Ended December 31, ${year}`,
           asOf: `Generated ${formatLongDate(new Date().toISOString().slice(0, 10))}`,
         },
@@ -269,7 +352,7 @@ export function SoldTab({ entityId }: SoldTabProps) {
           (b.disposed_date ?? "").localeCompare(a.disposed_date ?? ""),
         grandTotal: true,
         footnote:
-          "Gain/(loss) computed as Sale Price less Book (or Tax) Net Book Value at disposal.",
+          "Gain/(loss) computed as Sale Price less Net Book Value at disposal.",
       });
 
       await downloadWorkbook(
@@ -277,9 +360,12 @@ export function SoldTab({ entityId }: SoldTabProps) {
         `disposed-assets-${year}-${entityId.slice(0, 8)}`
       );
       toast.success("Excel export downloaded");
+      setExportOpen(false);
     } catch (err) {
       console.error(err);
       toast.error("Failed to export Excel");
+    } finally {
+      setExporting(false);
     }
   }
 
@@ -374,13 +460,77 @@ export function SoldTab({ entityId }: SoldTabProps) {
         <Button
           variant="outline"
           className="ml-auto"
-          onClick={handleExportExcel}
+          onClick={openExportWizard}
           disabled={filteredAssets.length === 0}
         >
           <Download className="mr-2 h-4 w-4" />
           Export Excel
         </Button>
       </div>
+
+      <Dialog open={exportOpen} onOpenChange={setExportOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Export Sold Assets</DialogTitle>
+            <DialogDescription>
+              Choose the scope and whether to include tax-basis columns.
+              On-screen search and filters are still applied.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            <div className="space-y-1.5">
+              <Label>Scope</Label>
+              <Select
+                value={exportMasterType}
+                onValueChange={(v: "all" | "Vehicle" | "Trailer") =>
+                  setExportMasterType(v)
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Vehicles & Trailers (default)</SelectItem>
+                  <SelectItem value="Vehicle">Vehicles only</SelectItem>
+                  <SelectItem value="Trailer">Trailers only</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="flex items-start gap-2">
+              <Checkbox
+                id="export-include-tax"
+                checked={exportIncludeTax}
+                onCheckedChange={(c) => setExportIncludeTax(c === true)}
+              />
+              <div className="grid gap-0.5 leading-none">
+                <Label htmlFor="export-include-tax" className="cursor-pointer">
+                  Include tax basis columns
+                </Label>
+                <p className="text-xs text-muted-foreground">
+                  Adds Tax Cost Basis, Tax Accum. Depreciation, Tax NBV at Sale,
+                  and Tax Gain/(Loss). Off by default.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="ghost"
+              onClick={() => setExportOpen(false)}
+              disabled={exporting}
+            >
+              Cancel
+            </Button>
+            <Button onClick={handleExportExcel} disabled={exporting}>
+              <Download className="mr-2 h-4 w-4" />
+              {exporting ? "Generating..." : "Download"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Sold Assets Table */}
       <Card>
