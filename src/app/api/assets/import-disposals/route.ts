@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { calculateDispositionGainLoss } from "@/lib/utils/depreciation";
+import { regenerateAssetSchedule } from "@/lib/utils/depreciation-regenerate";
+import { getCurrentPeriod } from "@/lib/utils/dates";
 
 interface DisposalImportRow {
   asset_tag: string;
@@ -215,23 +217,20 @@ export async function POST(request: NextRequest) {
       continue;
     }
 
-    // Zero out book depreciation in the disposal month (tax stays — MACRS
-    // accrues through the disposal month), then delete any rows strictly
-    // after disposal so post-sale expense doesn't feed the roll-forward or
-    // JE worksheet.
-    await supabase
-      .from("fixed_asset_depreciation")
-      .update({ book_depreciation: 0, book_accumulated: atDisposalBookAccum })
-      .eq("fixed_asset_id", asset.id)
-      .eq("period_year", dispYear)
-      .eq("period_month", dispMonth);
-    await supabase
-      .from("fixed_asset_depreciation")
-      .delete()
-      .eq("fixed_asset_id", asset.id)
-      .or(
-        `period_year.gt.${dispYear},and(period_year.eq.${dispYear},period_month.gt.${dispMonth})`
+    // Rebuild the subledger. Schedule stops emitting after the disposal
+    // month (book_depreciation=0 in that month); no manual zero/delete needed.
+    const cp = getCurrentPeriod();
+    const regen = await regenerateAssetSchedule(
+      supabase,
+      asset.id,
+      cp.year,
+      cp.month
+    );
+    if (!regen.ok) {
+      results.errors.push(
+        `Row ${rowNum} (${assetTag}): disposed, but schedule regenerate failed — ${regen.error}`
       );
+    }
 
     results.updated++;
   }

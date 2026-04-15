@@ -55,8 +55,9 @@ import {
   FileText,
   RotateCcw,
 } from "lucide-react";
-import { formatCurrency } from "@/lib/utils/dates";
+import { formatCurrency, getCurrentPeriod } from "@/lib/utils/dates";
 import { calculateDispositionGainLoss } from "@/lib/utils/depreciation";
+import { regenerateAssetSchedule } from "@/lib/utils/depreciation-regenerate";
 import {
   getVehicleClassification,
   getClassesGroupedByMasterType,
@@ -521,23 +522,16 @@ export default function AssetDetailPage() {
       return;
     }
 
-    // Zero book depreciation in the disposal month (tax stays), then delete
-    // any rows strictly after disposal.
-    await supabase
-      .from("fixed_asset_depreciation")
-      .update({ book_depreciation: 0, book_accumulated: atDisposalBookAccum })
-      .eq("fixed_asset_id", assetId)
-      .eq("period_year", dispYear)
-      .eq("period_month", dispMonth);
-    await supabase
-      .from("fixed_asset_depreciation")
-      .delete()
-      .eq("fixed_asset_id", assetId)
-      .or(
-        `period_year.gt.${dispYear},and(period_year.eq.${dispYear},period_month.gt.${dispMonth})`
-      );
+    // Rebuild the subledger. Schedule stops emitting after the disposal
+    // month (book_depreciation=0 in that month); no manual zero/delete needed.
+    const cp = getCurrentPeriod();
+    const regen = await regenerateAssetSchedule(supabase, assetId, cp.year, cp.month);
+    if (!regen.ok) {
+      toast.error(`Disposed, but schedule regenerate failed: ${regen.error}`);
+    } else {
+      toast.success("Asset disposed");
+    }
 
-    toast.success("Asset disposed");
     setDisposeOpen(false);
     loadData();
     setDisposing(false);
@@ -546,15 +540,6 @@ export default function AssetDetailPage() {
   async function handleUndoDispose() {
     if (!asset || !asset.disposed_date) return;
     setUndoing(true);
-
-    // The disposal-month book row was zeroed on disposal; delete it so a
-    // schedule regenerate can rebuild book depreciation from that month
-    // forward. Tax rows past disposal were deleted on disposal and will be
-    // regenerated too.
-    const [dispYear, dispMonth] = asset.disposed_date
-      .split("T")[0]
-      .split("-")
-      .map(Number);
 
     const { error } = await supabase
       .from("fixed_assets")
@@ -575,16 +560,16 @@ export default function AssetDetailPage() {
       return;
     }
 
-    await supabase
-      .from("fixed_asset_depreciation")
-      .delete()
-      .eq("fixed_asset_id", assetId)
-      .eq("period_year", dispYear)
-      .eq("period_month", dispMonth);
+    // Regenerate the full subledger now that disposed_date is null — the
+    // schedule runs from opening through current period.
+    const cp = getCurrentPeriod();
+    const regen = await regenerateAssetSchedule(supabase, assetId, cp.year, cp.month);
+    if (!regen.ok) {
+      toast.error(`Sale reversed, but schedule regenerate failed: ${regen.error}`);
+    } else {
+      toast.success("Sale reversed — depreciation rebuilt from opening forward.");
+    }
 
-    toast.success(
-      "Sale reversed — regenerate the depreciation schedule to rebuild months from disposal forward."
-    );
     setUndoOpen(false);
     loadData();
     setUndoing(false);
