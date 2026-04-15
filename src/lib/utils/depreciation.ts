@@ -280,36 +280,48 @@ export function generateDepreciationSchedule(
   let openingApplied = false;
 
   while (cy < throughYear || (cy === throughYear && cm <= throughMonth)) {
-    const bookDepr = calculateMonthlyBookDepreciation(asset, cy, cm);
-    const taxDepr = calculateMonthlyTaxDepreciation(asset, cy, cm);
+    const rawBookDepr = calculateMonthlyBookDepreciation(asset, cy, cm);
+    const rawTaxDepr = calculateMonthlyTaxDepreciation(asset, cy, cm);
+
+    // Baseline used to compute emitted depreciation as the change in
+    // accumulated. For a normal month: prior bookAccum. For the opening
+    // emit: the pinned opening balance (so depreciation is just this
+    // month's contribution). This keeps the roll-forward identity
+    // `ending = beginning + depreciation − disposals` consistent even
+    // when a historical opening exceeds the new rule's salvage cap —
+    // in that case, depreciation is negative in the first emitted period,
+    // representing a one-time reversal of over-accumulated depreciation.
+    let bookBaseline = bookAccum;
+    let taxBaseline = taxAccum;
 
     if (opening && !openingApplied) {
-      // Check if we've reached the opening period
       if (cy > opening.fromYear || (cy === opening.fromYear && cm >= opening.fromMonth)) {
-        // Reset accumulated to the imported opening balance, then add this month
-        bookAccum = opening.openingBookAccum + bookDepr;
-        taxAccum = opening.openingTaxAccum + taxDepr;
+        bookAccum = opening.openingBookAccum + rawBookDepr;
+        taxAccum = opening.openingTaxAccum + rawTaxDepr;
+        bookBaseline = opening.openingBookAccum;
+        taxBaseline = opening.openingTaxAccum;
         openingApplied = true;
         emitting = true;
       }
-      // Before opening period — skip, don't accumulate
     } else {
-      bookAccum += bookDepr;
-      taxAccum += taxDepr;
+      bookAccum += rawBookDepr;
+      taxAccum += rawTaxDepr;
     }
 
     if (emitting) {
-      // Cap accumulated to not exceed basis
       bookAccum = Math.min(bookAccum, asset.acquisition_cost - asset.book_salvage_value);
       taxAccum = Math.min(taxAccum, taxBasis);
+
+      const emittedBookDepr = bookAccum - bookBaseline;
+      const emittedTaxDepr = taxAccum - taxBaseline;
 
       entries.push({
         period_year: cy,
         period_month: cm,
-        book_depreciation: Math.round(bookDepr * 100) / 100,
+        book_depreciation: Math.round(emittedBookDepr * 100) / 100,
         book_accumulated: Math.round(bookAccum * 100) / 100,
         book_net_value: Math.round((asset.acquisition_cost - bookAccum) * 100) / 100,
-        tax_depreciation: Math.round(taxDepr * 100) / 100,
+        tax_depreciation: Math.round(emittedTaxDepr * 100) / 100,
         tax_accumulated: Math.round(taxAccum * 100) / 100,
         tax_net_value: Math.round((taxBasis - taxAccum) * 100) / 100,
       });
