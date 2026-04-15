@@ -911,6 +911,181 @@ export function DepreciationScheduleTab({
         });
       }
 
+      // Period Detail sheet — one row per asset per period with the full
+      // audit trail: cost, method, UL, salvage, opening accumulated,
+      // depreciation for the period, ending accumulated, and ending NBV.
+      // This is the "detail" export — everything a reviewer needs to tie
+      // each asset's movement to its schedule without cross-referencing
+      // the on-screen matrix.
+      {
+        interface PeriodDetailRow {
+          bucket: string;
+          reportingGroup: string;
+          tag: string;
+          name: string;
+          period: string;
+          periodSort: string;
+          inService: Date | string;
+          method: string;
+          ul: number;
+          cost: number;
+          salvage: number;
+          openingAccum: number;
+          depreciation: number;
+          endingAccum: number;
+          endingNbv: number;
+        }
+        const detailRows: PeriodDetailRow[] = [];
+        for (const bucket of bucketOrder) {
+          const bucketGroups = buckets.get(bucket);
+          if (!bucketGroups) continue;
+          for (const { group, assets: groupAssets } of bucketGroups) {
+            for (const asset of groupAssets) {
+              const eff = resolveEffective(asset);
+              for (const col of periodColumns) {
+                const lastM =
+                  col.constituentMonths[col.constituentMonths.length - 1];
+                if (!lastM) continue;
+                let periodDep = 0;
+                let hasAny = false;
+                for (const m of col.constituentMonths) {
+                  if (isPastDisposal(asset, m.year, m.month)) continue;
+                  const entry =
+                    scheduleMap[asset.id]?.[monthKey(m.year, m.month)];
+                  if (entry) {
+                    periodDep += Number(entry.book_depreciation) || 0;
+                    hasAny = true;
+                  }
+                }
+                const lastEntry =
+                  scheduleMap[asset.id]?.[monthKey(lastM.year, lastM.month)];
+                const lastDisposed = isPastDisposal(
+                  asset,
+                  lastM.year,
+                  lastM.month
+                );
+                if (!hasAny && (!lastEntry || lastDisposed)) continue;
+                const endingAccum =
+                  lastEntry && !lastDisposed
+                    ? Number(lastEntry.book_accumulated) || 0
+                    : 0;
+                const endingNbv =
+                  lastEntry && !lastDisposed
+                    ? Number(lastEntry.book_net_value) || 0
+                    : 0;
+                const openingAccum = endingAccum - periodDep;
+                detailRows.push({
+                  bucket: bucketLabel(bucket),
+                  reportingGroup: group,
+                  tag: asset.asset_tag ?? "",
+                  name: asset.asset_name,
+                  period:
+                    periodMode === "yearly"
+                      ? String(col.year)
+                      : getPeriodShortLabel(col.year, col.month!),
+                  periodSort: `${col.year}-${String(col.month ?? 0).padStart(2, "0")}`,
+                  inService: asset.in_service_date
+                    ? new Date(
+                        Number(asset.in_service_date.slice(0, 4)),
+                        Number(asset.in_service_date.slice(5, 7)) - 1,
+                        Number(asset.in_service_date.slice(8, 10))
+                      )
+                    : "",
+                  method: eff.method.replace(/_/g, " "),
+                  ul: eff.usefulLife || 0,
+                  cost: Number(asset.acquisition_cost) || 0,
+                  salvage: Number(eff.salvageValue) || 0,
+                  openingAccum,
+                  depreciation: periodDep,
+                  endingAccum,
+                  endingNbv,
+                });
+              }
+            }
+          }
+        }
+
+        addSheet<PeriodDetailRow>(wb, {
+          name: "Period Detail",
+          title: {
+            entityName,
+            reportTitle: "Depreciation Schedule — Period Detail",
+            subtitle:
+              "Per-asset per-period depreciation with opening / ending accumulated and NBV",
+            period: periodLabel ? `Periods: ${periodLabel}` : undefined,
+            asOf: `Generated ${formatLongDate(new Date().toISOString().slice(0, 10))}`,
+          },
+          columns: [
+            { header: "Reporting Group", width: 20, value: (r) => r.reportingGroup },
+            { header: "Asset Tag", width: 14, value: (r) => r.tag },
+            { header: "Asset Name", width: 28, value: (r) => r.name },
+            { header: "Period", width: 12, value: (r) => r.period },
+            {
+              header: "In-Service Date",
+              width: 14,
+              format: NUMBER_FORMATS.date,
+              value: (r) => r.inService,
+            },
+            { header: "Method", width: 16, value: (r) => r.method },
+            {
+              header: "UL (mo)",
+              width: 10,
+              format: NUMBER_FORMATS.integer,
+              value: (r) => r.ul,
+            },
+            {
+              header: "Cost",
+              width: 14,
+              format: NUMBER_FORMATS.currency,
+              value: (r) => r.cost,
+            },
+            {
+              header: "Salvage",
+              width: 14,
+              format: NUMBER_FORMATS.currency,
+              value: (r) => r.salvage,
+            },
+            {
+              header: "Opening Accum.",
+              width: 16,
+              format: NUMBER_FORMATS.currency,
+              value: (r) => r.openingAccum,
+            },
+            {
+              header: "Depreciation",
+              width: 14,
+              format: NUMBER_FORMATS.currency,
+              total: "sum",
+              value: (r) => r.depreciation,
+            },
+            {
+              header: "Ending Accum.",
+              width: 16,
+              format: NUMBER_FORMATS.currency,
+              value: (r) => r.endingAccum,
+            },
+            {
+              header: "Ending NBV",
+              width: 14,
+              format: NUMBER_FORMATS.currency,
+              value: (r) => r.endingNbv,
+            },
+          ],
+          rows: detailRows,
+          groupBy: (r) => r.bucket,
+          sort: (a, b) => {
+            const g = a.reportingGroup.localeCompare(b.reportingGroup);
+            if (g !== 0) return g;
+            const n = a.name.localeCompare(b.name);
+            if (n !== 0) return n;
+            return a.periodSort.localeCompare(b.periodSort);
+          },
+          grandTotal: true,
+          footnote:
+            "Opening Accum. = Ending Accum. minus Depreciation for the period. Only Depreciation is summed in the totals rows — cost, salvage, and accumulated balances are point-in-time values and are not additive across periods.",
+        });
+      }
+
       // Summary sheet — roll-up totals by master category and reporting group
       // (no individual assets). Appears after the detail sheets so the first
       // tab a reviewer lands on is the full Monthly/Annual Depreciation detail.
