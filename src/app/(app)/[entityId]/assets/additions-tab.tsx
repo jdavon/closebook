@@ -21,6 +21,16 @@ import {
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { ArrowRight, Car, Download, Search } from "lucide-react";
 import { formatCurrency } from "@/lib/utils/dates";
 import {
@@ -32,6 +42,12 @@ import {
   type VehicleClassification,
   type CustomVehicleClassRow,
 } from "@/lib/utils/vehicle-classification";
+import {
+  generateDepreciationSchedule,
+  buildOpeningBalance,
+  type AssetForDepreciation,
+} from "@/lib/utils/depreciation";
+import type { DepreciationRule } from "./depreciation-rules-settings";
 import {
   addSheet,
   createWorkbook,
@@ -78,6 +94,13 @@ export function AdditionsTab({ entityId }: AdditionsTabProps) {
   const [reportingGroupFilter, setReportingGroupFilter] = useState("all");
   const [openingDate, setOpeningDate] = useState<string | null>(null);
   const [customClasses, setCustomClasses] = useState<VehicleClassification[]>([]);
+
+  // Export wizard
+  const [exportOpen, setExportOpen] = useState(false);
+  const [exportAsOfDate, setExportAsOfDate] = useState("");
+  const [exportIncludeTax, setExportIncludeTax] = useState(false);
+  const [exportMasterType, setExportMasterType] = useState<"all" | "Vehicle" | "Trailer">("all");
+  const [exporting, setExporting] = useState(false);
 
   const loadSettings = useCallback(async () => {
     const res = await fetch(`/api/assets/settings?entityId=${entityId}`);
@@ -182,21 +205,196 @@ export function AdditionsTab({ entityId }: AdditionsTabProps) {
     return `${m}/${d}/${y}`;
   }
 
+  function openExportWizard() {
+    if (filteredAssets.length === 0) {
+      toast.error("No additions to export");
+      return;
+    }
+    // Default closing period = December 31 of the selected year
+    if (!exportAsOfDate) setExportAsOfDate(`${year}-12-31`);
+    setExportOpen(true);
+  }
+
   async function handleExportExcel() {
     if (filteredAssets.length === 0) {
       toast.error("No additions to export");
       return;
     }
+    if (!exportAsOfDate) {
+      toast.error("Pick a closing period");
+      return;
+    }
+    setExporting(true);
     try {
-      const { data: entityRow } = await supabase
-        .from("entities")
-        .select("name")
-        .eq("id", entityId)
-        .single();
-      const entityName = (entityRow as { name?: string } | null)?.name ?? "";
+      const [asOfYear, asOfMonth] = exportAsOfDate.split("-").map(Number);
 
-      type Row = (typeof filteredAssets)[number];
-      const columns: ColumnDef<Row>[] = [
+      // Narrow to the selected master type + exclude assets not yet in
+      // service by the as-of date. Assets still count as additions for the
+      // selected reporting year, but their NBV is computed as of the user's
+      // chosen close date.
+      const toExport = filteredAssets.filter((a) => {
+        if (a.in_service_date > exportAsOfDate) return false;
+        if (exportMasterType !== "all") {
+          const mt = getEffectiveMasterType(
+            a.vehicle_class,
+            a.master_type_override,
+            customClasses
+          );
+          if (mt !== exportMasterType) return false;
+        }
+        return true;
+      });
+
+      if (toExport.length === 0) {
+        toast.error("Nothing to export for the selected filters");
+        setExporting(false);
+        return;
+      }
+
+      // Pull rules + full asset schedule inputs so NBV is rule-driven,
+      // matching Roll-Forward and Reconciliation.
+      const [rulesRes, fullAssetsRes, entityRow] = await Promise.all([
+        fetch(`/api/assets/depreciation-rules?entityId=${entityId}`),
+        supabase
+          .from("fixed_assets")
+          .select(
+            "id, acquisition_cost, in_service_date, book_useful_life_months, book_salvage_value, book_depreciation_method, tax_cost_basis, tax_depreciation_method, tax_useful_life_months, section_179_amount, bonus_depreciation_amount, disposed_date, vehicle_class"
+          )
+          .in(
+            "id",
+            toExport.map((a) => a.id)
+          ),
+        supabase
+          .from("entities")
+          .select("name")
+          .eq("id", entityId)
+          .single(),
+      ]);
+      const rules: DepreciationRule[] = rulesRes.ok ? await rulesRes.json() : [];
+      const rulesMap = new Map<string, DepreciationRule>();
+      for (const r of rules) rulesMap.set(r.reporting_group, r);
+      const fullAssets = (fullAssetsRes.data ?? []) as Array<{
+        id: string;
+        acquisition_cost: number;
+        in_service_date: string;
+        book_useful_life_months: number;
+        book_salvage_value: number;
+        book_depreciation_method: string;
+        tax_cost_basis: number | null;
+        tax_depreciation_method: string;
+        tax_useful_life_months: number | null;
+        section_179_amount: number;
+        bonus_depreciation_amount: number;
+        disposed_date: string | null;
+        vehicle_class: string | null;
+      }>;
+      const fullById = new Map(fullAssets.map((a) => [a.id, a]));
+
+      // Opening balances
+      const openingMap: Record<string, { book: number; tax: number }> = {};
+      if (openingDate) {
+        const [oy, om] = openingDate.split("-").map(Number);
+        const ids = toExport.map((a) => a.id);
+        for (let i = 0; i < ids.length; i += 500) {
+          const batch = ids.slice(i, i + 500);
+          const { data: opRows } = await supabase
+            .from("fixed_asset_depreciation")
+            .select("fixed_asset_id, book_accumulated, tax_accumulated")
+            .in("fixed_asset_id", batch)
+            .eq("period_year", oy)
+            .eq("period_month", om)
+            .eq("is_manual_override", true);
+          for (const r of (opRows ?? []) as {
+            fixed_asset_id: string;
+            book_accumulated: number | string;
+            tax_accumulated: number | string;
+          }[]) {
+            openingMap[r.fixed_asset_id] = {
+              book: Number(r.book_accumulated) || 0,
+              tax: Number(r.tax_accumulated) || 0,
+            };
+          }
+        }
+      }
+
+      // Per-asset NBV as of the chosen close date, rule-resolved
+      const nbvMap: Record<string, { book: number; tax: number }> = {};
+      for (const a of toExport) {
+        const full = fullById.get(a.id);
+        if (!full) continue;
+        const group = getReportingGroup(a.vehicle_class, customClasses);
+        const rule = group ? rulesMap.get(group) : undefined;
+        const rulePct = rule?.book_salvage_pct ?? null;
+        const ruleSalvage =
+          rulePct != null && rulePct >= 0
+            ? Math.round(
+                Number(full.acquisition_cost) * (Number(rulePct) / 100) * 100
+              ) / 100
+            : null;
+        const ul =
+          rule?.book_useful_life_months != null &&
+          rule.book_useful_life_months > 0
+            ? rule.book_useful_life_months
+            : full.book_useful_life_months;
+        const salvage =
+          ruleSalvage != null ? ruleSalvage : Number(full.book_salvage_value);
+        const method =
+          rule?.book_depreciation_method ?? full.book_depreciation_method;
+
+        const assetForCalc: AssetForDepreciation = {
+          acquisition_cost: Number(full.acquisition_cost),
+          in_service_date: full.in_service_date,
+          book_useful_life_months: ul,
+          book_salvage_value: salvage,
+          book_depreciation_method: method,
+          tax_cost_basis:
+            full.tax_cost_basis != null ? Number(full.tax_cost_basis) : null,
+          tax_depreciation_method: full.tax_depreciation_method,
+          tax_useful_life_months: full.tax_useful_life_months,
+          section_179_amount: Number(full.section_179_amount ?? 0),
+          bonus_depreciation_amount: Number(full.bonus_depreciation_amount ?? 0),
+          disposed_date: full.disposed_date,
+        };
+
+        const op = openingMap[a.id];
+        const opening = openingDate
+          ? buildOpeningBalance(openingDate, op?.book ?? 0, op?.tax ?? 0)
+          : undefined;
+
+        const schedule = generateDepreciationSchedule(
+          assetForCalc,
+          asOfYear,
+          asOfMonth,
+          opening
+        );
+
+        // Walk to the latest entry on or before the as-of period. Disposed
+        // assets stop emitting at disposal month, so the last emitted entry
+        // is the correct snapshot for them.
+        let last = schedule[schedule.length - 1];
+        if (last) {
+          nbvMap[a.id] = {
+            book: last.book_net_value,
+            tax: last.tax_net_value,
+          };
+        } else {
+          // No entries (opening hasn't applied for this asset by as-of) —
+          // fall back to acquisition cost minus opening book/tax accum.
+          const cost = Number(full.acquisition_cost);
+          const taxBasis =
+            full.tax_cost_basis != null ? Number(full.tax_cost_basis) : cost;
+          nbvMap[a.id] = {
+            book: cost - (op?.book ?? 0),
+            tax: taxBasis - (op?.tax ?? 0),
+          };
+        }
+      }
+
+      const entityName =
+        (entityRow.data as { name?: string } | null)?.name ?? "";
+
+      type Row = (typeof toExport)[number];
+      const baseColumns: ColumnDef<Row>[] = [
         { header: "Asset Tag", width: 14, value: (r) => r.asset_tag ?? "" },
         {
           header: "Class",
@@ -258,21 +456,30 @@ export function AdditionsTab({ entityId }: AdditionsTabProps) {
           value: (r) => Number(r.acquisition_cost) || 0,
         },
         {
-          header: "Book NBV (Current)",
-          width: 18,
+          header: `Book NBV (as of ${exportAsOfDate})`,
+          width: 22,
           format: NUMBER_FORMATS.currency,
           total: "sum",
-          value: (r) => Number(r.book_net_value) || 0,
+          value: (r) => nbvMap[r.id]?.book ?? 0,
         },
-        {
-          header: "Tax NBV (Current)",
-          width: 18,
-          format: NUMBER_FORMATS.currency,
-          total: "sum",
-          value: (r) => Number(r.tax_net_value) || 0,
-        },
-        { header: "Status", width: 14, value: (r) => r.status },
       ];
+      if (exportIncludeTax) {
+        baseColumns.push({
+          header: `Tax NBV (as of ${exportAsOfDate})`,
+          width: 22,
+          format: NUMBER_FORMATS.currency,
+          total: "sum",
+          value: (r) => nbvMap[r.id]?.tax ?? 0,
+        });
+      }
+      baseColumns.push({ header: "Status", width: 14, value: (r) => r.status });
+
+      const scopeLabel =
+        exportMasterType === "Vehicle"
+          ? "Vehicles"
+          : exportMasterType === "Trailer"
+            ? "Trailers"
+            : "Vehicles & Trailers";
 
       const wb = createWorkbook({
         company: entityName,
@@ -280,14 +487,14 @@ export function AdditionsTab({ entityId }: AdditionsTabProps) {
       });
       addSheet(wb, {
         name: "Additions",
-        columns,
-        rows: filteredAssets,
+        columns: baseColumns,
+        rows: toExport,
         title: {
           entityName,
           reportTitle: "Fixed Asset Additions",
-          subtitle: "Post-Opening Acquisitions",
+          subtitle: `${scopeLabel} — Post-Opening Acquisitions`,
           period: `Year Ended December 31, ${year}`,
-          asOf: `Generated ${formatLongDate(new Date().toISOString().slice(0, 10))}`,
+          asOf: `NBV as of ${formatLongDate(exportAsOfDate)}`,
         },
         groupBy: (r) =>
           getEffectiveMasterType(
@@ -306,9 +513,12 @@ export function AdditionsTab({ entityId }: AdditionsTabProps) {
         `fixed-asset-additions-${year}-${entityId.slice(0, 8)}`
       );
       toast.success("Excel export downloaded");
+      setExportOpen(false);
     } catch (err) {
       console.error(err);
       toast.error("Failed to export Excel");
+    } finally {
+      setExporting(false);
     }
   }
 
@@ -402,13 +612,92 @@ export function AdditionsTab({ entityId }: AdditionsTabProps) {
         <Button
           variant="outline"
           className="ml-auto"
-          onClick={handleExportExcel}
+          onClick={openExportWizard}
           disabled={filteredAssets.length === 0}
         >
           <Download className="mr-2 h-4 w-4" />
           Export Excel
         </Button>
       </div>
+
+      <Dialog open={exportOpen} onOpenChange={setExportOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Export Additions</DialogTitle>
+            <DialogDescription>
+              Choose the closing period and scope for the export. NBV is
+              computed as of the closing date using rule-driven depreciation.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="export-as-of">Closing Period (NBV as of)</Label>
+              <Input
+                id="export-as-of"
+                type="date"
+                value={exportAsOfDate}
+                onChange={(e) => setExportAsOfDate(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                Default is December 31 of the selected year.
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>Scope</Label>
+              <Select
+                value={exportMasterType}
+                onValueChange={(v: "all" | "Vehicle" | "Trailer") =>
+                  setExportMasterType(v)
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Vehicles & Trailers (default)</SelectItem>
+                  <SelectItem value="Vehicle">Vehicles only</SelectItem>
+                  <SelectItem value="Trailer">Trailers only</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="flex items-start gap-2">
+              <Checkbox
+                id="export-include-tax"
+                checked={exportIncludeTax}
+                onCheckedChange={(c) => setExportIncludeTax(c === true)}
+              />
+              <div className="grid gap-0.5 leading-none">
+                <Label htmlFor="export-include-tax" className="cursor-pointer">
+                  Include Tax NBV column
+                </Label>
+                <p className="text-xs text-muted-foreground">
+                  Off by default. Book NBV is always included.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="ghost"
+              onClick={() => setExportOpen(false)}
+              disabled={exporting}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleExportExcel}
+              disabled={exporting || !exportAsOfDate}
+            >
+              <Download className="mr-2 h-4 w-4" />
+              {exporting ? "Generating..." : "Download"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Additions Table */}
       <Card>
