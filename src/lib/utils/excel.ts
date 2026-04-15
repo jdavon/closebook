@@ -443,6 +443,7 @@ export function addMatrixSheet(wb: Workbook, def: MatrixSheetDef): Worksheet {
         };
       }
     });
+    rowIdx++;
   });
 
   return ws;
