@@ -580,6 +580,78 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
     loadData();
   };
 
+  // "Reconcile All" — mark every group that has mapped accounts and a
+  // within-tolerance variance as reconciled, in one click. Already-reconciled
+  // groups are left alone; groups with no accounts are skipped.
+  const reconcileAllStatus = (() => {
+    let anyVariance = false;
+    let anyReconcilable = false;
+    for (const g of RECON_GROUPS) {
+      const glBal = glBalances[g.key] ?? 0;
+      const subBal = subledgerBalances[g.key]?.total ?? 0;
+      const variance = glBal - subBal;
+      const hasMappings = (mappedAccounts[g.key]?.length ?? 0) > 0;
+      const isReconciled = reconciliations[g.key]?.is_reconciled ?? false;
+      if (hasMappings && Math.abs(variance) > 1.0) anyVariance = true;
+      if (hasMappings && Math.abs(variance) <= 1.0 && !isReconciled) {
+        anyReconcilable = true;
+      }
+    }
+    return { anyVariance, anyReconcilable };
+  })();
+
+  const handleReconcileAll = async () => {
+    setSaving("__all__");
+    const { data: userData } = await supabase.auth.getUser();
+    const userId = userData?.user?.id ?? null;
+    const nowIso = new Date().toISOString();
+
+    const rows = [];
+    for (const g of RECON_GROUPS) {
+      const glBal = glBalances[g.key] ?? 0;
+      const subBal = subledgerBalances[g.key]?.total ?? 0;
+      const variance = glBal - subBal;
+      const hasMappings = (mappedAccounts[g.key]?.length ?? 0) > 0;
+      const isReconciled = reconciliations[g.key]?.is_reconciled ?? false;
+      if (!hasMappings) continue;
+      if (Math.abs(variance) > 1.0) continue;
+      if (isReconciled) continue;
+      rows.push({
+        entity_id: entityId,
+        period_year: periodYear,
+        period_month: periodMonth,
+        gl_account_group: g.key,
+        gl_balance: glBal,
+        subledger_balance: subBal,
+        variance,
+        is_reconciled: true,
+        reconciled_by: userId,
+        reconciled_at: nowIso,
+        notes: notes[g.key] || null,
+      });
+    }
+
+    if (rows.length === 0) {
+      setSaving(null);
+      toast.info("Nothing to reconcile");
+      return;
+    }
+
+    const { error } = await supabase
+      .from("asset_reconciliations")
+      .upsert(rows, {
+        onConflict: "entity_id,period_year,period_month,gl_account_group",
+      });
+
+    setSaving(null);
+    if (error) {
+      toast.error(`Failed to reconcile all: ${error.message}`);
+      return;
+    }
+    toast.success(`Reconciled ${rows.length} group${rows.length === 1 ? "" : "s"}`);
+    loadData();
+  };
+
   const handleUnreconcile = async (groupKey: string) => {
     setSaving(groupKey);
     const recon = reconciliations[groupKey];
@@ -1285,14 +1357,35 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
             <ChevronRight className="h-4 w-4" />
           </Button>
         </div>
-        <Button
-          variant="outline"
-          onClick={handleExportExcel}
-          disabled={loading || allAssets.length === 0}
-        >
-          <Download className="mr-2 h-4 w-4" />
-          Export Excel
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            onClick={handleReconcileAll}
+            disabled={
+              loading ||
+              saving === "__all__" ||
+              reconcileAllStatus.anyVariance ||
+              !reconcileAllStatus.anyReconcilable
+            }
+            title={
+              reconcileAllStatus.anyVariance
+                ? "Can't reconcile all while any group has a variance"
+                : !reconcileAllStatus.anyReconcilable
+                  ? "All eligible groups are already reconciled"
+                  : "Mark every group with a within-tolerance variance as reconciled"
+            }
+          >
+            <CheckCircle2 className="mr-2 h-4 w-4" />
+            {saving === "__all__" ? "Reconciling..." : "Reconcile All"}
+          </Button>
+          <Button
+            variant="outline"
+            onClick={handleExportExcel}
+            disabled={loading || allAssets.length === 0}
+          >
+            <Download className="mr-2 h-4 w-4" />
+            Export Excel
+          </Button>
+        </div>
       </div>
 
       {loading ? (
