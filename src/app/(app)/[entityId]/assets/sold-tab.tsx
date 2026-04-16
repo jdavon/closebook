@@ -147,12 +147,41 @@ export function SoldTab({ entityId }: SoldTabProps) {
     return true;
   });
 
+  // Derive NBV and accumulated at sale from the frozen gain/loss rather than
+  // the asset-header `book_accumulated_depreciation` / `book_net_value`. The
+  // header is updated by the regenerate routine from the formula-computed
+  // schedule, which can drift from the subledger's prior-month-end value
+  // used to compute gain/loss (manual overrides, imported opening balances).
+  // Deriving here keeps Cost − Accum = NBV and NBV − Sale Price = Loss.
+  function getSaleFigures(a: SoldAsset) {
+    const taxBasis = a.tax_cost_basis ?? a.acquisition_cost;
+    const sp = a.disposed_sale_price;
+    const bookGL = a.disposed_book_gain_loss;
+    const taxGL = a.disposed_tax_gain_loss;
+    const bookNbv =
+      sp != null && bookGL != null ? sp - bookGL : a.book_net_value ?? 0;
+    const bookAccum =
+      sp != null && bookGL != null
+        ? a.acquisition_cost - bookNbv
+        : a.book_accumulated_depreciation ?? 0;
+    const taxNbv =
+      sp != null && taxGL != null ? sp - taxGL : a.tax_net_value ?? 0;
+    const taxAccum =
+      sp != null && taxGL != null
+        ? taxBasis - taxNbv
+        : a.tax_accumulated_depreciation ?? 0;
+    return { bookNbv, bookAccum, taxNbv, taxAccum };
+  }
+
   const totalCost = filteredAssets.reduce((s, a) => s + a.acquisition_cost, 0);
   const totalAccumDepr = filteredAssets.reduce(
-    (s, a) => s + (a.book_accumulated_depreciation ?? 0),
+    (s, a) => s + getSaleFigures(a).bookAccum,
     0
   );
-  const totalNbv = filteredAssets.reduce((s, a) => s + (a.book_net_value ?? 0), 0);
+  const totalNbv = filteredAssets.reduce(
+    (s, a) => s + getSaleFigures(a).bookNbv,
+    0
+  );
   const totalProceeds = filteredAssets.reduce((s, a) => s + (a.disposed_sale_price ?? 0), 0);
   const totalBookGainLoss = filteredAssets.reduce((s, a) => s + (a.disposed_book_gain_loss ?? 0), 0);
   const totalTaxGainLoss = filteredAssets.reduce((s, a) => s + (a.disposed_tax_gain_loss ?? 0), 0);
@@ -264,14 +293,14 @@ export function SoldTab({ entityId }: SoldTabProps) {
           width: 18,
           format: NUMBER_FORMATS.currency,
           total: "sum",
-          value: (r) => Number(r.book_accumulated_depreciation) || 0,
+          value: (r) => getSaleFigures(r).bookAccum,
         },
         {
           header: "Book NBV at Sale",
           width: 18,
           format: NUMBER_FORMATS.currency,
           total: "sum",
-          value: (r) => Number(r.book_net_value) || 0,
+          value: (r) => getSaleFigures(r).bookNbv,
         },
         {
           header: "Sale Price",
@@ -304,14 +333,14 @@ export function SoldTab({ entityId }: SoldTabProps) {
             width: 20,
             format: NUMBER_FORMATS.currency,
             total: "sum",
-            value: (r) => Number(r.tax_accumulated_depreciation) || 0,
+            value: (r) => getSaleFigures(r).taxAccum,
           },
           {
             header: "Tax NBV at Sale",
             width: 18,
             format: NUMBER_FORMATS.currency,
             total: "sum",
-            value: (r) => Number(r.tax_net_value) || 0,
+            value: (r) => getSaleFigures(r).taxNbv,
           },
           {
             header: "Tax Gain/(Loss)",
@@ -569,6 +598,7 @@ export function SoldTab({ entityId }: SoldTabProps) {
               <TableBody>
                 {filteredAssets.map((asset) => {
                   const classification = getVehicleClassification(asset.vehicle_class);
+                  const saleFigures = getSaleFigures(asset);
                   return (
                     <TableRow key={asset.id}>
                       <TableCell className="font-medium">
@@ -606,12 +636,12 @@ export function SoldTab({ entityId }: SoldTabProps) {
                         {formatCurrency(asset.acquisition_cost)}
                       </TableCell>
                       <TableCell className="text-right tabular-nums text-red-600">
-                        {(asset.book_accumulated_depreciation ?? 0) > 0
-                          ? `(${formatCurrency(asset.book_accumulated_depreciation)})`
+                        {saleFigures.bookAccum > 0
+                          ? `(${formatCurrency(saleFigures.bookAccum)})`
                           : formatCurrency(0)}
                       </TableCell>
                       <TableCell className="text-right tabular-nums">
-                        {formatCurrency(asset.book_net_value ?? 0)}
+                        {formatCurrency(saleFigures.bookNbv)}
                       </TableCell>
                       <TableCell className="text-right tabular-nums">
                         {formatCurrency(asset.disposed_sale_price ?? 0)}
