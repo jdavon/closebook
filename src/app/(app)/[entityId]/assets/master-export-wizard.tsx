@@ -225,12 +225,17 @@ export function MasterExportWizard({ open, onOpenChange, entityId }: Props) {
         fetch(`/api/assets/classes?entityId=${entityId}`),
         fetch(`/api/assets/settings?entityId=${entityId}`),
         supabase.from("entities").select("name").eq("id", entityId).single(),
+        // Full history up to and including the closing period — ignores
+        // year boundary so the sheet can show multi-year reconciliation
+        // history in chronological order.
         supabase
           .from("asset_reconciliations")
           .select("*")
           .eq("entity_id", entityId)
-          .eq("period_year", asOfYear)
-          .lte("period_month", asOfMonth)
+          .or(
+            `period_year.lt.${asOfYear},and(period_year.eq.${asOfYear},period_month.lte.${asOfMonth})`
+          )
+          .order("period_year", { ascending: true })
           .order("period_month", { ascending: true }),
       ]);
 
@@ -785,6 +790,8 @@ export function MasterExportWizard({ open, onOpenChange, entityId }: Props) {
 
         interface RfRow {
           groupLabel: string;
+          periodYear: number;
+          periodMonth: number;
           month: string;
           beginningCost: number;
           additionsCost: number;
@@ -878,6 +885,8 @@ export function MasterExportWizard({ open, onOpenChange, entityId }: Props) {
 
             rfRows.push({
               groupLabel: g.displayName,
+              periodYear: y,
+              periodMonth: m,
               month: `${MONTH_SHORT[m - 1]} ${y}`,
               beginningCost,
               additionsCost,
@@ -892,6 +901,14 @@ export function MasterExportWizard({ open, onOpenChange, entityId }: Props) {
           }
         }
 
+        // Helpers for annual-summary rows: beginning comes from Jan's row,
+        // ending from the last month's row, flows (additions / disposals /
+        // depreciation) sum across the year.
+        const firstMonthRow = (rows: RfRow[]) =>
+          rows.slice().sort((a, b) => a.periodMonth - b.periodMonth)[0];
+        const lastMonthRow = (rows: RfRow[]) =>
+          rows.slice().sort((a, b) => b.periodMonth - a.periodMonth)[0];
+
         const rfCols: ColumnDef<RfRow>[] = [
           { header: "Group", width: 18, value: (r) => r.groupLabel },
           { header: "Month", width: 12, value: (r) => r.month },
@@ -900,17 +917,20 @@ export function MasterExportWizard({ open, onOpenChange, entityId }: Props) {
             width: 16,
             format: NUMBER_FORMATS.currency,
             value: (r) => r.beginningCost,
+            totalValue: (rows) => firstMonthRow(rows as RfRow[])?.beginningCost ?? 0,
           },
           {
             header: "+ Additions",
             width: 14,
             format: NUMBER_FORMATS.currency,
+            total: "sum",
             value: (r) => r.additionsCost,
           },
           {
             header: "− Disposals",
             width: 14,
             format: NUMBER_FORMATS.currency,
+            total: "sum",
             value: (r) => r.disposalsCost,
           },
           {
@@ -918,23 +938,27 @@ export function MasterExportWizard({ open, onOpenChange, entityId }: Props) {
             width: 16,
             format: NUMBER_FORMATS.currency,
             value: (r) => r.endingCost,
+            totalValue: (rows) => lastMonthRow(rows as RfRow[])?.endingCost ?? 0,
           },
           {
             header: "Beginning Accum.",
             width: 18,
             format: NUMBER_FORMATS.currency,
             value: (r) => r.beginningAccum,
+            totalValue: (rows) => firstMonthRow(rows as RfRow[])?.beginningAccum ?? 0,
           },
           {
             header: "+ Depreciation",
             width: 16,
             format: NUMBER_FORMATS.currency,
+            total: "sum",
             value: (r) => r.depreciation,
           },
           {
             header: "+ Disposals Accum.",
             width: 18,
             format: NUMBER_FORMATS.currency,
+            total: "sum",
             value: (r) => r.disposalsAccum,
           },
           {
@@ -942,12 +966,14 @@ export function MasterExportWizard({ open, onOpenChange, entityId }: Props) {
             width: 16,
             format: NUMBER_FORMATS.currency,
             value: (r) => r.endingAccum,
+            totalValue: (rows) => lastMonthRow(rows as RfRow[])?.endingAccum ?? 0,
           },
           {
             header: "Ending NBV",
             width: 16,
             format: NUMBER_FORMATS.currency,
             value: (r) => r.endingNbv,
+            totalValue: (rows) => lastMonthRow(rows as RfRow[])?.endingNbv ?? 0,
           },
         ];
 
@@ -960,8 +986,15 @@ export function MasterExportWizard({ open, onOpenChange, entityId }: Props) {
             reportTitle: "Fixed Asset Roll-Forward",
             period: `${scopeLabel} — Jan through ${formatLongDate(asOfDate)}`,
           },
-          groupBy: (r) => r.groupLabel,
-          sort: (a, b) => a.month.localeCompare(b.month),
+          // One section per (group, year). Each section renders its months
+          // Jan → Dec (clamped to the closing month) and gets a Total row —
+          // which is the annual summary for that group/year.
+          groupBy: (r) =>
+            `${r.groupLabel} — ${r.periodYear}`,
+          sort: (a, b) =>
+            a.groupLabel.localeCompare(b.groupLabel) ||
+            a.periodYear - b.periodYear ||
+            a.periodMonth - b.periodMonth,
         });
       }
 
@@ -980,19 +1013,34 @@ export function MasterExportWizard({ open, onOpenChange, entityId }: Props) {
         }
         const reconRowsRaw = (reconsRes.data ?? []) as ReconRow[];
 
-        // Scope filter: map gl_account_group (vehicles_net / trailers_net) to
-        // master type and keep only those matching the wizard's scope.
-        const visibleGroups = new Set(
-          RECON_GROUPS.filter(
-            (g) =>
-              scope === "all" ||
-              (scope === "Vehicle" && g.masterType === "Vehicle") ||
-              (scope === "Trailer" && g.masterType === "Trailer")
-          ).map((g) => g.parentKey)
-        );
-        const reconRows = reconRowsRaw.filter((r) =>
-          visibleGroups.has(r.gl_account_group)
-        );
+        // Scope filter: stored gl_account_group is one of the four subgroup
+        // keys (vehicles_cost / vehicles_accum_depr / trailers_cost /
+        // trailers_accum_depr) — plus legacy vehicles_net / trailers_net.
+        // Keep only the groups matching the wizard's scope.
+        const scopeMasterTypes: Array<"Vehicle" | "Trailer"> =
+          scope === "all"
+            ? ["Vehicle", "Trailer"]
+            : scope === "Vehicle"
+              ? ["Vehicle"]
+              : ["Trailer"];
+        const reconGroupLabel = (key: string): string => {
+          const g = RECON_GROUPS.find((rg) => rg.key === key);
+          if (g) return g.displayName;
+          if (key === "vehicles_net") return "Vehicles (Net)";
+          if (key === "trailers_net") return "Trailers (Net)";
+          return key;
+        };
+        const reconGroupMasterType = (key: string): "Vehicle" | "Trailer" | null => {
+          const g = RECON_GROUPS.find((rg) => rg.key === key);
+          if (g) return g.masterType;
+          if (key === "vehicles_net") return "Vehicle";
+          if (key === "trailers_net") return "Trailer";
+          return null;
+        };
+        const reconRows = reconRowsRaw.filter((r) => {
+          const mt = reconGroupMasterType(r.gl_account_group);
+          return mt != null && scopeMasterTypes.includes(mt);
+        });
 
         const reconCols: ColumnDef<ReconRow>[] = [
           {
@@ -1003,9 +1051,8 @@ export function MasterExportWizard({ open, onOpenChange, entityId }: Props) {
           },
           {
             header: "GL Group",
-            width: 16,
-            value: (r) =>
-              r.gl_account_group === "vehicles_net" ? "Vehicles" : "Trailers",
+            width: 22,
+            value: (r) => reconGroupLabel(r.gl_account_group),
           },
           {
             header: "GL Balance",
