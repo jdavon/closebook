@@ -1021,7 +1021,7 @@ export function MasterExportWizard({ open, onOpenChange, entityId }: Props) {
           rows: rfRows,
           title: {
             entityName,
-            reportTitle: "Fixed Asset Roll-Forward",
+            reportTitle: "Fixed Asset Roll-Forward — Monthly Detail",
             period: `${scopeLabel} — Jan through ${formatLongDate(asOfDate)}`,
           },
           // One section per (group, year). Each section renders its months
@@ -1033,6 +1033,139 @@ export function MasterExportWizard({ open, onOpenChange, entityId }: Props) {
             a.groupLabel.localeCompare(b.groupLabel) ||
             a.periodYear - b.periodYear ||
             a.periodMonth - b.periodMonth,
+        });
+
+        // Dedicated annual-summary sheet: one row per (group, year) with
+        // Jan-to-close movement rolled up. Useful for quick YoY review
+        // without scrolling through the monthly detail sheet.
+        interface RfSummaryRow {
+          groupLabel: string;
+          periodYear: number;
+          beginningCost: number;
+          additionsCost: number;
+          disposalsCost: number;
+          endingCost: number;
+          beginningAccum: number;
+          depreciation: number;
+          disposalsAccum: number;
+          endingAccum: number;
+          endingNbv: number;
+        }
+        const summaryMap = new Map<string, RfSummaryRow>();
+        for (const r of rfRows) {
+          const key = `${r.groupLabel} — ${r.periodYear}`;
+          const existing = summaryMap.get(key);
+          if (!existing) {
+            summaryMap.set(key, {
+              groupLabel: r.groupLabel,
+              periodYear: r.periodYear,
+              beginningCost: r.beginningCost,
+              additionsCost: r.additionsCost,
+              disposalsCost: r.disposalsCost,
+              endingCost: r.endingCost,
+              beginningAccum: r.beginningAccum,
+              depreciation: r.depreciation,
+              disposalsAccum: r.disposalsAccum,
+              endingAccum: r.endingAccum,
+              endingNbv: r.endingNbv,
+            });
+          } else {
+            // Beginning balances stay anchored to Jan (earliest month seen).
+            // Flows accumulate. Ending balances track the latest month seen.
+            existing.additionsCost += r.additionsCost;
+            existing.disposalsCost += r.disposalsCost;
+            existing.depreciation += r.depreciation;
+            existing.disposalsAccum += r.disposalsAccum;
+            existing.endingCost = r.endingCost;
+            existing.endingAccum = r.endingAccum;
+            existing.endingNbv = r.endingNbv;
+          }
+        }
+        const summaryRows = Array.from(summaryMap.values()).sort(
+          (a, b) =>
+            a.groupLabel.localeCompare(b.groupLabel) ||
+            a.periodYear - b.periodYear
+        );
+
+        const summaryCols: ColumnDef<RfSummaryRow>[] = [
+          { header: "Group", width: 18, value: (r) => r.groupLabel },
+          {
+            header: "Year",
+            width: 10,
+            align: "center",
+            value: (r) => r.periodYear,
+          },
+          {
+            header: "Beginning Cost",
+            width: 16,
+            format: NUMBER_FORMATS.currency,
+            value: (r) => r.beginningCost,
+          },
+          {
+            header: "+ Additions",
+            width: 14,
+            format: NUMBER_FORMATS.currency,
+            total: "sum",
+            value: (r) => r.additionsCost,
+          },
+          {
+            header: "− Disposals",
+            width: 14,
+            format: NUMBER_FORMATS.currency,
+            total: "sum",
+            value: (r) => r.disposalsCost,
+          },
+          {
+            header: "Ending Cost",
+            width: 16,
+            format: NUMBER_FORMATS.currency,
+            value: (r) => r.endingCost,
+          },
+          {
+            header: "Beginning Accum.",
+            width: 18,
+            format: NUMBER_FORMATS.currency,
+            value: (r) => r.beginningAccum,
+          },
+          {
+            header: "+ Depreciation",
+            width: 16,
+            format: NUMBER_FORMATS.currency,
+            total: "sum",
+            value: (r) => r.depreciation,
+          },
+          {
+            header: "+ Disposals Accum.",
+            width: 18,
+            format: NUMBER_FORMATS.currency,
+            total: "sum",
+            value: (r) => r.disposalsAccum,
+          },
+          {
+            header: "Ending Accum.",
+            width: 16,
+            format: NUMBER_FORMATS.currency,
+            value: (r) => r.endingAccum,
+          },
+          {
+            header: "Ending NBV",
+            width: 16,
+            format: NUMBER_FORMATS.currency,
+            value: (r) => r.endingNbv,
+          },
+        ];
+
+        addSheet(wb, {
+          name: "Roll-Forward Summary",
+          columns: summaryCols,
+          rows: summaryRows,
+          title: {
+            entityName,
+            reportTitle: "Fixed Asset Roll-Forward — Annual Summary",
+            period: `${scopeLabel} — Jan through ${formatLongDate(asOfDate)}`,
+          },
+          groupBy: (r) => r.groupLabel,
+          sort: (a, b) => a.periodYear - b.periodYear,
         });
       }
 
