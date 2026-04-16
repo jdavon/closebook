@@ -206,6 +206,11 @@ export function MasterExportWizard({ open, onOpenChange, entityId }: Props) {
     setExporting(true);
     try {
       const [asOfYear, asOfMonth] = asOfDate.split("-").map(Number);
+      if (!Number.isFinite(asOfYear) || !Number.isFinite(asOfMonth)) {
+        toast.error(`Invalid closing period: ${asOfDate}`);
+        setExporting(false);
+        return;
+      }
 
       // Load every shared dependency once.
       const [
@@ -225,9 +230,9 @@ export function MasterExportWizard({ open, onOpenChange, entityId }: Props) {
         fetch(`/api/assets/classes?entityId=${entityId}`),
         fetch(`/api/assets/settings?entityId=${entityId}`),
         supabase.from("entities").select("name").eq("id", entityId).single(),
-        // Full history up to and including the closing period — ignores
-        // year boundary so the sheet can show multi-year reconciliation
-        // history in chronological order.
+        // Full history up to and including the closing period. The nested
+        // and() inside .or() requires a specific PostgREST syntax — if the
+        // JS client mangles it we fall back to a simpler filter later.
         supabase
           .from("asset_reconciliations")
           .select("*")
@@ -238,6 +243,20 @@ export function MasterExportWizard({ open, onOpenChange, entityId }: Props) {
           .order("period_year", { ascending: true })
           .order("period_month", { ascending: true }),
       ]);
+
+      if (assetsRes.error) {
+        throw new Error(`Load assets failed: ${assetsRes.error.message}`);
+      }
+      if (entityRes.error) {
+        throw new Error(`Load entity failed: ${entityRes.error.message}`);
+      }
+      if (reconsRes.error) {
+        // Not fatal — skip the reconciliation sheet but keep everything else.
+        console.warn(
+          "Reconciliation history failed, sheet will be empty:",
+          reconsRes.error
+        );
+      }
 
       const allAssets = (assetsRes.data ?? []) as FullAsset[];
       const rules: DepreciationRule[] = rulesRes.ok ? await rulesRes.json() : [];
@@ -280,25 +299,44 @@ export function MasterExportWizard({ open, onOpenChange, entityId }: Props) {
         }
       }
 
-      // Rule-driven schedules per asset through the closing period
+      // Rule-driven schedules per asset through the closing period. One
+      // asset with bad data (e.g. missing in_service_date) shouldn't sink
+      // the entire export — log and skip.
       const scheduleMap: Record<string, Record<string, DepreciationEntry>> = {};
+      let scheduleSkips = 0;
       for (const a of allAssets) {
-        const assetForCalc = resolveAssetForCalc(a, rulesMap, customClasses);
-        const op = openingMap[a.id];
-        const opening = openingDateIso
-          ? buildOpeningBalance(openingDateIso, op?.book ?? 0, op?.tax ?? 0)
-          : undefined;
-        const schedule = generateDepreciationSchedule(
-          assetForCalc,
-          asOfYear,
-          asOfMonth,
-          opening
-        );
-        const byMonth: Record<string, DepreciationEntry> = {};
-        for (const e of schedule) {
-          byMonth[monthKey(e.period_year, e.period_month)] = e;
+        if (!a.in_service_date) {
+          scheduleSkips++;
+          continue;
         }
-        scheduleMap[a.id] = byMonth;
+        try {
+          const assetForCalc = resolveAssetForCalc(a, rulesMap, customClasses);
+          const op = openingMap[a.id];
+          const opening = openingDateIso
+            ? buildOpeningBalance(openingDateIso, op?.book ?? 0, op?.tax ?? 0)
+            : undefined;
+          const schedule = generateDepreciationSchedule(
+            assetForCalc,
+            asOfYear,
+            asOfMonth,
+            opening
+          );
+          const byMonth: Record<string, DepreciationEntry> = {};
+          for (const e of schedule) {
+            byMonth[monthKey(e.period_year, e.period_month)] = e;
+          }
+          scheduleMap[a.id] = byMonth;
+        } catch (err) {
+          scheduleSkips++;
+          console.warn(
+            `Skipping schedule for ${a.asset_tag ?? a.id}:`,
+            err instanceof Error ? err.message : err
+          );
+          scheduleMap[a.id] = {};
+        }
+      }
+      if (scheduleSkips > 0) {
+        console.info(`Master export: ${scheduleSkips} asset(s) skipped due to schedule errors`);
       }
 
       // Helpers used by every sheet below
@@ -1112,8 +1150,10 @@ export function MasterExportWizard({ open, onOpenChange, entityId }: Props) {
       toast.success("Excel package downloaded");
       onOpenChange(false);
     } catch (err) {
-      console.error(err);
-      toast.error("Failed to export");
+      console.error("Master export failed:", err);
+      const msg =
+        err instanceof Error ? err.message : "Unknown error — check console";
+      toast.error(`Export failed: ${msg}`);
     } finally {
       setExporting(false);
     }
