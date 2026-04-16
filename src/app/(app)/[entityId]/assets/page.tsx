@@ -73,6 +73,7 @@ import {
 } from "@/components/ui/command";
 import { calculateDispositionGainLoss } from "@/lib/utils/depreciation";
 import { regenerateAssetSchedule } from "@/lib/utils/depreciation-regenerate";
+import { MasterExportWizard } from "./master-export-wizard";
 import {
   generateDepreciationSchedule,
   buildOpeningBalance,
@@ -173,7 +174,9 @@ export default function AssetsPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [asOfDate, setAsOfDate] = useState<string>("");
 
-  // Register export wizard
+  // Master export wizard
+  const [masterExportOpen, setMasterExportOpen] = useState(false);
+  // Register export wizard (legacy — kept for backward-compat entry points)
   const [registerExportOpen, setRegisterExportOpen] = useState(false);
   const [registerExportAsOfDate, setRegisterExportAsOfDate] = useState("");
   const [registerExportMasterType, setRegisterExportMasterType] = useState<
@@ -1176,23 +1179,22 @@ export default function AssetsPage() {
               Delete ({selectedIds.size})
             </Button>
           )}
+          <Button variant="outline" onClick={() => setMasterExportOpen(true)}>
+            <Download className="mr-2 h-4 w-4" />
+            Export
+          </Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline">
-                <Download className="mr-2 h-4 w-4" />
-                Export
-                <ChevronDownIcon className="ml-2 h-3.5 w-3.5 opacity-50" />
+              <Button variant="ghost" size="sm">
+                <ChevronDownIcon className="h-3.5 w-3.5 opacity-50" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={openRegisterExportWizard}>
-                Excel — Register as of… (wizard)
-              </DropdownMenuItem>
               <DropdownMenuItem onClick={() => handleExportExcel("filtered")}>
-                Excel — Current View ({filteredAssets.length} assets)
+                Quick Excel — Current View ({filteredAssets.length} assets)
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => handleExportExcel("all")}>
-                Excel — All Statuses (incl. Sold)
+                Quick Excel — All Statuses (incl. Sold)
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => downloadCSV(filteredAssets, "filtered")}>
                 CSV — Current View
@@ -1565,6 +1567,13 @@ export default function AssetsPage() {
           <RollForwardTab entityId={entityId} />
         </TabsContent>
       </Tabs>
+
+      {/* Master Export Wizard */}
+      <MasterExportWizard
+        open={masterExportOpen}
+        onOpenChange={setMasterExportOpen}
+        entityId={entityId}
+      />
 
       {/* Register Export Wizard */}
       <Dialog open={registerExportOpen} onOpenChange={setRegisterExportOpen}>
