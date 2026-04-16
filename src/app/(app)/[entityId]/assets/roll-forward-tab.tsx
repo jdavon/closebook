@@ -30,6 +30,7 @@ import {
 import {
   GL_ACCOUNT_GROUPS,
   RECON_GROUPS,
+  ALL_RECON_GROUPS,
   getAssetGLGroup,
   type GLAccountGroup,
 } from "@/lib/utils/asset-gl-groups";
@@ -505,20 +506,27 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
     const assets = (assetsData ?? []) as AssetRecord[];
 
     // 4. Recon links so GL-override placement still routes an asset to the
-    // correct Vehicle/Trailer bucket when a cost account is pinned.
+    // correct Vehicle/Trailer bucket when a cost account is pinned. Fleet-
+    // combined groups (e.g. fleet_accum_depr) have parentKey "fleet_net" which
+    // isn't one of this tab's GL_ACCOUNT_GROUPS — so we skip those overrides
+    // and fall through to class-based routing, preserving Vehicle/Trailer
+    // separation in the roll-forward regardless of reconciliation settings.
     const linkRes = await fetch(`/api/assets/recon-links?entityId=${entityId}`);
     const linkData = linkRes.ok ? await linkRes.json() : [];
     const accountToParent: Record<string, string> = {};
     for (const m of linkData as { recon_group: string; account_id: string }[]) {
-      const reconGroup = RECON_GROUPS.find((g) => g.key === m.recon_group);
+      const reconGroup = ALL_RECON_GROUPS.find((g) => g.key === m.recon_group);
       if (reconGroup) {
         accountToParent[m.account_id] = reconGroup.parentKey;
       }
     }
 
     const resolveGLGroup = (asset: AssetRecord): string | null => {
-      if (asset.cost_account_id && accountToParent[asset.cost_account_id]) {
-        return accountToParent[asset.cost_account_id];
+      const parent = asset.cost_account_id
+        ? accountToParent[asset.cost_account_id]
+        : null;
+      if (parent === "vehicles_net" || parent === "trailers_net") {
+        return parent;
       }
       return getAssetGLGroup(
         asset.vehicle_class,
@@ -752,8 +760,15 @@ export function RollForwardTab({ entityId }: RollForwardTabProps) {
 
       const firstCol = months[0];
       const lastCol = months[months.length - 1];
-      const periodLabel =
-        viewMode === "yearly"
+      const isFullYear =
+        !!firstCol &&
+        !!lastCol &&
+        firstCol.year === lastCol.year &&
+        firstCol.month === 1 &&
+        lastCol.month === 12;
+      const periodLabel = isFullYear
+        ? `January 1, ${firstCol.year} through December 31, ${firstCol.year}`
+        : viewMode === "yearly"
           ? firstCol && lastCol
             ? firstCol.year === lastCol.year
               ? `Year ${firstCol.year}`

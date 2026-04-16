@@ -28,7 +28,12 @@ import {
   Minus,
 } from "lucide-react";
 import { formatCurrency } from "@/lib/utils/dates";
-import { RECON_GROUPS } from "@/lib/utils/asset-gl-groups";
+import {
+  RECON_GROUPS,
+  FLEET_ACCUM_DEPR_GROUP,
+  getEffectiveReconGroups,
+  type ReconGroup,
+} from "@/lib/utils/asset-gl-groups";
 import {
   getEffectiveMasterType,
   getReportingGroup,
@@ -121,6 +126,8 @@ export function ReconciliationYearView({
     {}
   );
   const [hasMappings, setHasMappings] = useState<Record<string, boolean>>({});
+  const [effectiveGroups, setEffectiveGroups] =
+    useState<ReconGroup[]>(RECON_GROUPS);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -145,19 +152,32 @@ export function ReconciliationYearView({
         fetch(`/api/assets/settings?entityId=${entityId}`),
       ]);
 
+    // Parse settings once: drives both the combine-accum toggle (below) and
+    // the opening-balance logic further down. The body can only be read once,
+    // so we stash the parsed object in `settings` and reuse it.
+    const settings = settingsRes.ok ? await settingsRes.json() : null;
+    const combineAccumLocal = Boolean(
+      (settings as { combine_fleet_accum_depr?: boolean } | null)
+        ?.combine_fleet_accum_depr
+    );
+    const groups = getEffectiveReconGroups({
+      combine_fleet_accum_depr: combineAccumLocal,
+    });
+    setEffectiveGroups(groups);
+
     // -- account → recon_group mappings
     const linkRows: Array<{ recon_group: string; account_id: string }> =
       linksRes.ok ? await linksRes.json() : [];
     const accountToGroup: Record<string, string> = {};
     const mappingsByGroup: Record<string, string[]> = {};
-    for (const g of RECON_GROUPS) mappingsByGroup[g.key] = [];
+    for (const g of groups) mappingsByGroup[g.key] = [];
     for (const m of linkRows) {
       accountToGroup[m.account_id] = m.recon_group;
       if (!mappingsByGroup[m.recon_group]) mappingsByGroup[m.recon_group] = [];
       mappingsByGroup[m.recon_group].push(m.account_id);
     }
     const mapped: Record<string, boolean> = {};
-    for (const g of RECON_GROUPS) {
+    for (const g of groups) {
       mapped[g.key] = (mappingsByGroup[g.key]?.length ?? 0) > 0;
     }
     setHasMappings(mapped);
@@ -180,7 +200,6 @@ export function ReconciliationYearView({
     const rulesMap = new Map<string, DepreciationRule>();
     for (const r of rules) rulesMap.set(r.reporting_group, r);
 
-    const settings = settingsRes.ok ? await settingsRes.json() : null;
     const openingDateIso: string | null =
       (settings as { rental_asset_opening_date?: string } | null)
         ?.rental_asset_opening_date ?? null;
@@ -313,7 +332,7 @@ export function ReconciliationYearView({
 
     // ---- Compute per-(group, month) cell state
     const result: Record<string, Record<number, CellState>> = {};
-    for (const g of RECON_GROUPS) result[g.key] = {};
+    for (const g of groups) result[g.key] = {};
 
     for (let month = 1; month <= 12; month++) {
       const periodLastDay = (() => {
@@ -333,7 +352,7 @@ export function ReconciliationYearView({
       // Subledger totals per recon group
       const subTotals: Record<string, number> = {};
       const anyAssetContributing: Record<string, boolean> = {};
-      for (const g of RECON_GROUPS) {
+      for (const g of groups) {
         subTotals[g.key] = 0;
         anyAssetContributing[g.key] = false;
       }
@@ -368,10 +387,14 @@ export function ReconciliationYearView({
               if (cg) costKey = cg.key;
             }
             if (!accumKey) {
-              const ag = RECON_GROUPS.find(
-                (g) => g.masterType === mt && g.lineType === "accum_depr"
-              );
-              if (ag) accumKey = ag.key;
+              if (combineAccumLocal) {
+                accumKey = FLEET_ACCUM_DEPR_GROUP.key;
+              } else {
+                const ag = RECON_GROUPS.find(
+                  (g) => g.masterType === mt && g.lineType === "accum_depr"
+                );
+                if (ag) accumKey = ag.key;
+              }
             }
           }
         }
@@ -389,7 +412,7 @@ export function ReconciliationYearView({
       // GL totals per recon group
       const glTotals: Record<string, number> = {};
       const anyGlBalance: Record<string, boolean> = {};
-      for (const g of RECON_GROUPS) {
+      for (const g of groups) {
         let total = 0;
         let hasAny = false;
         for (const acctId of mappingsByGroup[g.key] ?? []) {
@@ -404,7 +427,7 @@ export function ReconciliationYearView({
       }
 
       // Derive status per group
-      for (const g of RECON_GROUPS) {
+      for (const g of groups) {
         const glBal = glTotals[g.key];
         const subBal = subTotals[g.key];
         const variance = glBal - subBal;
@@ -553,7 +576,7 @@ export function ReconciliationYearView({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {RECON_GROUPS.map((group) => {
+              {effectiveGroups.map((group) => {
                 const summary = getGroupSummary(group.key);
                 const noMappings = !hasMappings[group.key];
                 return (

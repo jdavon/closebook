@@ -41,7 +41,10 @@ import {
 import { formatCurrency, getPeriodShortLabel } from "@/lib/utils/dates";
 import {
   RECON_GROUPS,
+  FLEET_ACCUM_DEPR_GROUP,
   UNALLOCATED_KEY,
+  getEffectiveReconGroups,
+  isFleetReconGroup,
   type ReconGroup,
 } from "@/lib/utils/asset-gl-groups";
 import { ReconciliationYearView } from "./reconciliation-year-view";
@@ -156,6 +159,15 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
   const [allAssets, setAllAssets] = useState<AssetRow[]>([]);
   const [deprMapState, setDeprMapState] = useState<Record<string, DeprRow>>({});
 
+  // Entity-level reconciliation setting. When true, Vehicle + Trailer accumulated
+  // depreciation collapse into a single Fleet group — used when QuickBooks has
+  // one shared accum depr account so the split-by-master-type subledger can't
+  // reconcile to GL. Toggled in the Rental Asset Register Settings dialog.
+  const [combineFleetAccumDepr, setCombineFleetAccumDepr] = useState(false);
+  const effectiveReconGroups = getEffectiveReconGroups({
+    combine_fleet_accum_depr: combineFleetAccumDepr,
+  });
+
   // Account picker state
   const [addingToGroup, setAddingToGroup] = useState<string | null>(null);
   const [selectedAccountIds, setSelectedAccountIds] = useState<Set<string>>(new Set());
@@ -164,14 +176,28 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
   const loadData = useCallback(async () => {
     setLoading(true);
 
-    // 0. Load custom classes
-    const ccRes = await fetch(`/api/assets/classes?entityId=${entityId}`);
+    // 0. Load custom classes + entity settings (opening date + combine toggle).
+    // Parsed once here and reused downstream — fetch response bodies can only
+    // be read once, so we stash the parsed object in `settings`.
+    const [ccRes, settingsRes] = await Promise.all([
+      fetch(`/api/assets/classes?entityId=${entityId}`),
+      fetch(`/api/assets/settings?entityId=${entityId}`),
+    ]);
     let cc: VehicleClassification[] = [];
     if (ccRes.ok) {
       const rows: CustomVehicleClassRow[] = await ccRes.json();
       cc = customRowsToClassifications(rows);
       setCustomClasses(cc);
     }
+    const settings = settingsRes.ok ? await settingsRes.json() : null;
+    const combineAccum = Boolean(
+      (settings as { combine_fleet_accum_depr?: boolean } | null)
+        ?.combine_fleet_accum_depr
+    );
+    setCombineFleetAccumDepr(combineAccum);
+    const effectiveGroups = getEffectiveReconGroups({
+      combine_fleet_accum_depr: combineAccum,
+    });
 
     // 1. Fetch all entity accounts (for the picker)
     const { data: acctData } = await supabase
@@ -188,7 +214,7 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
     const mappingData = linkRes.ok ? await linkRes.json() : [];
 
     const mapped: Record<string, { id: string; account_id: string }[]> = {};
-    for (const group of RECON_GROUPS) {
+    for (const group of effectiveGroups) {
       mapped[group.key] = [];
     }
     for (const m of (mappingData ?? []) as {
@@ -224,7 +250,7 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
         glMap[row.account_id] = Number(row.ending_balance ?? 0);
       }
 
-      for (const group of RECON_GROUPS) {
+      for (const group of effectiveGroups) {
         const groupAcctIds =
           mapped[group.key]?.map((m) => m.account_id) ?? [];
         balances[group.key] = groupAcctIds.reduce(
@@ -277,8 +303,6 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
     const rulesMap = new Map<string, DepreciationRule>();
     for (const r of rules) rulesMap.set(r.reporting_group, r);
 
-    const settingsRes = await fetch(`/api/assets/settings?entityId=${entityId}`);
-    const settings = settingsRes.ok ? await settingsRes.json() : null;
     const openingDateIso: string | null =
       (settings as { rental_asset_opening_date?: string } | null)
         ?.rental_asset_opening_date ?? null;
@@ -398,7 +422,7 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
     //    place it in whichever recon group has that account linked (GL override).
     //    Otherwise fall back to vehicle_class → master type mapping.
     const grouped: Record<string, SubledgerGroup> = {};
-    for (const group of RECON_GROUPS) {
+    for (const group of effectiveGroups) {
       grouped[group.key] = { total: 0, assets: [] };
     }
     grouped[UNALLOCATED_KEY] = { total: 0, assets: [] };
@@ -437,7 +461,9 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
       let accumKey: string | null = accumOverrideGroup ?? null;
 
       if (!costKey || !accumKey) {
-        // Fall back to vehicle class → master type → matching RECON_GROUP
+        // Fall back to vehicle class → master type → matching RECON_GROUP.
+        // When the entity combines accum depr, any Vehicle/Trailer asset
+        // routes to the shared fleet accum group regardless of master type.
         const mt = getEffectiveMasterType(
           asset.vehicle_class,
           asset.master_type_override,
@@ -451,10 +477,14 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
             if (cg) costKey = cg.key;
           }
           if (!accumKey) {
-            const ag = RECON_GROUPS.find(
-              (g) => g.masterType === mt && g.lineType === "accum_depr"
-            );
-            if (ag) accumKey = ag.key;
+            if (combineAccum) {
+              accumKey = FLEET_ACCUM_DEPR_GROUP.key;
+            } else {
+              const ag = RECON_GROUPS.find(
+                (g) => g.masterType === mt && g.lineType === "accum_depr"
+              );
+              if (ag) accumKey = ag.key;
+            }
           }
         }
       }
@@ -678,6 +708,13 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
 
   async function handleExportExcel() {
     const periodLabel = getPeriodShortLabel(periodYear, periodMonth);
+    const isFullYear = periodMonth === 12;
+    const titlePeriodLabel = isFullYear
+      ? `January 1, ${periodYear} through December 31, ${periodYear}`
+      : `Period: ${periodLabel}`;
+    const subtitleLabel = isFullYear
+      ? `Year Ended December 31, ${periodYear}`
+      : `Reconciliation — ${periodLabel}`;
     try {
       const { data: entityRow } = await supabase
         .from("entities")
@@ -700,7 +737,7 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
         status: string;
         notes: string;
       }
-      const reconRows: ReconRow[] = RECON_GROUPS.map((g) => {
+      const reconRows: ReconRow[] = effectiveReconGroups.map((g) => {
         const glBal = glBalances[g.key] ?? 0;
         const subBal = subledgerBalances[g.key]?.total ?? 0;
         const variance = glBal - subBal;
@@ -756,7 +793,7 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
           entityName,
           reportTitle: "Fixed Asset Reconciliation",
           subtitle: "GL vs Subledger by Recon Group",
-          period: `Period: ${periodLabel}`,
+          period: titlePeriodLabel,
           asOf: `Generated ${formatLongDate(new Date().toISOString().slice(0, 10))}`,
         },
         grandTotal: true,
@@ -895,7 +932,7 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
         title: {
           entityName,
           reportTitle: "Fixed Asset Subledger Detail",
-          subtitle: `Reconciliation — ${periodLabel}`,
+          subtitle: subtitleLabel,
           asOf: `Generated ${formatLongDate(new Date().toISOString().slice(0, 10))}`,
         },
         groupBy: (r) => r.group,
@@ -933,8 +970,16 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
 
   const years = Array.from({ length: 5 }, (_, i) => now.getFullYear() - i);
 
-  const vehicleGroups = RECON_GROUPS.filter((g) => g.masterType === "Vehicle");
-  const trailerGroups = RECON_GROUPS.filter((g) => g.masterType === "Trailer");
+  // Split effective groups into rendering sections. Fleet groups (combined
+  // Vehicles + Trailers) get their own section; per-master-type groups render
+  // inside their respective Vehicles / Trailers sections.
+  const vehicleGroups = effectiveReconGroups.filter(
+    (g) => g.masterType === "Vehicle" && !isFleetReconGroup(g)
+  );
+  const trailerGroups = effectiveReconGroups.filter(
+    (g) => g.masterType === "Trailer" && !isFleetReconGroup(g)
+  );
+  const fleetGroups = effectiveReconGroups.filter(isFleetReconGroup);
 
   function renderReconCard(group: ReconGroup) {
     const glBal = glBalances[group.key] ?? 0;
@@ -1402,54 +1447,56 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               {vehicleGroups.map(renderReconCard)}
             </div>
-            {/* Net summary */}
-            {(() => {
-              const costBal = glBalances["vehicles_cost"] ?? 0;
-              const accumBal = glBalances["vehicles_accum_depr"] ?? 0;
-              const glNet = costBal + accumBal;
-              const subCost =
-                subledgerBalances["vehicles_cost"]?.total ?? 0;
-              const subAccum =
-                subledgerBalances["vehicles_accum_depr"]?.total ?? 0;
-              const subNet = subCost + subAccum;
-              const netVariance = glNet - subNet;
-              return (
-                <div className="rounded-lg border bg-muted/30 p-4">
-                  <div className="grid grid-cols-3 gap-4">
-                    <div>
-                      <p className="text-xs text-muted-foreground uppercase tracking-wider">
-                        GL Net (Vehicles)
-                      </p>
-                      <p className="text-lg font-semibold tabular-nums">
-                        {formatCurrency(glNet)}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-muted-foreground uppercase tracking-wider">
-                        Subledger Net
-                      </p>
-                      <p className="text-lg font-semibold tabular-nums">
-                        {formatCurrency(subNet)}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-muted-foreground uppercase tracking-wider">
-                        Net Variance
-                      </p>
-                      <p
-                        className={`text-lg font-semibold tabular-nums ${
-                          Math.abs(netVariance) > 1.00
-                            ? "text-red-600"
-                            : "text-green-600"
-                        }`}
-                      >
-                        {formatCurrency(netVariance)}
-                      </p>
+            {/* Net summary — only shown when both cost and accum cards are in
+                this section (i.e. accum isn't being combined under Fleet). */}
+            {!combineFleetAccumDepr &&
+              (() => {
+                const costBal = glBalances["vehicles_cost"] ?? 0;
+                const accumBal = glBalances["vehicles_accum_depr"] ?? 0;
+                const glNet = costBal + accumBal;
+                const subCost =
+                  subledgerBalances["vehicles_cost"]?.total ?? 0;
+                const subAccum =
+                  subledgerBalances["vehicles_accum_depr"]?.total ?? 0;
+                const subNet = subCost + subAccum;
+                const netVariance = glNet - subNet;
+                return (
+                  <div className="rounded-lg border bg-muted/30 p-4">
+                    <div className="grid grid-cols-3 gap-4">
+                      <div>
+                        <p className="text-xs text-muted-foreground uppercase tracking-wider">
+                          GL Net (Vehicles)
+                        </p>
+                        <p className="text-lg font-semibold tabular-nums">
+                          {formatCurrency(glNet)}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground uppercase tracking-wider">
+                          Subledger Net
+                        </p>
+                        <p className="text-lg font-semibold tabular-nums">
+                          {formatCurrency(subNet)}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground uppercase tracking-wider">
+                          Net Variance
+                        </p>
+                        <p
+                          className={`text-lg font-semibold tabular-nums ${
+                            Math.abs(netVariance) > 1.00
+                              ? "text-red-600"
+                              : "text-green-600"
+                          }`}
+                        >
+                          {formatCurrency(netVariance)}
+                        </p>
+                      </div>
                     </div>
                   </div>
-                </div>
-              );
-            })()}
+                );
+              })()}
           </div>
 
           {/* Trailers section */}
@@ -1460,55 +1507,120 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               {trailerGroups.map(renderReconCard)}
             </div>
-            {/* Net summary */}
-            {(() => {
-              const costBal = glBalances["trailers_cost"] ?? 0;
-              const accumBal = glBalances["trailers_accum_depr"] ?? 0;
-              const glNet = costBal + accumBal;
-              const subCost =
-                subledgerBalances["trailers_cost"]?.total ?? 0;
-              const subAccum =
-                subledgerBalances["trailers_accum_depr"]?.total ?? 0;
-              const subNet = subCost + subAccum;
-              const netVariance = glNet - subNet;
-              return (
-                <div className="rounded-lg border bg-muted/30 p-4">
-                  <div className="grid grid-cols-3 gap-4">
-                    <div>
-                      <p className="text-xs text-muted-foreground uppercase tracking-wider">
-                        GL Net (Trailers)
-                      </p>
-                      <p className="text-lg font-semibold tabular-nums">
-                        {formatCurrency(glNet)}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-muted-foreground uppercase tracking-wider">
-                        Subledger Net
-                      </p>
-                      <p className="text-lg font-semibold tabular-nums">
-                        {formatCurrency(subNet)}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-muted-foreground uppercase tracking-wider">
-                        Net Variance
-                      </p>
-                      <p
-                        className={`text-lg font-semibold tabular-nums ${
-                          Math.abs(netVariance) > 1.00
-                            ? "text-red-600"
-                            : "text-green-600"
-                        }`}
-                      >
-                        {formatCurrency(netVariance)}
-                      </p>
+            {!combineFleetAccumDepr &&
+              (() => {
+                const costBal = glBalances["trailers_cost"] ?? 0;
+                const accumBal = glBalances["trailers_accum_depr"] ?? 0;
+                const glNet = costBal + accumBal;
+                const subCost =
+                  subledgerBalances["trailers_cost"]?.total ?? 0;
+                const subAccum =
+                  subledgerBalances["trailers_accum_depr"]?.total ?? 0;
+                const subNet = subCost + subAccum;
+                const netVariance = glNet - subNet;
+                return (
+                  <div className="rounded-lg border bg-muted/30 p-4">
+                    <div className="grid grid-cols-3 gap-4">
+                      <div>
+                        <p className="text-xs text-muted-foreground uppercase tracking-wider">
+                          GL Net (Trailers)
+                        </p>
+                        <p className="text-lg font-semibold tabular-nums">
+                          {formatCurrency(glNet)}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground uppercase tracking-wider">
+                          Subledger Net
+                        </p>
+                        <p className="text-lg font-semibold tabular-nums">
+                          {formatCurrency(subNet)}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground uppercase tracking-wider">
+                          Net Variance
+                        </p>
+                        <p
+                          className={`text-lg font-semibold tabular-nums ${
+                            Math.abs(netVariance) > 1.00
+                              ? "text-red-600"
+                              : "text-green-600"
+                          }`}
+                        >
+                          {formatCurrency(netVariance)}
+                        </p>
+                      </div>
                     </div>
                   </div>
-                </div>
-              );
-            })()}
+                );
+              })()}
           </div>
+
+          {/* Fleet section — only rendered when the entity combines accum depr.
+              Houses the shared Fleet — Accumulated Depreciation card and a
+              cross-section net summary (Vehicle Cost + Trailer Cost + Fleet
+              Accum) so reviewers can see the overall fleet balance. */}
+          {fleetGroups.length > 0 && (
+            <div className="space-y-4">
+              <h3 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
+                Fleet (Combined)
+              </h3>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                {fleetGroups.map(renderReconCard)}
+              </div>
+              {(() => {
+                const vehCost = glBalances["vehicles_cost"] ?? 0;
+                const trlCost = glBalances["trailers_cost"] ?? 0;
+                const fleetAccum = glBalances["fleet_accum_depr"] ?? 0;
+                const glNet = vehCost + trlCost + fleetAccum;
+                const subVehCost =
+                  subledgerBalances["vehicles_cost"]?.total ?? 0;
+                const subTrlCost =
+                  subledgerBalances["trailers_cost"]?.total ?? 0;
+                const subFleetAccum =
+                  subledgerBalances["fleet_accum_depr"]?.total ?? 0;
+                const subNet = subVehCost + subTrlCost + subFleetAccum;
+                const netVariance = glNet - subNet;
+                return (
+                  <div className="rounded-lg border bg-muted/30 p-4">
+                    <div className="grid grid-cols-3 gap-4">
+                      <div>
+                        <p className="text-xs text-muted-foreground uppercase tracking-wider">
+                          GL Net (Fleet)
+                        </p>
+                        <p className="text-lg font-semibold tabular-nums">
+                          {formatCurrency(glNet)}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground uppercase tracking-wider">
+                          Subledger Net
+                        </p>
+                        <p className="text-lg font-semibold tabular-nums">
+                          {formatCurrency(subNet)}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground uppercase tracking-wider">
+                          Net Variance
+                        </p>
+                        <p
+                          className={`text-lg font-semibold tabular-nums ${
+                            Math.abs(netVariance) > 1.0
+                              ? "text-red-600"
+                              : "text-green-600"
+                          }`}
+                        >
+                          {formatCurrency(netVariance)}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          )}
 
           {/* Unallocated Assets */}
           {(() => {

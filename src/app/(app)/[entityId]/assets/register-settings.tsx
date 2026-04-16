@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -28,6 +29,7 @@ export function RegisterSettings({
   onSaved,
 }: RegisterSettingsProps) {
   const [openingDate, setOpeningDate] = useState<string>("");
+  const [combineFleetAccumDepr, setCombineFleetAccumDepr] = useState(false);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -37,6 +39,7 @@ export function RegisterSettings({
     if (res.ok) {
       const data = await res.json();
       setOpeningDate(data.rental_asset_opening_date ?? "");
+      setCombineFleetAccumDepr(Boolean(data.combine_fleet_accum_depr));
     }
     setLoading(false);
   }, [entityId]);
@@ -57,6 +60,7 @@ export function RegisterSettings({
       body: JSON.stringify({
         entityId,
         rental_asset_opening_date: openingDate,
+        combine_fleet_accum_depr: combineFleetAccumDepr,
       }),
     });
     if (res.ok) {
@@ -99,6 +103,38 @@ export function RegisterSettings({
               depreciation are treated as opening balances; everything else is
               generated from the in-service date forward.
             </p>
+          </div>
+
+          <div className="space-y-2 border-t pt-4">
+            <Label className="text-sm font-medium">
+              Reconciliation Settings
+            </Label>
+            <div className="flex items-start gap-2">
+              <Checkbox
+                id="combineFleetAccumDepr"
+                checked={combineFleetAccumDepr}
+                onCheckedChange={(v) =>
+                  setCombineFleetAccumDepr(v === true)
+                }
+                disabled={loading || saving}
+                className="mt-0.5"
+              />
+              <div className="space-y-1">
+                <Label
+                  htmlFor="combineFleetAccumDepr"
+                  className="text-sm font-normal cursor-pointer"
+                >
+                  Combine Vehicles + Trailers for Accumulated Depreciation
+                </Label>
+                <p className="text-xs text-muted-foreground">
+                  Enable when this entity&apos;s QuickBooks uses a single
+                  Accumulated Depreciation account for both vehicles and
+                  trailers. The reconciliation tab will show one combined
+                  Fleet — Accumulated Depreciation group instead of separate
+                  ones, and you&apos;ll link the shared GL account there.
+                </p>
+              </div>
+            </div>
           </div>
         </div>
 

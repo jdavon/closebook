@@ -913,6 +913,7 @@ export type Database = {
           fiscal_year_end_month: number
           is_active: boolean
           rental_asset_opening_date: string
+          combine_fleet_accum_depr: boolean
           created_at: string
           updated_at: string
         }
@@ -925,6 +926,7 @@ export type Database = {
           fiscal_year_end_month?: number
           is_active?: boolean
           rental_asset_opening_date?: string
+          combine_fleet_accum_depr?: boolean
           created_at?: string
           updated_at?: string
         }
@@ -937,6 +939,7 @@ export type Database = {
           fiscal_year_end_month?: number
           is_active?: boolean
           rental_asset_opening_date?: string
+          combine_fleet_accum_depr?: boolean
           created_at?: string
           updated_at?: string
         }

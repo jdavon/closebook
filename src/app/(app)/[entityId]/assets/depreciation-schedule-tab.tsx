@@ -716,19 +716,27 @@ export function DepreciationScheduleTab({
         title: `Depreciation Schedule — ${months[0] ? getPeriodShortLabel(months[0].year, months[0].month) : ""}–${months[months.length - 1] ? getPeriodShortLabel(months[months.length - 1].year, months[months.length - 1].month) : ""}`,
       });
 
-      const firstLabel = months[0]
-        ? getPeriodShortLabel(months[0].year, months[0].month)
+      const firstPeriodMonth = months[0];
+      const lastPeriodMonth = months[months.length - 1];
+      const firstLabel = firstPeriodMonth
+        ? getPeriodShortLabel(firstPeriodMonth.year, firstPeriodMonth.month)
         : "";
-      const lastLabel = months[months.length - 1]
-        ? getPeriodShortLabel(
-            months[months.length - 1].year,
-            months[months.length - 1].month
-          )
+      const lastLabel = lastPeriodMonth
+        ? getPeriodShortLabel(lastPeriodMonth.year, lastPeriodMonth.month)
         : "";
-      const periodLabel =
-        firstLabel && lastLabel && firstLabel !== lastLabel
-          ? `${firstLabel} – ${lastLabel}`
-          : firstLabel;
+      const isFullYear =
+        !!firstPeriodMonth &&
+        !!lastPeriodMonth &&
+        firstPeriodMonth.year === lastPeriodMonth.year &&
+        firstPeriodMonth.month === 1 &&
+        lastPeriodMonth.month === 12;
+      const periodLabel = isFullYear
+        ? `January 1, ${firstPeriodMonth.year} through December 31, ${firstPeriodMonth.year}`
+        : firstLabel && lastLabel && firstLabel !== lastLabel
+          ? `Periods: ${firstLabel} – ${lastLabel}`
+          : firstLabel
+            ? `Periods: ${firstLabel}`
+            : "";
 
       // Build sheets for both Depreciation and Net Book Value so the workbook
       // is a complete record regardless of which view was on-screen. Columns
@@ -903,7 +911,7 @@ export function DepreciationScheduleTab({
             reportTitle: `Depreciation Schedule — ${sheetTitle}`,
             subtitle:
               "Vehicles & Trailers with reporting-group subtotals and asset detail",
-            period: periodLabel ? `Periods: ${periodLabel}` : undefined,
+            period: periodLabel || undefined,
             asOf: `Generated ${formatLongDate(new Date().toISOString().slice(0, 10))}`,
           },
           labelColumn: { header: "Asset", width: 42 },
@@ -999,7 +1007,7 @@ export function DepreciationScheduleTab({
             entityName,
             reportTitle: "Depreciation Schedule — Summary",
             subtitle: `Roll-up by Master Category and Reporting Group (${periodMode === "yearly" ? "Yearly" : "Monthly"})`,
-            period: periodLabel ? `Periods: ${periodLabel}` : undefined,
+            period: periodLabel || undefined,
             asOf: `Generated ${formatLongDate(new Date().toISOString().slice(0, 10))}`,
           },
           labelColumn: { header: "", width: 34 },
@@ -1070,7 +1078,7 @@ export function DepreciationScheduleTab({
           entityName,
           reportTitle: "Depreciation Schedule — Asset Register",
           subtitle: "Rule-Resolved Useful Life / Salvage / Method",
-          period: periodLabel ? `Periods: ${periodLabel}` : undefined,
+          period: periodLabel || undefined,
           asOf: `Generated ${formatLongDate(new Date().toISOString().slice(0, 10))}`,
         },
         columns: [

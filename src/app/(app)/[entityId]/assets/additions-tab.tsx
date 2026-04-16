@@ -485,7 +485,7 @@ export function AdditionsTab({ entityId }: AdditionsTabProps) {
         title: {
           entityName,
           reportTitle: "Fixed Asset Additions",
-          period: `Year Ended December 31, ${year}`,
+          period: `January 1, ${year} through December 31, ${year}`,
           asOf: `NBV as of ${formatLongDate(exportAsOfDate)}`,
         },
         groupBy: (r) =>

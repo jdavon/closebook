@@ -342,7 +342,7 @@ export function SoldTab({ entityId }: SoldTabProps) {
           entityName,
           reportTitle: "Disposed Assets Schedule",
           subtitle: `Rental Fleet — ${scopeLabel}`,
-          period: `Year Ended December 31, ${year}`,
+          period: `January 1, ${year} through December 31, ${year}`,
           asOf: `Generated ${formatLongDate(new Date().toISOString().slice(0, 10))}`,
         },
         groupBy: (r) =>

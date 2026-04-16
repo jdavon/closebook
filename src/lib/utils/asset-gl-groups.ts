@@ -69,6 +69,54 @@ export const RECON_GROUPS: ReconGroup[] = [
   },
 ];
 
+/**
+ * Combined Fleet accumulated depreciation group. Covers both Vehicle and Trailer
+ * assets — used when the entity's GL has a single shared Accum. Depreciation
+ * account so the subledger can't be split by master type. Opt-in per entity via
+ * `entities.combine_fleet_accum_depr`.
+ */
+export const FLEET_ACCUM_DEPR_GROUP: ReconGroup = {
+  key: "fleet_accum_depr",
+  displayName: "Fleet — Accumulated Depreciation",
+  masterType: "Vehicle",
+  lineType: "accum_depr",
+  parentKey: "fleet_net",
+};
+
+/**
+ * Every recon group key that may appear on a link row, regardless of entity
+ * combine settings. Consumers resolving `recon_group` text back to a group
+ * object should search this list so the fleet key resolves cleanly.
+ */
+export const ALL_RECON_GROUPS: ReconGroup[] = [
+  ...RECON_GROUPS,
+  FLEET_ACCUM_DEPR_GROUP,
+];
+
+export interface ReconCombineSettings {
+  combine_fleet_accum_depr?: boolean;
+}
+
+/**
+ * Return the recon groups that should render and drive subledger routing for
+ * an entity given its combine settings. When accum depr is combined, the
+ * vehicle/trailer accum groups are replaced by a single Fleet group.
+ */
+export function getEffectiveReconGroups(
+  settings?: ReconCombineSettings
+): ReconGroup[] {
+  const costGroups = RECON_GROUPS.filter((g) => g.lineType === "cost");
+  const accumGroups = settings?.combine_fleet_accum_depr
+    ? [FLEET_ACCUM_DEPR_GROUP]
+    : RECON_GROUPS.filter((g) => g.lineType === "accum_depr");
+  return [...costGroups, ...accumGroups];
+}
+
+/** True when the group spans both Vehicle and Trailer master types. */
+export function isFleetReconGroup(group: ReconGroup): boolean {
+  return group.key.startsWith("fleet_");
+}
+
 /** Key used for assets that have no vehicle_class or an unrecognised class */
 export const UNALLOCATED_KEY = "unallocated";
 
