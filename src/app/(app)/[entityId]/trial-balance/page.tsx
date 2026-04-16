@@ -405,6 +405,7 @@ export default function TrialBalancePage() {
         toast.success("Account mapped and GL balance created");
         loadBalances();
         loadUnmatched();
+        loadEntityAccounts();
         setSelectedAccounts((prev) => {
           const next = { ...prev };
           delete next[unmatchedRowId];
@@ -418,6 +419,70 @@ export default function TrialBalancePage() {
       toast.error("Failed to resolve — network error");
     }
     setResolving(null);
+  }
+
+  async function handleCreateAccount(unmatchedRowId: string) {
+    setResolving(unmatchedRowId);
+    try {
+      const response = await fetch("/api/tb-unmatched/create-account", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ unmatchedRowId }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        toast.success(
+          `Created ${data.classification} account "${data.name}" and posted its balance`
+        );
+        loadBalances();
+        loadUnmatched();
+        loadEntityAccounts();
+      } else {
+        const err = await response.json();
+        toast.error(err.error || "Failed to create account");
+      }
+    } catch {
+      toast.error("Failed to create account — network error");
+    }
+    setResolving(null);
+  }
+
+  async function handleCreateAllAccounts() {
+    if (unmatchedRows.length === 0) return;
+    setResolving("__all__");
+    let created = 0;
+    const failures: string[] = [];
+    for (const row of unmatchedRows) {
+      try {
+        const response = await fetch("/api/tb-unmatched/create-account", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ unmatchedRowId: row.id }),
+        });
+        if (response.ok) created++;
+        else {
+          const err = await response.json().catch(() => ({}));
+          failures.push(`${row.qboAccountName}: ${err.error ?? "failed"}`);
+        }
+      } catch {
+        failures.push(`${row.qboAccountName}: network error`);
+      }
+    }
+    setResolving(null);
+    if (created > 0) {
+      toast.success(
+        `Created ${created} account${created === 1 ? "" : "s"} from QBO trial balance`
+      );
+    }
+    if (failures.length > 0) {
+      toast.error(
+        `${failures.length} failed — ${failures.slice(0, 3).join("; ")}${failures.length > 3 ? "…" : ""}`
+      );
+    }
+    loadBalances();
+    loadUnmatched();
+    loadEntityAccounts();
   }
 
   function toggleCollapse(classification: string) {
@@ -657,14 +722,28 @@ export default function TrialBalancePage() {
       {unmatchedRows.length > 0 && (
         <Card className="border-amber-200 dark:border-amber-800">
           <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Link2 className="h-5 w-5 text-amber-600" />
-              Unmatched QBO Accounts ({unmatchedRows.length})
-            </CardTitle>
+            <div className="flex items-start justify-between gap-4">
+              <CardTitle className="flex items-center gap-2">
+                <Link2 className="h-5 w-5 text-amber-600" />
+                Unmatched QBO Accounts ({unmatchedRows.length})
+              </CardTitle>
+              <Button
+                size="sm"
+                onClick={handleCreateAllAccounts}
+                disabled={resolving === "__all__"}
+              >
+                {resolving === "__all__" ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : null}
+                Create All Accounts
+              </Button>
+            </div>
             <CardDescription>
-              These accounts from the QuickBooks trial balance could not be
-              matched to your chart of accounts. Map each to an existing account
-              to include its balance and fix the variance.
+              These accounts from the QuickBooks trial balance don&apos;t exist
+              in this entity&apos;s chart of accounts yet. Click <strong>Create</strong> to
+              add a new account for the QBO ledger (classification inferred
+              from the name), or map to an existing account if you already
+              have one for it.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -674,8 +753,8 @@ export default function TrialBalancePage() {
                   <TableHead>QBO Account Name</TableHead>
                   <TableHead className="text-right w-28">Debit</TableHead>
                   <TableHead className="text-right w-28">Credit</TableHead>
-                  <TableHead className="w-[280px]">Map To</TableHead>
-                  <TableHead className="w-24"></TableHead>
+                  <TableHead className="w-[280px]">Map To Existing (optional)</TableHead>
+                  <TableHead className="w-48 text-right">Action</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -793,21 +872,34 @@ export default function TrialBalancePage() {
                           </PopoverContent>
                         </Popover>
                       </TableCell>
-                      <TableCell>
-                        <Button
-                          size="sm"
-                          onClick={() => handleResolve(row.id)}
-                          disabled={
-                            !selectedAccounts[row.id] ||
-                            resolving === row.id
-                          }
-                        >
-                          {resolving === row.id ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
+                      <TableCell className="text-right">
+                        <div className="flex items-center justify-end gap-2">
+                          {selectedAccounts[row.id] ? (
+                            <Button
+                              size="sm"
+                              onClick={() => handleResolve(row.id)}
+                              disabled={resolving === row.id}
+                            >
+                              {resolving === row.id ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                "Map"
+                              )}
+                            </Button>
                           ) : (
-                            "Map"
+                            <Button
+                              size="sm"
+                              onClick={() => handleCreateAccount(row.id)}
+                              disabled={resolving === row.id}
+                            >
+                              {resolving === row.id ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                "Create Account"
+                              )}
+                            </Button>
                           )}
-                        </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   );
