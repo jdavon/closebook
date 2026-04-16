@@ -18,6 +18,8 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { getUserEntities, getUserOrganization } from "@/lib/db/queries/organizations";
 import { createClient } from "@/lib/supabase/server";
+import { FinancialOverview } from "@/components/dashboard/financial-overview";
+import { getCurrentPeriod } from "@/lib/utils/dates";
 
 async function getEntityCloseStatus(entityIds: string[]) {
   if (entityIds.length === 0) return {};
@@ -86,6 +88,7 @@ export default async function DashboardPage() {
   ]);
 
   const closeStatus = await getEntityCloseStatus(entities.map((e) => e.id));
+  const { year: currentYear, month: currentMonth } = getCurrentPeriod();
 
   return (
     <div className="space-y-6">
@@ -105,6 +108,16 @@ export default async function DashboardPage() {
           </Button>
         </Link>
       </div>
+
+      {entities.length > 0 && orgData && (
+        <FinancialOverview
+          scope="organization"
+          organizationId={orgData.organization.id}
+          currentYear={currentYear}
+          currentMonth={currentMonth}
+          title="Consolidated — Trailing 12-Month Performance"
+        />
+      )}
 
       {entities.length === 0 ? (
         <Card>

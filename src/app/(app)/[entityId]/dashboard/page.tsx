@@ -24,6 +24,7 @@ import { getCurrentPeriod, getPeriodLabel } from "@/lib/utils/dates";
 import { LastMonthPerformance } from "@/components/dashboard/last-month-performance";
 import { ThisMonthProjection } from "@/components/dashboard/this-month-projection";
 import { DriftAlertBanner } from "@/components/dashboard/drift-alerts";
+import { FinancialOverview } from "@/components/dashboard/financial-overview";
 
 async function getEntityDashboardData(entityId: string) {
   const supabase = await createClient();
@@ -121,6 +122,14 @@ export default async function EntityDashboardPage({
       {driftAlerts.length > 0 && (
         <DriftAlertBanner entityId={entityId} initialAlerts={driftAlerts} />
       )}
+
+      {/* Trailing 12-Month Performance — hero section */}
+      <FinancialOverview
+        scope="entity"
+        entityId={entityId}
+        currentYear={currentYear}
+        currentMonth={currentMonth}
+      />
 
       {/* Financial Performance Section */}
       <div className="grid gap-4 lg:grid-cols-2">

@@ -3,6 +3,7 @@ import { SidebarProvider, SidebarInset } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/layout/app-sidebar";
 import { Header } from "@/components/layout/header";
 import { getUserProfile, getUserEntities } from "@/lib/db/queries/organizations";
+import { getOrgSummary } from "@/lib/db/queries/org-summary";
 
 export default async function AppLayout({
   children,
@@ -15,7 +16,10 @@ export default async function AppLayout({
     redirect("/login");
   }
 
-  const entities = await getUserEntities();
+  const [entities, orgSummary] = await Promise.all([
+    getUserEntities(),
+    getOrgSummary(),
+  ]);
 
   return (
     <SidebarProvider>
@@ -26,6 +30,7 @@ export default async function AppLayout({
           fullName: profile.full_name,
         }}
         entities={entities}
+        orgSummary={orgSummary}
       />
       <SidebarInset>
         <Header entities={entities} />

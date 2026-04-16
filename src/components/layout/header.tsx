@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Separator } from "@/components/ui/separator";
@@ -11,7 +12,7 @@ import {
   BreadcrumbPage,
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb";
-import { EntitySelector } from "./entity-selector";
+import { detectEntityId } from "@/lib/utils/entity-context";
 
 interface Entity {
   id: string;
@@ -21,53 +22,68 @@ interface Entity {
 
 interface HeaderProps {
   entities: Entity[];
-  currentEntityId?: string;
 }
 
 const routeLabels: Record<string, string> = {
   dashboard: "Dashboard",
   close: "Close Management",
+  "close-dashboard": "Close Dashboard",
   accounts: "Chart of Accounts",
   "trial-balance": "Trial Balance",
   schedules: "Schedules",
   assets: "Rental Assets",
   debt: "Debt Schedule",
   revenue: "Revenue Accruals",
-  payroll: "Payroll Accruals",
+  "revenue-projection": "Revenue Projection",
+  payroll: "Payroll",
   employees: "Employees",
   accruals: "Payroll Accruals",
   details: "Details",
   commissions: "Commissions",
+  rebates: "Rebate Tracker",
+  insurance: "Insurance",
+  "real-estate": "Real Estate",
+  "ic-eliminations": "IC Eliminations",
+  "financial-model": "Financial Model",
+  budget: "Budget",
   reports: "Reports & KPIs",
   settings: "Settings",
   sync: "QBO Sync",
   "tb-variance": "TB Variance",
   "master-gl": "Master GL",
+  "reporting-entities": "Reporting Entities",
   members: "Members",
+  "audit-log": "Audit Log",
+  templates: "Templates",
+  tasks: "Close Tasks",
+  reconciliations: "Reconciliations",
+  materiality: "Materiality",
 };
 
-export function Header({ entities, currentEntityId }: HeaderProps) {
+function labelFor(segment: string): string {
+  return routeLabels[segment] ?? segment.replace(/-/g, " ");
+}
+
+export function Header({ entities }: HeaderProps) {
   const pathname = usePathname();
+  const entityId = detectEntityId(pathname);
   const segments = pathname.split("/").filter(Boolean);
 
-  // Detect if we're inside an entity route (first segment is a UUID)
-  const isEntityRoute =
-    segments.length >= 1 &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-      segments[0]
-    );
+  const currentEntity = entityId
+    ? entities.find((e) => e.id === entityId)
+    : null;
 
-  const currentEntity = entities.find((e) =>
-    isEntityRoute ? e.id === segments[0] : e.id === currentEntityId
-  );
+  const trailSegments = entityId ? segments.slice(1) : segments;
 
-  // Build page label from remaining segments after entity ID (or all segments if no entity)
-  const pageSegments = isEntityRoute ? segments.slice(1) : segments;
+  const contextRoot = entityId
+    ? {
+        label: currentEntity?.name ?? "Entity",
+        href: `/${entityId}/dashboard`,
+      }
+    : { label: "Organization", href: "/dashboard" };
+
   const pageLabel =
-    pageSegments.length > 0
-      ? routeLabels[pageSegments[pageSegments.length - 1]] ??
-        pageSegments[pageSegments.length - 1]
-      : null;
+    trailSegments.length > 0 ? labelFor(trailSegments[trailSegments.length - 1]) : null;
 
   return (
     <header className="flex h-14 shrink-0 items-center gap-2 border-b px-4">
@@ -75,39 +91,21 @@ export function Header({ entities, currentEntityId }: HeaderProps) {
       <Separator orientation="vertical" className="mr-2 h-4" />
       <Breadcrumb>
         <BreadcrumbList>
-          {isEntityRoute && currentEntity ? (
+          <BreadcrumbItem>
+            {pageLabel ? (
+              <BreadcrumbLink asChild>
+                <Link href={contextRoot.href}>{contextRoot.label}</Link>
+              </BreadcrumbLink>
+            ) : (
+              <BreadcrumbPage>{contextRoot.label}</BreadcrumbPage>
+            )}
+          </BreadcrumbItem>
+          {pageLabel && (
             <>
+              <BreadcrumbSeparator />
               <BreadcrumbItem>
-                <EntitySelector
-                  entities={entities}
-                  currentEntityId={currentEntity.id}
-                />
+                <BreadcrumbPage className="capitalize">{pageLabel}</BreadcrumbPage>
               </BreadcrumbItem>
-              {pageLabel && (
-                <>
-                  <BreadcrumbSeparator />
-                  <BreadcrumbItem>
-                    <BreadcrumbPage>{pageLabel}</BreadcrumbPage>
-                  </BreadcrumbItem>
-                </>
-              )}
-            </>
-          ) : (
-            <>
-              <BreadcrumbItem>
-                <EntitySelector
-                  entities={entities}
-                  currentEntityId={currentEntityId}
-                />
-              </BreadcrumbItem>
-              {pageLabel && (
-                <>
-                  <BreadcrumbSeparator />
-                  <BreadcrumbItem>
-                    <BreadcrumbPage>{pageLabel}</BreadcrumbPage>
-                  </BreadcrumbItem>
-                </>
-              )}
             </>
           )}
         </BreadcrumbList>
