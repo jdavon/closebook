@@ -1015,29 +1015,8 @@ export function MasterExportWizard({ open, onOpenChange, entityId }: Props) {
           },
         ];
 
-        addSheet(wb, {
-          name: "Roll-Forward",
-          columns: rfCols,
-          rows: rfRows,
-          title: {
-            entityName,
-            reportTitle: "Fixed Asset Roll-Forward — Monthly Detail",
-            period: `${scopeLabel} — Jan through ${formatLongDate(asOfDate)}`,
-          },
-          // One section per (group, year). Each section renders its months
-          // Jan → Dec (clamped to the closing month) and gets a Total row —
-          // which is the annual summary for that group/year.
-          groupBy: (r) =>
-            `${r.groupLabel} — ${r.periodYear}`,
-          sort: (a, b) =>
-            a.groupLabel.localeCompare(b.groupLabel) ||
-            a.periodYear - b.periodYear ||
-            a.periodMonth - b.periodMonth,
-        });
-
-        // Dedicated annual-summary sheet: one row per (group, year) with
-        // Jan-to-close movement rolled up. Useful for quick YoY review
-        // without scrolling through the monthly detail sheet.
+        // Annual-summary sheet first — the yearly roll-forward is the
+        // headline view; monthly detail follows for drill-down.
         interface RfSummaryRow {
           groupLabel: string;
           periodYear: number;
@@ -1111,9 +1090,11 @@ export function MasterExportWizard({ open, onOpenChange, entityId }: Props) {
           {
             header: "− Disposals",
             width: 14,
+            // Disposals reduce cost — emit as a negative number so Excel
+            // renders with parens/red and the sum line reads cleanly.
             format: NUMBER_FORMATS.currency,
             total: "sum",
-            value: (r) => r.disposalsCost,
+            value: (r) => -r.disposalsCost,
           },
           {
             header: "Ending Cost",
@@ -1121,6 +1102,10 @@ export function MasterExportWizard({ open, onOpenChange, entityId }: Props) {
             format: NUMBER_FORMATS.currency,
             value: (r) => r.endingCost,
           },
+          // Narrow spacer column between the cost block and the accumulated
+          // depreciation block so the two halves of the roll-forward read
+          // as distinct sections.
+          { header: "", width: 2, value: () => "" },
           {
             header: "Beginning Accum.",
             width: 18,
@@ -1130,9 +1115,12 @@ export function MasterExportWizard({ open, onOpenChange, entityId }: Props) {
           {
             header: "+ Depreciation",
             width: 16,
+            // Depreciation adds to the contra-asset (accum depr) balance and
+            // is shown here as a negative so it reads on the same side as
+            // beginning / ending accum balances in the balance-sheet view.
             format: NUMBER_FORMATS.currency,
             total: "sum",
-            value: (r) => r.depreciation,
+            value: (r) => -r.depreciation,
           },
           {
             header: "+ Disposals Accum.",
@@ -1166,6 +1154,27 @@ export function MasterExportWizard({ open, onOpenChange, entityId }: Props) {
           },
           groupBy: (r) => r.groupLabel,
           sort: (a, b) => a.periodYear - b.periodYear,
+        });
+
+        // Monthly detail second, for drill-down.
+        addSheet(wb, {
+          name: "Roll-Forward Detail",
+          columns: rfCols,
+          rows: rfRows,
+          title: {
+            entityName,
+            reportTitle: "Fixed Asset Roll-Forward — Monthly Detail",
+            period: `${scopeLabel} — Jan through ${formatLongDate(asOfDate)}`,
+          },
+          // One section per (group, year). Each section renders its months
+          // Jan → Dec (clamped to the closing month) and gets a Total row —
+          // which is the annual summary for that group/year.
+          groupBy: (r) =>
+            `${r.groupLabel} — ${r.periodYear}`,
+          sort: (a, b) =>
+            a.groupLabel.localeCompare(b.groupLabel) ||
+            a.periodYear - b.periodYear ||
+            a.periodMonth - b.periodMonth,
         });
       }
 
