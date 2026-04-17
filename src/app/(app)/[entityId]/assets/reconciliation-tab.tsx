@@ -614,11 +614,14 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
 
   // "Reconcile All" — mark every group that has mapped accounts and a
   // within-tolerance variance as reconciled, in one click. Already-reconciled
-  // groups are left alone; groups with no accounts are skipped.
+  // groups are left alone; groups with no accounts are skipped. Uses the
+  // entity's effective recon groups so the Fleet Accumulated Depreciation
+  // group is included when the entity has combined accum depr (otherwise the
+  // static RECON_GROUPS would skip it and leave that row stranded).
   const reconcileAllStatus = (() => {
     let anyVariance = false;
     let anyReconcilable = false;
-    for (const g of RECON_GROUPS) {
+    for (const g of effectiveReconGroups) {
       const glBal = glBalances[g.key] ?? 0;
       const subBal = subledgerBalances[g.key]?.total ?? 0;
       const variance = glBal - subBal;
@@ -639,7 +642,7 @@ export function ReconciliationTab({ entityId }: ReconciliationTabProps) {
     const nowIso = new Date().toISOString();
 
     const rows = [];
-    for (const g of RECON_GROUPS) {
+    for (const g of effectiveReconGroups) {
       const glBal = glBalances[g.key] ?? 0;
       const subBal = subledgerBalances[g.key]?.total ?? 0;
       const variance = glBal - subBal;
