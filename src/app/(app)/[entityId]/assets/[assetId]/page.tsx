@@ -62,11 +62,21 @@ import {
   getVehicleClassification,
   getClassesGroupedByMasterType,
   getClassLabel,
+  getReportingGroup,
   isMasterTypeEditable,
   customRowsToClassifications,
   type VehicleClassification,
   type CustomVehicleClassRow,
 } from "@/lib/utils/vehicle-classification";
+
+interface DepreciationRule {
+  id: string;
+  entity_id: string;
+  reporting_group: string;
+  book_useful_life_months: number | null;
+  book_salvage_pct: number | string | null;
+  book_depreciation_method: string;
+}
 import type {
   BookDepreciationMethod,
   TaxDepreciationMethod,
@@ -181,6 +191,7 @@ export default function AssetDetailPage() {
   const [asset, setAsset] = useState<FixedAssetData | null>(null);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [customClasses, setCustomClasses] = useState<VehicleClassification[]>([]);
+  const [depreciationRules, setDepreciationRules] = useState<DepreciationRule[]>([]);
   const [openingDate, setOpeningDate] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -280,10 +291,11 @@ export default function AssetDetailPage() {
 
     setAccounts((accountsResult.data as Account[]) ?? []);
 
-    // Load custom classes and register settings in parallel
-    const [classesRes, settingsRes] = await Promise.all([
+    // Load custom classes, register settings, and depreciation rules in parallel
+    const [classesRes, settingsRes, rulesRes] = await Promise.all([
       fetch(`/api/assets/classes?entityId=${entityId}`),
       fetch(`/api/assets/settings?entityId=${entityId}`),
+      fetch(`/api/assets/depreciation-rules?entityId=${entityId}`),
     ]);
 
     if (classesRes.ok) {
@@ -293,6 +305,10 @@ export default function AssetDetailPage() {
     if (settingsRes.ok) {
       const data = await settingsRes.json();
       setOpeningDate(data.rental_asset_opening_date ?? "");
+    }
+    if (rulesRes.ok) {
+      const rules: DepreciationRule[] = await rulesRes.json();
+      setDepreciationRules(rules ?? []);
     }
 
     setLoading(false);
@@ -1138,6 +1154,125 @@ export default function AssetDetailPage() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
+              {(() => {
+                const reportingGroup = getReportingGroup(vehicleClass, customClasses);
+                const rule = reportingGroup
+                  ? depreciationRules.find((r) => r.reporting_group === reportingGroup) ?? null
+                  : null;
+                const costNum = parseFloat(acquisitionCost) || 0;
+                const ruleUsesUL =
+                  rule?.book_useful_life_months != null && rule.book_useful_life_months > 0;
+                const ruleUsesSalvage =
+                  rule?.book_salvage_pct != null && Number(rule.book_salvage_pct) >= 0;
+                const ruleUsesMethod = rule?.book_depreciation_method != null;
+                const effectiveUL = ruleUsesUL
+                  ? rule!.book_useful_life_months!
+                  : parseInt(bookUsefulLife) || 0;
+                const effectiveSalvage = ruleUsesSalvage
+                  ? Math.round(costNum * (Number(rule!.book_salvage_pct) / 100) * 100) / 100
+                  : parseFloat(bookSalvage) || 0;
+                const effectiveMethod = ruleUsesMethod
+                  ? rule!.book_depreciation_method
+                  : bookMethod;
+                const anyRuleOverride = ruleUsesUL || ruleUsesSalvage || ruleUsesMethod;
+                const allRuleOverride = ruleUsesUL && ruleUsesSalvage && ruleUsesMethod;
+
+                return (
+                  <div
+                    className={`rounded-lg border p-3 text-sm ${
+                      anyRuleOverride
+                        ? "bg-amber-50 border-amber-200 dark:bg-amber-950/30 dark:border-amber-900"
+                        : "bg-muted/40"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-2">
+                      <div>
+                        <div className="font-medium">
+                          {anyRuleOverride
+                            ? `Governed by entity rule — ${reportingGroup}`
+                            : "Governed by asset-specific values"}
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          Reporting group:{" "}
+                          <span className="font-mono">
+                            {reportingGroup ?? "(unclassified)"}
+                          </span>
+                          {rule && !allRuleOverride && (
+                            <> — rule is partial; unset fields fall back to asset values</>
+                          )}
+                          {!rule && reportingGroup && (
+                            <> — no rule configured for this group; asset values apply</>
+                          )}
+                          {!reportingGroup && (
+                            <> — set a vehicle class to enable rule matching</>
+                          )}
+                        </div>
+                      </div>
+                      <Badge variant={anyRuleOverride ? "default" : "outline"}>
+                        {anyRuleOverride ? "Rule applied" : "No rule"}
+                      </Badge>
+                    </div>
+                    <div className="grid grid-cols-3 gap-3 pt-2 border-t text-xs">
+                      <div>
+                        <div className="text-muted-foreground">Useful Life</div>
+                        <div className="tabular-nums">
+                          {effectiveUL} months
+                          <span className="ml-1 text-muted-foreground">
+                            ({ruleUsesUL ? "rule" : "asset"})
+                          </span>
+                        </div>
+                        {ruleUsesUL &&
+                          (parseInt(bookUsefulLife) || 0) !== rule!.book_useful_life_months && (
+                            <div className="text-muted-foreground line-through tabular-nums">
+                              asset: {bookUsefulLife || 0} months
+                            </div>
+                          )}
+                      </div>
+                      <div>
+                        <div className="text-muted-foreground">Salvage</div>
+                        <div className="tabular-nums">
+                          {formatCurrency(effectiveSalvage)}
+                          <span className="ml-1 text-muted-foreground">
+                            (
+                            {ruleUsesSalvage
+                              ? `rule ${Number(rule!.book_salvage_pct)}%`
+                              : "asset"}
+                            )
+                          </span>
+                        </div>
+                        {ruleUsesSalvage &&
+                          Math.abs((parseFloat(bookSalvage) || 0) - effectiveSalvage) > 0.01 && (
+                            <div className="text-muted-foreground line-through tabular-nums">
+                              asset: {formatCurrency(parseFloat(bookSalvage) || 0)}
+                            </div>
+                          )}
+                      </div>
+                      <div>
+                        <div className="text-muted-foreground">Method</div>
+                        <div>
+                          {effectiveMethod}
+                          <span className="ml-1 text-muted-foreground">
+                            ({ruleUsesMethod ? "rule" : "asset"})
+                          </span>
+                        </div>
+                        {ruleUsesMethod && bookMethod !== effectiveMethod && (
+                          <div className="text-muted-foreground line-through">
+                            asset: {bookMethod}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    {anyRuleOverride && (
+                      <div className="mt-2 pt-2 border-t text-xs text-muted-foreground">
+                        Rule values are used by the depreciation schedule regenerator.
+                        The asset-level fields below remain editable but are ignored
+                        while a rule is in effect. Edit the rule under Settings →
+                        Depreciation Rules to change policy for this reporting group.
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label htmlFor="acquisitionDate">Acquisition Date</Label>
