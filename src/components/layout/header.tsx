@@ -90,44 +90,66 @@ export function Header({ entities }: HeaderProps) {
   const lastSegment =
     trailSegments.length > 0 ? trailSegments[trailSegments.length - 1] : null;
 
-  // Asset detail page: /[entityId]/assets/[assetId]. Replace the UUID in the
-  // breadcrumb with the asset's name.
-  const assetId =
+  // Detail pages where the URL ends in a UUID — map the section to the
+  // Supabase table + columns to fetch so the breadcrumb shows a human
+  // label instead of the raw ID. Extend this map as new detail pages
+  // are added.
+  const DETAIL_LOOKUPS: Record<
+    string,
+    { table: string; columns: string; format: (row: Record<string, unknown>) => string }
+  > = {
+    assets: {
+      table: "fixed_assets",
+      columns: "asset_name, asset_tag",
+      format: (r) =>
+        r.asset_tag
+          ? `${r.asset_tag} — ${r.asset_name}`
+          : (r.asset_name as string),
+    },
+    debt: {
+      table: "debt_instruments",
+      columns: "instrument_name",
+      format: (r) => r.instrument_name as string,
+    },
+  };
+
+  const detail =
     entityId &&
     trailSegments.length === 2 &&
-    trailSegments[0] === "assets" &&
     lastSegment &&
-    UUID_PATTERN.test(lastSegment)
-      ? lastSegment
+    UUID_PATTERN.test(lastSegment) &&
+    DETAIL_LOOKUPS[trailSegments[0]]
+      ? {
+          section: trailSegments[0],
+          id: lastSegment,
+          lookup: DETAIL_LOOKUPS[trailSegments[0]],
+        }
       : null;
-  const [assetName, setAssetName] = useState<string | null>(null);
+  const [detailLabel, setDetailLabel] = useState<string | null>(null);
   useEffect(() => {
-    if (!assetId) {
-      setAssetName(null);
+    if (!detail) {
+      setDetailLabel(null);
       return;
     }
     let cancelled = false;
     const supabase = createClient();
-    supabase
-      .from("fixed_assets")
-      .select("asset_name, asset_tag")
-      .eq("id", assetId)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (supabase as any)
+      .from(detail.lookup.table)
+      .select(detail.lookup.columns)
+      .eq("id", detail.id)
       .single()
-      .then(({ data }) => {
+      .then(({ data }: { data: Record<string, unknown> | null }) => {
         if (cancelled || !data) return;
-        setAssetName(
-          data.asset_tag
-            ? `${data.asset_tag} — ${data.asset_name}`
-            : data.asset_name
-        );
+        setDetailLabel(detail.lookup.format(data));
       });
     return () => {
       cancelled = true;
     };
-  }, [assetId]);
+  }, [detail?.section, detail?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const pageLabel = assetId
-    ? assetName ?? "Asset"
+  const pageLabel = detail
+    ? detailLabel ?? labelFor(detail.section)
     : lastSegment
       ? labelFor(lastSegment)
       : null;
