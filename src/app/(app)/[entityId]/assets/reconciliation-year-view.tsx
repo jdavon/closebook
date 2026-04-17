@@ -250,8 +250,10 @@ export function ReconciliationYearView({
         rule?.book_useful_life_months != null && rule.book_useful_life_months > 0
           ? rule.book_useful_life_months
           : asset.book_useful_life_months;
+      // Asset-hardcoded salvage (> 0) supersedes the rule's salvage %.
+      const assetSalvage = asset.book_salvage_value;
       const salvage =
-        ruleSalvage != null ? ruleSalvage : asset.book_salvage_value;
+        assetSalvage > 0 ? assetSalvage : ruleSalvage ?? assetSalvage;
       const method =
         rule?.book_depreciation_method ?? asset.book_depreciation_method;
 

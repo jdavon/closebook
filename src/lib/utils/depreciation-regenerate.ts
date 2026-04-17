@@ -101,8 +101,12 @@ export async function regenerateAssetSchedule(
     rule?.book_useful_life_months != null && rule.book_useful_life_months > 0
       ? rule.book_useful_life_months
       : a.book_useful_life_months;
+  // Asset-hardcoded salvage (> 0) supersedes the rule's salvage %. The rule
+  // only applies when the asset's stored salvage is 0 (i.e., not explicitly
+  // set at creation time). This lets operators override policy per-asset.
+  const assetSalvage = Number(a.book_salvage_value);
   const effectiveSalvage =
-    ruleSalvage != null ? ruleSalvage : Number(a.book_salvage_value);
+    assetSalvage > 0 ? assetSalvage : ruleSalvage ?? assetSalvage;
   const effectiveMethod =
     rule?.book_depreciation_method ?? a.book_depreciation_method;
 

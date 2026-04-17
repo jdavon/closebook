@@ -964,8 +964,10 @@ export default function AssetsPage() {
           rule.book_useful_life_months > 0
             ? rule.book_useful_life_months
             : a.book_useful_life_months;
+        // Asset-hardcoded salvage (> 0) supersedes the rule's salvage %.
+        const assetSalvage = Number(a.book_salvage_value);
         const salvage =
-          ruleSalvage != null ? ruleSalvage : Number(a.book_salvage_value);
+          assetSalvage > 0 ? assetSalvage : ruleSalvage ?? assetSalvage;
         const method =
           rule?.book_depreciation_method ?? a.book_depreciation_method;
 

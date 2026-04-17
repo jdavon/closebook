@@ -161,7 +161,10 @@ function resolveAssetForCalc(
     rule?.book_useful_life_months != null && rule.book_useful_life_months > 0
       ? rule.book_useful_life_months
       : asset.book_useful_life_months;
-  const salvageValue = ruleSalvage != null ? ruleSalvage : asset.book_salvage_value;
+  // Asset-hardcoded salvage (> 0) supersedes the rule's salvage %.
+  const assetSalvage = asset.book_salvage_value;
+  const salvageValue =
+    assetSalvage > 0 ? assetSalvage : ruleSalvage ?? assetSalvage;
   const method = rule?.book_depreciation_method ?? asset.book_depreciation_method;
 
   return {

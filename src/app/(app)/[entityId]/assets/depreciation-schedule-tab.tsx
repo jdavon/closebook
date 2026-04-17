@@ -160,12 +160,17 @@ function resolveEffectiveValues(
     }
   }
 
-  if (ruleSalvage != null) {
-    salvageValue = ruleSalvage;
-    salvageFromRule = true;
-    if (assetSalvage > 0 && Math.abs(assetSalvage - ruleSalvage) > 0.01) {
+  // Asset-hardcoded salvage (> 0) supersedes the rule's salvage %. The rule
+  // only applies when the asset's stored salvage is 0. salvageIsOverride flags
+  // the case where the asset is overriding an existing rule (for UI display).
+  if (assetSalvage > 0) {
+    salvageValue = assetSalvage;
+    if (ruleSalvage != null && Math.abs(assetSalvage - ruleSalvage) > 0.01) {
       salvageIsOverride = true;
     }
+  } else if (ruleSalvage != null) {
+    salvageValue = ruleSalvage;
+    salvageFromRule = true;
   }
 
   if (ruleMethod) {

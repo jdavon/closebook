@@ -336,8 +336,10 @@ export function AdditionsTab({ entityId }: AdditionsTabProps) {
           rule.book_useful_life_months > 0
             ? rule.book_useful_life_months
             : full.book_useful_life_months;
+        // Asset-hardcoded salvage (> 0) supersedes the rule's salvage %.
+        const assetSalvageNum = Number(full.book_salvage_value);
         const salvage =
-          ruleSalvage != null ? ruleSalvage : Number(full.book_salvage_value);
+          assetSalvageNum > 0 ? assetSalvageNum : ruleSalvage ?? assetSalvageNum;
         const method =
           rule?.book_depreciation_method ?? full.book_depreciation_method;
 

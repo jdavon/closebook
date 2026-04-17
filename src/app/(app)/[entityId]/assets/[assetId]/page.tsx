@@ -1160,22 +1160,32 @@ export default function AssetDetailPage() {
                   ? depreciationRules.find((r) => r.reporting_group === reportingGroup) ?? null
                   : null;
                 const costNum = parseFloat(acquisitionCost) || 0;
+                const assetSalvageNum = parseFloat(bookSalvage) || 0;
                 const ruleUsesUL =
                   rule?.book_useful_life_months != null && rule.book_useful_life_months > 0;
+                // Salvage precedence: asset-hardcoded value (> 0) supersedes
+                // the rule. Rule only applies when asset salvage is 0.
                 const ruleUsesSalvage =
-                  rule?.book_salvage_pct != null && Number(rule.book_salvage_pct) >= 0;
+                  assetSalvageNum <= 0 &&
+                  rule?.book_salvage_pct != null &&
+                  Number(rule.book_salvage_pct) >= 0;
                 const ruleUsesMethod = rule?.book_depreciation_method != null;
                 const effectiveUL = ruleUsesUL
                   ? rule!.book_useful_life_months!
                   : parseInt(bookUsefulLife) || 0;
                 const effectiveSalvage = ruleUsesSalvage
                   ? Math.round(costNum * (Number(rule!.book_salvage_pct) / 100) * 100) / 100
-                  : parseFloat(bookSalvage) || 0;
+                  : assetSalvageNum;
                 const effectiveMethod = ruleUsesMethod
                   ? rule!.book_depreciation_method
                   : bookMethod;
                 const anyRuleOverride = ruleUsesUL || ruleUsesSalvage || ruleUsesMethod;
                 const allRuleOverride = ruleUsesUL && ruleUsesSalvage && ruleUsesMethod;
+                // Asset salvage > 0 is overriding an existing rule salvage
+                const assetOverridesRuleSalvage =
+                  assetSalvageNum > 0 &&
+                  rule?.book_salvage_pct != null &&
+                  Number(rule.book_salvage_pct) >= 0;
 
                 return (
                   <div
@@ -1240,12 +1250,16 @@ export default function AssetDetailPage() {
                             )
                           </span>
                         </div>
-                        {ruleUsesSalvage &&
-                          Math.abs((parseFloat(bookSalvage) || 0) - effectiveSalvage) > 0.01 && (
-                            <div className="text-muted-foreground line-through tabular-nums">
-                              asset: {formatCurrency(parseFloat(bookSalvage) || 0)}
-                            </div>
-                          )}
+                        {assetOverridesRuleSalvage && (
+                          <div className="text-muted-foreground line-through tabular-nums">
+                            rule {Number(rule!.book_salvage_pct)}%:{" "}
+                            {formatCurrency(
+                              Math.round(
+                                costNum * (Number(rule!.book_salvage_pct) / 100) * 100
+                              ) / 100
+                            )}
+                          </div>
+                        )}
                       </div>
                       <div>
                         <div className="text-muted-foreground">Method</div>
